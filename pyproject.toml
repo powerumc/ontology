@@ -1,0 +1,16 @@
+[project]
+name = "ontology-root"
+version = "0.0.0"
+description = "모듈형 온톨로지 루트 저장소. 지금은 테스트 환경만 정의한다."
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+addopts = "-ra"

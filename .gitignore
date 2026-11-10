@@ -1,1 +1,10 @@
 .claude_config/
+
+# Python 빌드 산출물과 캐시
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+build/
