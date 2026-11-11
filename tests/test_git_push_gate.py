@@ -20,6 +20,8 @@ BLOCKED = "푸시 관문: 스크립트 검사에 오류가 있어 아무것도 �
 OFF = "푸시 관문: 꺼져 있어 스크립트 검사를 하지 않았습니다"
 BYPASSED = "푸시 관문을 강제로 넘깁니다"
 BYPASSED_REMINDER = "주의: 푸시 관문을 강제로 넘겼습니다"
+TOOL_FAILED = "검사 도구를 실행하지 못"
+UNCHECKED = "푸시 관문은 projects/ 바로 아래의 숨김이 아닌 디렉토리만 검사합니다"
 
 GATEWAY = f"projects/billing/{ONTOLOGY_DIR}/component/gateway.md"
 
@@ -282,10 +284,13 @@ def test_지식_저장소의_규칙이_관문을_끄려_해도_오류가_있는_
 # --- 읽을 수 없는 루트 기본 규칙 -------------------------------------------------------------
 
 
-def test_루트_기본_규칙을_읽을_수_없으면_관문을_열지_않고_막고_강제_옵션만_넘긴다(sandbox):
-    root, billing, clone = _attach(sandbox, _clean())
+@pytest.mark.parametrize("push_gate", [True, False], ids=["켠_관문", "꺼_둔_관문"])
+def test_루트_기본_규칙을_읽을_수_없으면_관문을_열지_않고_막고_강제_옵션만_넘긴다(sandbox, push_gate):
+    """꺼 둔 관문의 규칙 파일이 깨져도 마찬가지다. 값을 읽지 못하면 켜진 것으로 본다(파일의 글자에서 `enabled: false`를 찾는 식으로 열지 않는다)."""
+    root, billing, clone = _attach(sandbox, _clean(), push_gate=push_gate)
     rules = clone / "onto" / "rules.yaml"
     rules.write_text(rules.read_text(encoding="utf-8") + "\nmodel-unknown-key: 1\n", encoding="utf-8")  # 모르는 키는 오류다
+    assert ("push-gate:\n  enabled: false\n" in rules.read_text(encoding="utf-8")) is (not push_gate)  # 견본이 정말 꺼져 있다
     tips = _tips(sandbox, root, billing)
 
     blocked = _push(sandbox, clone)
@@ -293,12 +298,145 @@ def test_루트_기본_규칙을_읽을_수_없으면_관문을_열지_않고_�
     assert blocked.returncode == 1
     assert _tips(sandbox, root, billing) == tips  # 관문이 켜져 있는지 알 수 없으면 켜진 것으로 본다
     assert "model-unknown-key" in blocked.stderr and BLOCKED in blocked.stderr
+    assert OFF not in blocked.stdout
 
     forced = _push(sandbox, clone, "--force")
 
     assert forced.returncode == 0, forced.stderr
     assert _tip(sandbox, billing.url) == sandbox.head(clone / "projects" / "billing")
     assert BYPASSED in forced.stdout
+
+
+# --- 도구를 실행하지 못한다 ---------------------------------------------------------------------
+
+
+def _broken_uv(sandbox, exit_code: int = 3):
+    """`uv`가 항상 실패하는 환경. 도구를 실행하지 못하는 환경(`uv`가 없다, 잠금 파일이 어긋났다 등)을 흉내 낸다."""
+    stub_dir = sandbox.new_dir("stubs", f"uv-{exit_code}")
+    stub = stub_dir / "uv"
+    stub.write_text(f"#!/bin/sh\necho 'uv를 실행할 수 없다(시험용)' >&2\nexit {exit_code}\n", encoding="utf-8")
+    stub.chmod(0o755)
+    return {**sandbox.env, "PATH": f"{stub_dir}:{sandbox.env['PATH']}"}
+
+
+@pytest.mark.parametrize("push_gate", [True, False], ids=["켠_관문", "꺼_둔_관문"])
+def test_검사_도구를_실행하지_못하면_막고_검사_오류가_아니라_도구를_실행하지_못했다고_알린다(sandbox, push_gate):
+    """꺼 둔 관문도 도구(`onto rules`)를 실행해야 읽히므로 마찬가지다. 사용자가 고칠 문제를 찾지 않게 원인을 바르게 적는다."""
+    root, billing, clone = _attach(sandbox, _clean(), push_gate=push_gate)
+    tips = _tips(sandbox, root, billing)
+
+    result = sandbox.run(["just", "git", "push"], cwd=clone, check=False, env=_broken_uv(sandbox))
+
+    assert result.returncode == 1
+    assert _tips(sandbox, root, billing) == tips
+    assert TOOL_FAILED in result.stderr and "종료 코드 3" in result.stderr
+    assert "스크립트 검사에 오류가 있어" not in result.stderr and SUMMARY not in result.stdout
+    assert "just git push --force" in result.stderr
+
+
+def test_검사_도구를_실행하지_못해도_강제_옵션을_주면_올리고_검사하지_못한_채_넘겼다고_알린다(sandbox):
+    root, billing, clone = _attach(sandbox, _clean())
+
+    result = sandbox.run(["just", "git", "push", "--force"], cwd=clone, check=False, env=_broken_uv(sandbox, 127))
+
+    assert result.returncode == 0, result.stderr
+    assert _tip(sandbox, billing.url) == sandbox.head(clone / "projects" / "billing")
+    assert TOOL_FAILED in result.stdout and "종료 코드 127" in result.stdout
+    assert "스크립트 검사를 하지 못한 채로" in result.stdout.partition(SUMMARY)[2]
+    assert "오류가 남은 채로" not in result.stdout
+
+
+# --- 부른 방식과 환경 변수에 흔들리지 않는다 ---------------------------------------------------------
+
+
+def test_모듈_파일을_직접_가리켜도_관문은_루트_저장소를_검사한다(sandbox):
+    """`just -f git/Justfile push`에는 `onto` 모듈이 없다. 루트의 `Justfile`을 명시해 부르므로 막고, 거꾸로 꺼 둔 관문을 오류로 막지도 않는다."""
+    root, billing, clone = _attach(sandbox, _broken())
+    tips = _tips(sandbox, root, billing)
+
+    blocked = sandbox.just("-f", clone / "git" / "Justfile", "push", cwd=clone)
+
+    assert blocked.returncode == 1
+    assert _tips(sandbox, root, billing) == tips
+    assert _problems(blocked) == [("오류", "billing", GATEWAY, "broken-reference")]
+    assert "does not contain recipe" not in blocked.stderr
+
+
+def test_모듈_파일을_직접_가리켜도_꺼_둔_관문은_꺼진_것으로_읽고_올린다(sandbox):
+    root, billing, clone = _attach(sandbox, _broken(), push_gate=False, indexed=False)
+
+    result = sandbox.just("-f", clone / "git" / "Justfile", "push", cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    assert OFF in result.stdout
+    assert _tip(sandbox, billing.url) == sandbox.head(clone / "projects" / "billing")
+
+
+def test_JUST_ALLOW_MISSING이_있어도_검사가_돌지_않았는데_통과하지_않는다(sandbox):
+    """`JUST_ALLOW_MISSING=true`이면 없는 레시피를 부르고도 0으로 끝난다. 루트 `Justfile`에서 `onto` 모듈이 빠진 환경에서도 관문이 열리면 안 된다."""
+    root, billing, clone = _attach(sandbox, _broken())
+    justfile = clone / "Justfile"
+    justfile.write_text(justfile.read_text(encoding="utf-8").replace("mod onto\n", ""), encoding="utf-8")  # 커밋하지 않은 수정
+    assert "mod onto" not in justfile.read_text(encoding="utf-8")
+    tips = _tips(sandbox, root, billing)
+
+    result = sandbox.run(["just", "git", "push"], cwd=clone, check=False, env={**sandbox.env, "JUST_ALLOW_MISSING": "true"})
+
+    assert result.returncode == 1
+    assert _tips(sandbox, root, billing) == tips
+    assert PASSED not in result.stdout
+
+
+# --- 검사 대상이 아닌 서브모듈 ---------------------------------------------------------------------
+
+
+def _register_outside_projects(sandbox, root, remote, path):
+    """`projects/` 밖의 `path`에 서브모듈로 등록해 커밋하고 푸시한다. `just repo add`는 언제나 `projects/<이름>`에 등록하므로 손으로 한 등록이다."""
+    sandbox.git("submodule", "add", remote.url, path, cwd=root.work)
+    sandbox.git("add", "-A", cwd=root.work)
+    sandbox.git("commit", "-m", f"add {path}", cwd=root.work)
+    sandbox.git("push", "origin", "main", cwd=root.work)
+
+
+@pytest.mark.parametrize("path", ["vendor/other", "projects/.hidden", "projects/group/nested"], ids=["projects_밖", "숨김_이름", "한_단계_더_깊다"])
+def test_projects_바로_아래가_아닌_서브모듈은_검사하지_않는다고_푸시_전에_알린다(sandbox, path):
+    root = sandbox.root()
+    other = sandbox.knowledge_remote("other", files=_broken())  # 검사했다면 오류가 날 저장소다
+    _register_outside_projects(sandbox, root, other, path)
+    clone = root.set_up_clone()
+    (clone / path / "local.md").write_text("# 메모\n", encoding="utf-8")
+    sandbox.git("add", "local.md", cwd=clone / path)
+    sandbox.git("commit", "-m", "메모", cwd=clone / path)
+
+    result = sandbox.just("git", "push", cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    assert "broken-reference" not in result.stdout  # 검사했다면 걸렸을 오류다. 검사하지 않았다
+    before_summary = result.stdout.partition(SUMMARY)[0]
+    assert UNCHECKED in before_summary and f"  {path}" in before_summary
+    assert result.stdout.index(UNCHECKED) < result.stdout.index("푸시 중:")  # 푸시보다 앞서 알린다
+    assert _tip(sandbox, other.url) == sandbox.head(clone / path)
+    assert _pushed(result)[path] == "푸시됨"
+
+
+def test_projects_바로_아래의_저장소만_있으면_검사하지_않는_저장소가_있다고_알리지_않는다(sandbox):
+    root, billing, clone = _attach(sandbox, _clean())
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode == 0, result.stderr
+    assert UNCHECKED not in result.stdout
+
+
+def test_관문이_꺼져_있으면_모든_저장소가_검사되지_않으므로_검사하지_않는_저장소를_따로_알리지_않는다(sandbox):
+    root = sandbox.root(push_gate=False)
+    _register_outside_projects(sandbox, root, sandbox.knowledge_remote("other"), "vendor/other")
+    clone = root.set_up_clone()
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode == 0, result.stderr
+    assert OFF in result.stdout and UNCHECKED not in result.stdout
 
 
 # --- 관문이 꺼져 있거나 넘겨져도 푸시의 순서와 중단 조건은 그대로다 -----------------------------------

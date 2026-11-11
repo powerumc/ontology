@@ -217,7 +217,13 @@ pull:
 # - 강제 옵션(`--force`, `-f`)을 주면 오류가 있어도 올린다. 검사는 그대로 돌려 넘기는 문제를 보여 주고, 관문을 넘겼다는 사실을 출력에 남긴다(올린 뒤에도 다시 알린다).
 #   git의 강제 푸시가 아니다. 원격의 이력을 덮어쓰지 않고, 원격이 앞서 있으면 그대로 거부된다.
 # - 관문이 꺼져 있거나 넘겨져도 아래의 순서와 중단 조건은 그대로다.
-# - 검사는 루트 저장소의 Justfile(`just onto validate`)로 돌린다. 실행 위치와 상관없이 루트 저장소를 검사하며, 지식 저장소 안에서 도는 검사가 아니다(항상 루트의 최신 공통 어휘로 돈다).
+# - 검사는 루트 저장소의 Justfile(`just onto validate`)로 돌린다. 이 레시피가 있는 위치로 루트 저장소를 정해 그 `Justfile`을 `--justfile`로 가리키므로, 실행 위치(`-d`, 하위 디렉토리)나
+#   모듈 파일을 직접 가리키는 호출(`just -f git/Justfile push`)에도 루트 저장소를 검사한다. 지식 저장소 안에서 도는 검사가 아니다(항상 루트의 최신 공통 어휘로 돈다).
+#   환경 변수 `JUST_ALLOW_MISSING`은 비우고 부른다(없는 레시피를 부르고도 0으로 끝나 검사한 것처럼 통과하지 않게).
+# - 관문이 꺼져 있는지도 도구(`just onto rules`)가 읽는다. 그래서 도구를 실행하지 못하는 환경(`uv`가 없다, 잠금 파일이 어긋난다 등)에서는 꺼 둔 관문도 읽지 못해 켜진 것으로 보고,
+#   검사도 실행하지 못해 막힌다. 그때는 "검사 도구를 실행하지 못했다"고 알린다(검사 오류와 다르다). 강제 옵션으로 넘긴다.
+# - 스크립트 검사는 루트 저장소의 `projects/` 바로 아래 숨김이 아닌 디렉토리만 지식 저장소로 본다. 그 밖에 손으로 등록한 서브모듈(`vendor/other` 등)은 검사하지 않는데도 푸시하므로,
+#   푸시 전에 그런 저장소를 이름으로 알린다(관문이 켜져 있을 때).
 
 # 루트 저장소와 모든 지식 저장소의 커밋한 것을 푸시한다. 지식 저장소가 먼저다. 먼저 스크립트 검사를 돌려 오류가 있으면 아무것도 올리지 않는다: just git push [--force]
 [no-exit-message]
@@ -390,16 +396,26 @@ push *args:
     # --- 푸시 관문 ---
     # 여기까지는 아무것도 바꾸지 않았다. 푸시 전에 스크립트 검사를 돌려 오류가 있으면, 요약 없이 여기서 `exit 1`로 끝내
     # 어떤 저장소도 올라가지 않는다. 아래 순서(지식 저장소가 먼저, 모두 성공하면 루트)와 중단 조건은 관문이 꺼져 있거나 넘겨져도 그대로다.
-    # 루트 저장소의 Justfile을 `--justfile`로 가리켜 부른다. 이 레시피를 부른 실행 위치(`-d`)나 하위 디렉토리와 상관없이 루트를 검사한다.
+    # 루트 저장소는 이 레시피가 있는 위치(`<루트>/git/Justfile`)로 정하고 그 `Justfile`을 `--justfile`로 가리켜 부른다. 이 레시피를 부른 실행 위치(`-d`, 하위 디렉토리)와
+    # 부른 방식(루트 `Justfile`을 거치든, 이 모듈 파일을 직접 가리키든)과 상관없이 같은 루트를 검사한다. `onto/Justfile`이 도구를 부르기 전에 루트로 옮겨 간다.
     gate_just="{{just_executable()}}"
-    gate_justfile="{{justfile()}}"
-    gate_bypassed=0
+    gate_justfile="{{parent_directory(source_directory())}}/Justfile"
+    gate_bypassed=
+    gate_checked=0
+
+    # 루트의 `just`를 부른다. `JUST_ALLOW_MISSING`이 환경에 있으면 없는 레시피를 부르고도 0으로 끝나므로, 검사가 돌지 않았는데 통과하는 일이 없게 비운다.
+    gate_call() {
+        (
+            unset JUST_ALLOW_MISSING
+            exec "$gate_just" --justfile "$gate_justfile" "$@"
+        )
+    }
 
     # 루트 기본 규칙의 `push-gate`의 `enabled`. 셸에는 JSON을 읽는 표준 도구가 없고 `jq`에 기대지 않으려고, `onto rules`가 낸 JSON에서
     # 최상위 `push-gate` 객체의 `enabled` 줄만 읽는다(출력은 들여쓰기 2칸의 `json.dumps`라 줄의 모양이 정해져 있다). 못 읽으면 켜진 것으로 본다.
     # 규칙 파일이 틀려 `rules`가 실패하는 경우도 켜진 것으로 보고 검사를 돌린다. 검사가 같은 이유를 알리며 막는다(그 오류를 여기서 두 번 보이지 않는다).
     gate_enabled=true
-    if gate_rules=$("$gate_just" --justfile "$gate_justfile" onto rules </dev/null 2>/dev/null); then
+    if gate_rules=$(gate_call onto rules </dev/null 2>/dev/null); then
         gate_value=$(printf '%s\n' "$gate_rules" | awk '
             /^  "push-gate": *\{/ { in_gate = 1; next }
             in_gate && /^  \}/ { exit }
@@ -414,20 +430,52 @@ push *args:
         echo
     else
         echo "푸시 관문: 스크립트 검사 중(just onto validate)"
-        # 검사의 출력은 그대로 보인다: 문제는 한 줄에 하나(표준 출력), 요약은 표준 오류. 오류가 있거나 검사를 끝내지 못하면 0이 아닌 값이다.
-        "$gate_just" --justfile "$gate_justfile" onto validate </dev/null
+        # 검사의 출력은 그대로 보인다: 문제는 한 줄에 하나(표준 출력), 요약은 표준 오류. 오류가 있으면 1이다. 그 밖의 0이 아닌 값은 도구를 실행하지 못한 것이다
+        # (`uv`나 `just`가 없다: 127, 실행 권한이 없다: 126 등). 도구 자신이 규칙 파일을 읽지 못해 알리는 오류도 1이라 검사 오류와 한 줄로 이어진다(도구가 이유를 이미 알렸다).
+        gate_call onto validate </dev/null
         gate_status=$?
+        gate_checked=1
         if [ "$gate_status" = 0 ]; then
             echo "푸시 관문: 스크립트 검사에 오류가 없습니다"
             echo
+        elif [ "$gate_status" = 1 ]; then
+            if [ "$force" = 1 ]; then
+                gate_bypassed="스크립트 검사에 오류가 남은 채로"
+                echo "푸시 관문을 강제로 넘깁니다: 스크립트 검사에 오류가 있지만 강제 옵션을 줬으므로 푸시합니다"
+                echo
+            else
+                echo "푸시 관문: 스크립트 검사에 오류가 있어 아무것도 푸시하지 않았습니다. 위의 문제를 고친 뒤 다시 푸시하세요." >&2
+                echo "알고서 넘어가려면 강제 옵션을 주세요: just git push --force" >&2
+                exit 1
+            fi
         elif [ "$force" = 1 ]; then
-            gate_bypassed=1
-            echo "푸시 관문을 강제로 넘깁니다: 스크립트 검사에 오류가 있거나 검사를 끝내지 못했지만(종료 코드 $gate_status) 강제 옵션을 줬으므로 푸시합니다"
+            gate_bypassed="스크립트 검사를 하지 못한 채로"
+            echo "푸시 관문을 강제로 넘깁니다: 검사 도구를 실행하지 못했지만(종료 코드 $gate_status) 강제 옵션을 줬으므로 푸시합니다"
             echo
         else
-            echo "푸시 관문: 스크립트 검사에 오류가 있어 아무것도 푸시하지 않았습니다(종료 코드 $gate_status). 위의 문제를 고친 뒤 다시 푸시하세요." >&2
-            echo "알고서 넘어가려면 강제 옵션을 주세요: just git push --force" >&2
+            echo "푸시 관문: 검사 도구를 실행하지 못해(종료 코드 $gate_status) 스크립트 검사를 하지 못했습니다. 관문이 켜져 있는지도 알 수 없어 아무것도 푸시하지 않았습니다." >&2
+            echo "just와 uv가 있는지, onto/가 온전한지 확인하세요. 알고서 넘어가려면 강제 옵션을 주세요: just git push --force" >&2
             exit 1
+        fi
+    fi
+
+    # 스크립트 검사는 `projects/` 바로 아래 숨김이 아닌 디렉토리만 본다. 그 밖에 등록한 서브모듈은 검사 없이 올라가므로 알린다(검사했을 때만 뜻이 있다).
+    if [ "$gate_checked" = 1 ]; then
+        unchecked=
+        while IFS="$TAB" read -r repo_path repo_name; do
+            [ -n "$repo_path" ] || continue
+            case $repo_path in
+                projects/.* | projects/*/*) unchecked="$unchecked$repo_path$NL" ;;
+                projects/*) ;;
+                *) unchecked="$unchecked$repo_path$NL" ;;
+            esac
+        done <<EOF
+    $repos
+    EOF
+        if [ -n "$unchecked" ]; then
+            echo "주의: 푸시 관문은 projects/ 바로 아래의 숨김이 아닌 디렉토리만 검사합니다. 다음 저장소는 검사하지 않았지만 푸시합니다:"
+            printf '%s' "$unchecked" | sed 's/^/  /'
+            echo
         fi
     fi
 
@@ -460,9 +508,9 @@ push *args:
         echo "초기화되지 않은 서브모듈이 있습니다. just setup으로 초기화하세요."
     fi
     # 강제 옵션으로 넘긴 관문은 푸시 결과 뒤에서도 알린다. 출력이 길어져 앞의 알림이 스크롤로 사라져도 남는다.
-    if [ "$gate_bypassed" = 1 ]; then
+    if [ -n "$gate_bypassed" ]; then
         echo
-        echo "주의: 푸시 관문을 강제로 넘겼습니다. 스크립트 검사에 오류가 남은 채로 푸시했습니다. 걸린 문제는 위의 푸시 관문 보고에 있습니다."
+        echo "주의: 푸시 관문을 강제로 넘겼습니다. $gate_bypassed 푸시했습니다. 걸린 문제는 위의 푸시 관문 보고에 있습니다."
     fi
 
     if [ -n "$failed" ] || [ "$list_failed" = 1 ]; then

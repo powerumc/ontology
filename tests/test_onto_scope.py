@@ -582,6 +582,32 @@ def test_본문의_링크가_지식_저장소_안이거나_파일이_아니거�
     assert outside_links(onto_cli, body) == []
 
 
+# 링크를 찾는 정규식이 입력에 따라 지수 시간으로 되돌아가면 `validate`가 끝나지 않고, 푸시 관문(`--force`까지)이 멈춘다. 끝나지 않는 입력은 시간 상한으로 가린다.
+# 입력은 느린 구현이 사실상 끝내지 못하는 크기다(따옴표 하나마다 약 1.6배, 울타리 줄 수의 제곱). 느리지 않은 구현은 1초 안에 끝낸다. 상한은 느려진 기기에서도 흔들리지 않게 넉넉히 둔다.
+SLOW_BODIES = {
+    "닫히지_않은_태그_뒤의_아포스트로피": "수가 <limit the worker doesn't block. It's the scheduler's job; " + "it's, doesn't. " * 200,
+    "닫히지_않은_태그_뒤의_따옴표": "x <y 조건 " + '"용어" ' * 200 + "\n",
+    "닫히지_않은_태그_뒤의_작은따옴표와_큰따옴표": "a <p99 " + "'a' \"b\" it's " * 100 + "\n",
+    "닫히지_않은_들여쓴_울타리_여러_개": "    ```x\n" * 60000,
+}
+SLOW_BODY_LIMIT = 120  # 초
+
+
+@pytest.mark.parametrize("body", SLOW_BODIES.values(), ids=SLOW_BODIES.keys())
+def test_본문의_링크_검사는_따옴표와_울타리가_많아도_정해진_시간_안에_끝난다(onto_cli, body):
+    root = onto_cli.root(with_body(body))
+
+    result = onto_cli.run(root, "validate", timeout=SLOW_BODY_LIMIT)
+
+    assert result.returncode in (0, 1), result.stderr  # 끝났다(검사 결과는 여기서 따지지 않는다)
+
+
+def test_닫히지_않은_태그_뒤에_따옴표가_많아도_그_뒤의_링크는_본다(onto_cli):
+    body = "수가 <limit the worker doesn't block. " + "it's, doesn't. " * 200 + f"\n\n<a href={OUTSIDE}x.md>설계</a>\n"
+
+    assert outside_links(onto_cli, body) == [(ERROR, "billing", file("component/gateway"), "outside-link")]
+
+
 def test_코드_블록이_끝나면_그_뒤의_링크는_다시_본다(onto_cli):
     body = f"```\n[x]({OUTSIDE}code.md)\n```\n\n[y]({OUTSIDE}after.md)\n"
 
@@ -795,6 +821,59 @@ def test_class_값의_저장소_이름이_더_넓은_저장소이거나_등록�
         ),
         "open": repo("open", page("component/x", "Component", title="공개 X", partOf="project"), scope="public"),
     }
+
+    assert violations(onto_cli, repos) == []
+
+
+# --- 정의되지 않은 키와 값의 종류가 틀린 관계의 값 ---------------------------------------------------
+# `undefined-key`, `invalid-value`, `reverse-relation`도 저장소 규칙으로 끌 수 있어, 그 값에 든 교차 참조 모양도 중첩까지 훑어 공유 범위를 따진다. 제목, 설명, 날짜, 별칭은 보지 않는다.
+
+MUTE_UNDEFINED = {"checks": {"undefined-key": {"enabled": False}, "invalid-value": {"enabled": False}, "reverse-relation": {"enabled": False}}}
+
+
+def with_fields(**fields) -> dict[str, dict[str, str]]:
+    """`team`의 페이지 `component/b`가 `fields`를 가진다. 이 견본의 규칙은 `undefined-key`, `invalid-value`, `reverse-relation`을 끈다."""
+    page_fields = {"partOf": "project", **fields}
+    return {"team": repo("team", page("component/b", "Component", title="B", **page_fields), scope="team:pay", rules=MUTE_UNDEFINED), "secret": secret_repo()}
+
+
+UNCHECKED_FIELDS = {
+    "정의되지_않은_키의_문자열": {"notes": "secret:component/x"},
+    "정의되지_않은_키의_목록": {"notes": ["메모", "secret:component/x"]},
+    "정의되지_않은_키의_중첩된_값": {"notes": {"links": [{"to": "secret:component/x"}]}},
+    "문자열이_아닌_관계의_값": {"dependsOn": {"id": "secret:component/x"}},
+    "관계의_목록_안의_중첩된_값": {"dependsOn": ["component/b", {"id": "secret:component/x"}]},
+    "역방향_관계_키": {"hasPart": "secret:component/x"},
+}
+
+
+@pytest.mark.parametrize("fields", UNCHECKED_FIELDS.values(), ids=UNCHECKED_FIELDS.keys())
+def test_끌_수_있는_항목이_보고하는_값에_든_더_좁은_저장소의_교차_참조도_scope_violation으로_잡는다(onto_cli, fields):
+    result, findings = validate(onto_cli, onto_cli.root(with_fields(**fields)))
+
+    assert [finding[:4] for finding in findings] == [(ERROR, "team", file("component/b", "team"), "scope-violation")]
+    assert "secret:component/x" in findings[0][4]
+    assert result.returncode == 1
+
+
+def test_정의되지_않은_키의_값이_더_넓은_저장소나_등록되지_않은_이름이거나_주소이면_공유_범위를_따지지_않는다(onto_cli):
+    repos = {
+        "team": repo(
+            "team",
+            page("component/b", "Component", title="B", partOf="project", notes=["open:component/x", "ghost:component/x", "https://example.com/a", "비율: 3:1"]),
+            scope="team:pay",
+            rules=MUTE_UNDEFINED,
+        ),
+        "open": repo("open", page("component/x", "Component", title="공개 X", partOf="project"), scope="public"),
+    }
+
+    assert violations(onto_cli, repos) == []
+
+
+def test_제목_설명_별칭에_적은_저장소_이름은_보지_않는다(onto_cli):
+    """참조가 아닌 글이다. 한계로 문서화되어 있다(규약 문서의 공유 범위 검사의 한계)."""
+    fields = {"title": "secret:component/x", "description": "secret:component/x를 가리키는 글", "aliases": ["secret:component/x"]}
+    repos = {"team": repo("team", page("component/b", "Component", partOf="project", **fields), scope="team:pay"), "secret": secret_repo()}
 
     assert violations(onto_cli, repos) == []
 

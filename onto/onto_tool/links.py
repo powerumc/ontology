@@ -36,8 +36,10 @@ _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`).+?(?<!`)\1(?!`)", re.DOTALL)
 # 인라인 코드와 HTML 주석 가운데 먼저 시작하는 것이 이긴다. 인라인 코드의 짝(`\1`)이 첫 그룹이라 앞에 둔다.
 _CODE_OR_COMMENT = re.compile(f"{_INLINE_CODE.pattern}|{_HTML_COMMENT.pattern}", re.DOTALL)
-# `<` 바로 뒤에 영문자로 시작하는 태그 이름이 오고 공백, `/`, `>`로 이어지는 태그(`<https://…>` 같은 자동 링크는 아니다). 속성 값의 따옴표 안에는 `>`가 있을 수 있다.
-_HTML_TAG = re.compile(r"""<[A-Za-z][A-Za-z0-9-]*(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*'|["'])*>""")
+# `<` 바로 뒤에 영문자로 시작하는 태그 이름이 오고 공백, `/`, `>`로 이어지는 태그(`<https://…>` 같은 자동 링크는 아니다). 속성 값의 따옴표 안에는 `>`가 있을 수 있고,
+# 짝이 없는 따옴표(`doesn't`의 아포스트로피)는 그냥 글자다. 따옴표를 "짝의 시작"으로도 "외톨이"로도 읽을 수 있어서, 반복을 독점으로(`*+`) 두어 한 번 읽은 것은
+# 되돌리지 않는다. 되돌리면 `>`가 없을 때 따옴표를 나누는 모든 방법을 시도해(따옴표 하나마다 약 1.6배) 지수 시간이 걸린다. 독점이라 한 번에 앞으로만 읽는다.
+_HTML_TAG = re.compile(r"""<[A-Za-z][A-Za-z0-9-]*+(?=[\s/>])(?:[^<>"']|"[^"]*+"|'[^']*+'|["'])*+>""")
 _REFERENCE_DEFINITION = re.compile(r"^ {0,3}\[[^\]\n]+\]:[ \t]*(<[^>\n]*>|\S+)", re.MULTILINE)
 _AUTOLINK = re.compile(r"<([A-Za-z][A-Za-z0-9+.-]*:[^<>\s]*)>")
 _HTML_ATTRIBUTE = re.compile(r"""\b(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=`]+))""", re.IGNORECASE)
@@ -74,6 +76,7 @@ def _without_code_blocks(body: str) -> str:
     """울타리 코드 블록(```, ~~~)의 줄을 뺀다. 닫히지 않으면 끝까지 코드다(4칸 이상 들여써 연 것은 울타리로 보지 않는다)."""
     lines = body.splitlines()
     kept: list[str] = []
+    unclosed: list[tuple[str, int, int]] = []  # 닫는 줄을 끝내 못 찾은 울타리 `(글자, 길이, 들여쓰기)`. 같거나 더 까다로운 울타리는 찾아볼 것도 없다
     index = 0
     while index < len(lines):
         opening = _FENCE_OPEN.match(lines[index])
@@ -81,8 +84,16 @@ def _without_code_blocks(body: str) -> str:
             kept.append(lines[index])
             index += 1
             continue
-        closing = _fence_closing(lines, index, _width(opening[1]), opening[2])
-        if closing is None and _width(opening[1]) >= _FENCE_INDENTED_CODE:
+        char, length, indent = opening[2][0], len(opening[2]), _width(opening[1])
+        if any(c == char and length >= n and indent <= i for c, n, i in unclosed):
+            closing = None  # 닫는 줄이 없던 앞의 울타리보다 더 까다로워서, 닫는 줄이 있다면 앞의 것도 닫았을 것이다
+        else:
+            closing = _fence_closing(lines, index, indent, char, length)
+            if closing is None:
+                # 새 항목이 이미 포함하는 앞의 항목은 뺀다. 목록이 불어나지 않게 한다.
+                unclosed = [e for e in unclosed if not (e[0] == char and e[1] >= length and e[2] <= indent)]
+                unclosed.append((char, length, indent))
+        if closing is None and indent >= _FENCE_INDENTED_CODE:
             kept.append(lines[index])  # 들여쓴 코드 블록 안의 글이다. 울타리로 보면 본문 끝까지 링크를 숨긴다
             index += 1
             continue
@@ -90,9 +101,9 @@ def _without_code_blocks(body: str) -> str:
     return "\n".join(kept)
 
 
-def _fence_closing(lines: list[str], opened: int, indent: int, fence: str) -> int | None:
-    """`opened`째 줄에서 연 울타리(`fence`, 들여쓰기 `indent`칸)를 닫는 줄의 번호. 닫는 줄이 없으면 None이다."""
-    closer = re.compile(rf"([ \t]*){re.escape(fence[0])}{{{len(fence)},}}[ \t]*")
+def _fence_closing(lines: list[str], opened: int, indent: int, char: str, length: int) -> int | None:
+    """`opened`째 줄에서 연 울타리(`char`가 `length`개 이상, 들여쓰기 `indent`칸)를 닫는 줄의 번호. 닫는 줄이 없으면 None이다."""
+    closer = re.compile(rf"([ \t]*){re.escape(char)}{{{length},}}[ \t]*")
     for number in range(opened + 1, len(lines)):
         closing = closer.fullmatch(lines[number])
         if closing and _width(closing[1]) <= indent + _FENCE_CLOSE_EXTRA_INDENT:

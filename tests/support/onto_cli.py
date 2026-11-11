@@ -148,16 +148,18 @@ class OntoCli:
         return path
 
     def run(
-        self, root: Path, *args: str, env: dict[str, str] | None = None, within: str | None = None
+        self, root: Path, *args: str, env: dict[str, str] | None = None, within: str | None = None, timeout: float | None = None
     ) -> subprocess.CompletedProcess[str]:
         """`root`를 현재 디렉토리로 삼아 도구를 실행한다. 종료 코드를 보는 테스트가 많아 예외를 던지지 않는다.
+
+        `timeout`(초)을 주면 그 안에 끝나지 않을 때 도구를 죽이고 `subprocess.TimeoutExpired`로 테스트를 실패시킨다(끝나지 않는 입력을 시간 상한으로 가려낸다).
 
         `within`을 주면(`REPOSITORY`) 지식 저장소 안에서 도는 것으로 실행한다. `just -f .onto/Justfile`이 지식 저장소 안에서 도구에 넘기는 값이다.
         생략하면 도구의 기본(루트 저장소)이다.
         """
         options = ["--within", within] if within is not None else []
         command = ["uv", "run", "--locked", "--quiet", "--project", self._tool_dir, *TOOL_COMMAND, *options, *args]
-        return self._sandbox.run(command, cwd=root, check=False, env=env)
+        return self._sandbox.run(command, cwd=root, check=False, env=env, timeout=timeout)
 
     def build(self, root: Path, *, within: str | None = None) -> bytes:
         """`build`를 실행하고 컴파일된 그래프 파일의 내용을 돌려준다. 실패하면 예외를 던진다."""

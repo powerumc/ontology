@@ -122,8 +122,9 @@ class Sandbox:
         cwd: Path,
         check: bool = True,
         env: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        """임시 디렉토리 안에서 명령을 실행한다. 출력은 텍스트로 모은다."""
+        """임시 디렉토리 안에서 명령을 실행한다. 출력은 텍스트로 모은다. `timeout`(초)을 넘기면 명령을 죽이고 `subprocess.TimeoutExpired`를 던진다."""
         cwd = Path(cwd).resolve()
         argv = [str(a) for a in args]
         for path in [cwd, *(cwd / p for p in _path_arguments(argv))]:  # 절대 경로 앞에서는 cwd가 무시된다
@@ -136,6 +137,7 @@ class Sandbox:
             capture_output=True,
             text=True,
             check=check,
+            timeout=timeout,
         )
 
     def git(self, *args: str | Path, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -230,8 +232,9 @@ class Sandbox:
         """루트 저장소를 만든다. `source`(기본은 이 저장소)의 추적 파일을 복사해 커밋하고 bare 원격에 푸시한다.
 
         한 테스트에서 둘 이상 만들려면 `name`을 달리 준다. `push_gate=False`이면 루트 기본 규칙(`onto/rules.yaml`)의 푸시 관문을
-        끈 채로 첫 커밋을 만든다. 푸시 관문은 푸시 전에 스크립트 검사를 돌려 도구의 가상환경을 만들므로, 관문과 상관없는 푸시
-        테스트가 그 시간을 치르지 않게 한다.
+        끈 채로 첫 커밋을 만든다. 푸시 관문이 켜져 있으면 푸시 전에 스크립트 검사(컴파일과 구조 제약 검사)를 돌려 시간이 들고, 온톨로지 층이
+        없는 견본은 검사에 막힌다. 관문과 상관없는 푸시 테스트가 그런 것을 치르지 않게 한다. 꺼 둬도 푸시는 꺼졌는지를 도구(`onto rules`)로 읽으므로
+        도구의 가상환경은 만들어진다. 아끼는 것은 검사 한 번이다.
         """
         return RootRepo(self, name, source, push_gate=push_gate)
 
