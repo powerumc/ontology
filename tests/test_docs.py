@@ -7,11 +7,14 @@
 - 루트의 모든 레시피가 `README.md`에 적혀 있다.
 - 스킬 세 개가 `name`, `description`을 가진 frontmatter로 시작하고 두 명령 접두어를 적는다.
 - 루트 `CLAUDE.md`가 스킬과 사용법을 가리키고 기존 `## Agent skills` 블록을 지킨다.
+- 지식 저장소로 복사되는 파일에 이 저장소를 개발한 과정의 말(티켓, 스펙)이 남아 있지 않다.
+- 테스트 안내의 걸리는 시간이 실제에 맞다.
 
 문서는 이 저장소의 작업 사본에서 읽기만 하고, 명령의 목록은 임시 디렉토리의 루트 저장소(이 저장소의 추적 파일을 복사한 것)에서 `just --summary`로 얻는다.
 """
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -142,3 +145,38 @@ def test_루트_CLAUDE는_스킬과_사용법을_가리키고_기존_Agent_skill
     # 기존 블록의 소제목들은 그대로다
     for heading in ("### Issue tracker", "### Triage labels", "### Domain docs", "### Subagent routing"):
         assert heading in block
+
+
+# 지식 저장소로 복사되는 파일(`onto/`와 `.claude/skills/onto-*/`의 추적 파일)은 이 저장소를 개발한 사람이 아니라 지식 저장소에서 쓰는 사람과 에이전트가 읽는다.
+# 개발할 때 쓴 말(티켓, 스펙)은 거기서 가리킬 곳이 없다. 어떤 일이 어느 티켓에서 이뤄진다는 말은 그 일이 끝나면 사실과도 어긋난다.
+DEVELOPMENT_WORDS = ("티켓", "스펙")
+
+
+def copied_files(sandbox: Sandbox) -> dict[str, str]:
+    """지식 저장소로 복사되는 추적 파일의 `{경로: 내용}`. 작업 트리의 현재 내용이다."""
+    listing = subprocess.run(
+        ["git", "ls-files", "-z", "--", "onto", ".claude/skills"],
+        cwd=SOURCE_REPO,
+        env=sandbox.env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    paths = [rel for rel in filter(None, listing.split("\0")) if rel.startswith(("onto/", ".claude/skills/onto-")) and rel != "onto/uv.lock"]
+    return {rel: text(SOURCE_REPO / rel) for rel in paths if (SOURCE_REPO / rel).is_file()}
+
+
+def test_지식_저장소로_복사되는_파일에는_개발_과정의_말이_남아_있지_않다(sandbox):
+    files = copied_files(sandbox)
+    assert "onto/onto_tool/keys.py" in files and ".claude/skills/onto-query/SKILL.md" in files  # 복사되는 파일을 모두 읽었다
+
+    found = {f"{rel}:{number}": line.strip() for rel, content in files.items() for number, line in enumerate(content.splitlines(), 1) if any(word in line for word in DEVELOPMENT_WORDS)}
+
+    assert found == {}
+
+
+def test_테스트_안내의_걸리는_시간은_전체_테스트가_병렬로도_몇_분_걸리는_실제에_맞다():
+    guide = text(SOURCE_REPO / "tests" / "README.md")
+
+    assert "병렬은 1분 안팎" not in guide  # 테스트가 1500개를 넘어 병렬로도 몇 분이 걸린다
+    assert re.search(r"병렬로도 [^.]*\d+분", guide)

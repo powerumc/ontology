@@ -108,7 +108,7 @@ shape:Aliases-kind onto:check "invalid-value" ;
     sh:datatype xsd:string .
 
 # --- 관계 ----------------------------------------------------------------------
-# 관계마다 `-domain`(쓸 수 있는 클래스)과 `-range`(가리킬 수 있는 클래스) 도형을 둔다. 표는 스펙의 관계 표와 같다.
+# 관계마다 `-domain`(쓸 수 있는 클래스)과 `-range`(가리킬 수 있는 클래스) 도형을 둔다. 표는 규약 문서(`conventions.md`)의 관계 표와 같다.
 # 가리키는 엔티티가 없는 경우(깨진 참조)는 여기서 따지지 않고, 도구가 깨진 참조로 따로 보고한다.
 
 shape:partOf-domain a sh:NodeShape ;
