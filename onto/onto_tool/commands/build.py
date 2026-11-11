@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .. import index
 from ..compiler import compile_workspace
+from ..errors import OntoError
 from ..inference import infer
 from ..paths import ALL_INDEX_FILE, BUILD_DIR, GRAPH_FILE
 from ..workspace import Workspace
@@ -29,6 +30,17 @@ def run(args: argparse.Namespace) -> int:
     warn(compiled.warnings)
     compiled.ensure_valid()
 
+    # 아무것도 쓰기 전에, 인덱스를 쓸 수 없는 경로(심볼릭 링크 등)를 모두 모아 알린다. 그래프만 쓰고 멈추지 않는다.
+    contents = index.collect(compiled)
+    paths = {record.index_file: record for record in compiled.records}
+    blocked = [
+        f"{content.index_file}: 인덱스를 쓰지 않았다. {paths[content.index_file].index_problem}"
+        for content in contents
+        if paths[content.index_file].index_problem is not None
+    ]
+    if blocked:
+        raise OntoError(*blocked)
+
     graph = infer(compiled.graph)
     GRAPH_FILE.parent.mkdir(parents=True, exist_ok=True)
     GRAPH_FILE.write_text(graph.serialize(format="turtle"), encoding="utf-8", newline="\n")
@@ -38,7 +50,6 @@ def run(args: argparse.Namespace) -> int:
         f"트리플 {len(graph)}개, 그 가운데 추론된 것 {len(graph) - len(compiled.graph)}개)"
     )
 
-    contents = index.collect(compiled)
     for content in contents:
         path = workspace.root / content.index_file
         print(f"인덱스: {content.index_file} ({_write(path, index.render(content))})")

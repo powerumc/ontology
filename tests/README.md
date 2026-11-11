@@ -67,6 +67,8 @@ def test_예(onto_cli):
 
 ### 인덱스(`test_onto_index.py`)
 
-`build`가 지식 저장소의 `docs/ontology/index.md`를 만들고 `validate`가 어긋난 인덱스(`index-mismatch`)를 잡는 것을 `onto_cli`로 본다. 기대하는 인덱스는 손으로 적은 글자다. 인덱스를 만드는 코드로 기대값을 만들지 않는다. 인덱스가 git에 잡히는지(커밋되는 파일인지)와 전체 인덱스(`onto/.build/index.md`)가 잡히지 않는지는 `just`를 거쳐야 보이므로 `test_onto_just.py`가 본다.
+`build`가 지식 저장소의 `docs/ontology/index.md`를 만들고 `validate`가 없거나 어긋난 인덱스(`index-mismatch`)를 잡는 것을 `onto_cli`로 본다. 기대하는 인덱스는 손으로 적은 글자다. 인덱스를 만드는 코드로 기대값을 만들지 않는다. 인덱스가 git에 잡히는지(커밋되는 파일인지)와 전체 인덱스(`onto/.build/index.md`)가 잡히지 않는지는 `just`를 거쳐야 보이므로 `test_onto_just.py`가 본다.
 
-`onto_cli.root()`가 만드는 견본에는 인덱스가 없다. 인덱스가 아직 없는 지식 저장소는 어긋난 것으로 보지 않으므로 다른 검사 항목의 테스트는 인덱스 없이 돈다. 인덱스가 있는 견본이 필요하면 `build`를 먼저 실행한다.
+지식 저장소는 인덱스가 있어야 스크립트 검사를 통과한다(없는 것도 `index-mismatch`다). 그래서 `onto_cli.root()`는 기본으로 견본을 쓴 뒤 `build`를 한 번 실행해 인덱스를 갖춘다(읽을 수 없는 파일이 든 견본은 `build`가 멈춰 인덱스 없이 남는다). 다른 검사 항목의 테스트에 인덱스 문제가 끼지 않게 하는 약속이다. 인덱스가 없는 견본이 필요하면 `onto_cli.root(repos, indexed=False)`로 만든다. `build`가 인덱스를 새로 만드는지 보는 테스트(`test_onto_index.py`의 대부분, 작업 트리에 생기는 것을 비교하는 테스트)는 반드시 `indexed=False`여야 한다. 미리 만들어 둔 인덱스는 `build`가 쓰지 않아도 같은 글자라 아무것도 확인하지 못한다.
+
+`just`를 거치는 테스트(`test_onto_just.py`)의 견본은 `sandbox.knowledge_remote`가 만든 저장소라 이 받침이 닿지 않는다. 인덱스가 있어야 하면 `just onto build`를 먼저 실행한다.

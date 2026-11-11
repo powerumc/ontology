@@ -9,6 +9,7 @@
 import os
 import re
 import time
+from pathlib import Path
 from urllib.parse import unquote
 
 from support.onto_cli import ONTOLOGY_DIR, page, repo, snapshot
@@ -28,6 +29,9 @@ BILLING = {
 # 인덱스 머리의 표시. 생성물이며 손으로 고치지 말라는 말이다.
 GENERATED_NOTICE = "이 파일은 `onto build`가 페이지에서 만든 생성물이다. 손으로 고치지 않는다. 페이지를 고친 뒤 다시 만든다."
 
+# `shop`이라는 이름으로 쓴 같은 견본. 이름이 겹치는 견본의 한쪽으로 쓴다.
+BILLING_AS_SHOP = repo("shop", page("component/api", "Component", title="상점 API", partOf="project"), title="상점")
+
 BILLING_INDEX = f"""\
 # 결제 인덱스
 
@@ -45,6 +49,11 @@ BILLING_INDEX = f"""\
 """
 
 
+def sample(onto_cli, repos):
+    """인덱스가 아직 없는 견본. `OntoCli.root()`는 기본으로 `build`해 인덱스를 갖추므로, `build`가 인덱스를 새로 만드는지 보려면 이렇게 만든다."""
+    return onto_cli.root(repos, indexed=False)
+
+
 def index_of(root, name: str = "billing") -> str:
     return (root / "projects" / name / INDEX).read_text(encoding="utf-8")
 
@@ -59,7 +68,7 @@ def build(onto_cli, root):
 
 
 def test_build는_각_지식_저장소의_온톨로지_층에_페이지를_클래스별로_묶은_인덱스를_만든다(onto_cli):
-    root = onto_cli.root(BILLING)
+    root = sample(onto_cli, BILLING)
 
     build(onto_cli, root)
 
@@ -67,7 +76,7 @@ def test_build는_각_지식_저장소의_온톨로지_층에_페이지를_클�
 
 
 def test_하위_클래스의_페이지는_공통_클래스의_묶음에_들고_하위_클래스_이름이_붙는다(onto_cli):
-    root = onto_cli.root(
+    root = sample(onto_cli, 
         {
             "billing": repo(
                 "billing",
@@ -93,7 +102,7 @@ def test_하위_클래스의_페이지는_공통_클래스의_묶음에_들고_�
 
 
 def test_클래스가_없거나_풀리지_않는_페이지도_인덱스에서_빠지지_않고_분류되지_않음에_든다(onto_cli):
-    root = onto_cli.root(
+    root = sample(onto_cli, 
         {
             "billing": repo(
                 "billing",
@@ -119,7 +128,7 @@ def test_클래스가_없거나_풀리지_않는_페이지도_인덱스에서_�
 
 
 def test_클래스_묶음은_공통_클래스_순서로_나오고_항목은_식별자_순이다(onto_cli):
-    root = onto_cli.root(
+    root = sample(onto_cli, 
         {
             "billing": repo(
                 "billing",
@@ -157,7 +166,7 @@ def test_클래스_묶음은_공통_클래스_순서로_나오고_항목은_식�
 
 
 def test_설명이_여러_줄이면_한_줄로_줄이고_제목의_대괄호는_링크를_깨지_않게_막는다(onto_cli):
-    root = onto_cli.root(
+    root = sample(onto_cli, 
         {
             "billing": repo(
                 "billing",
@@ -178,7 +187,7 @@ def test_설명이_여러_줄이면_한_줄로_줄이고_제목의_대괄호는_
 
 
 def test_제목이_없는_페이지는_식별자로_보여_준다(onto_cli):
-    root = onto_cli.root({"billing": repo("billing", page("component/gateway", "Component", partOf="project"))})
+    root = sample(onto_cli, {"billing": repo("billing", page("component/gateway", "Component", partOf="project"))})
 
     build(onto_cli, root)
 
@@ -189,11 +198,11 @@ def test_제목이_없는_페이지는_식별자로_보여_준다(onto_cli):
 
 
 def test_인덱스의_링크는_인덱스_기준_상대_경로이고_모두_지식_저장소_안의_페이지를_가리킨다(onto_cli):
-    root = onto_cli.root(BILLING)
+    root = sample(onto_cli, BILLING)
     build(onto_cli, root)
 
     # 단독으로 클론한 지식 저장소를 흉내 낸다: 그 저장소의 파일만 다른 디렉토리로 옮긴다.
-    standalone = onto_cli.root({})
+    standalone = sample(onto_cli, {})
     for source in (root / "projects" / "billing").rglob("*"):
         if source.is_file():
             target = standalone / source.relative_to(root / "projects" / "billing")
@@ -207,7 +216,7 @@ def test_인덱스의_링크는_인덱스_기준_상대_경로이고_모두_지�
 
 
 def test_인덱스에는_루트_저장소나_다른_지식_저장소에_관한_내용이_없다(onto_cli):
-    root = onto_cli.root(
+    root = sample(onto_cli, 
         {
             "billing": repo(
                 "billing",
@@ -229,7 +238,7 @@ def test_인덱스에는_루트_저장소나_다른_지식_저장소에_관한_�
 
 
 def test_인덱스에_생성물이며_손으로_고치지_말라는_표시가_있다(onto_cli):
-    root = onto_cli.root(BILLING)
+    root = sample(onto_cli, BILLING)
 
     build(onto_cli, root)
 
@@ -241,8 +250,8 @@ def test_인덱스에_생성물이며_손으로_고치지_말라는_표시가_�
 
 
 def test_같은_페이지에서는_글자_하나_다르지_않은_인덱스가_나온다(onto_cli):
-    first = onto_cli.root(BILLING)
-    second = onto_cli.root(BILLING)  # 다른 디렉토리, 다른 시각
+    first = sample(onto_cli, BILLING)
+    second = sample(onto_cli, BILLING)  # 다른 디렉토리, 다른 시각
     build(onto_cli, first)
     expected = (first / "projects" / "billing" / INDEX).read_bytes()
 
@@ -255,7 +264,7 @@ def test_같은_페이지에서는_글자_하나_다르지_않은_인덱스가_�
 
 
 def test_다시_build해도_바뀐_것이_없으면_인덱스_파일을_다시_쓰지_않는다(onto_cli):
-    root = onto_cli.root(BILLING)
+    root = sample(onto_cli, BILLING)
     build(onto_cli, root)
     path = root / "projects" / "billing" / INDEX
     os.utime(path, (1_000_000_000, 1_000_000_000))
@@ -267,7 +276,7 @@ def test_다시_build해도_바뀐_것이_없으면_인덱스_파일을_다시_�
 
 
 def test_페이지가_하나도_없는_지식_저장소에서도_인덱스가_만들어진다(onto_cli):
-    root = onto_cli.root({"billing": repo("billing", title="결제")})
+    root = sample(onto_cli, {"billing": repo("billing", title="결제")})
 
     build(onto_cli, root)
 
@@ -281,7 +290,7 @@ def test_페이지가_하나도_없는_지식_저장소에서도_인덱스가_�
 
 
 def test_온톨로지_층이_없는_디렉토리에는_인덱스를_만들지_않는다(onto_cli):
-    root = onto_cli.root({"billing": repo("billing"), "plain": {"README.md": "# 온톨로지 층이 없다\n"}})
+    root = sample(onto_cli, {"billing": repo("billing"), "plain": {"README.md": "# 온톨로지 층이 없다\n"}})
 
     build(onto_cli, root)
 
@@ -291,7 +300,7 @@ def test_온톨로지_층이_없는_디렉토리에는_인덱스를_만들지_�
 def test_읽을_수_없는_페이지가_있어_build가_멈추면_인덱스도_만들지_않는다(onto_cli):
     files = repo("billing", page("plan/launch", "Plan", title="출시 계획"))
     files[f"{ONTOLOGY_DIR}/plan/broken.md"] = "# frontmatter 없음\n"
-    root = onto_cli.root({"billing": files})
+    root = sample(onto_cli, {"billing": files})
 
     result = onto_cli.run(root, "build")
 
@@ -318,7 +327,7 @@ def mismatch(name: str = "billing") -> tuple[str, str, str, str]:
 
 
 def built(onto_cli, repos):
-    root = onto_cli.root(repos)
+    root = sample(onto_cli, repos)
     build(onto_cli, root)
     return root
 
@@ -434,7 +443,7 @@ def test_스크립트_검사는_어긋난_인덱스를_고치지_않는다(onto_
 
 
 def test_build는_모든_지식_저장소를_모은_전체_인덱스를_도구_디렉토리의_산출물로_만든다(onto_cli):
-    root = onto_cli.root(
+    root = sample(onto_cli, 
         {
             **BILLING,
             "shop": repo("shop", page("component/api", "Component", title="상점 API", partOf="project"), title="상점"),
@@ -459,7 +468,7 @@ def test_build는_모든_지식_저장소를_모은_전체_인덱스를_도구_�
 
 
 def test_전체_인덱스는_루트_저장소에_파일을_만들지_않는다(onto_cli):
-    root = onto_cli.root(BILLING)
+    root = sample(onto_cli, BILLING)
     before = snapshot(root)
 
     build(onto_cli, root)
@@ -469,7 +478,7 @@ def test_전체_인덱스는_루트_저장소에_파일을_만들지_않는다(o
 
 
 def test_지식_저장소가_하나도_없어도_전체_인덱스가_만들어진다(onto_cli):
-    build(onto_cli, onto_cli.root({}))
+    build(onto_cli, sample(onto_cli, {}))
 
     text = (onto_cli.build_dir / "index.md").read_text(encoding="utf-8")
     assert text.startswith("# 전체 인덱스\n") and "지식 저장소가 없다." in text
@@ -477,8 +486,239 @@ def test_지식_저장소가_하나도_없어도_전체_인덱스가_만들어�
 
 def test_링크의_공백과_한글은_퍼센트_인코딩해_링크가_깨지지_않게_한다(onto_cli):
     """식별자 형식을 어긴 페이지다(검사가 오류로 잡는다). 그래도 인덱스에서 빠지지 않고 링크는 열려야 한다."""
-    root = onto_cli.root({"billing": repo("billing", page("plan/출시 계획", "Plan", title="출시 계획"))})
+    root = sample(onto_cli, {"billing": repo("billing", page("plan/출시 계획", "Plan", title="출시 계획"))})
 
     build(onto_cli, root)
 
     assert "- [출시 계획](plan/%EC%B6%9C%EC%8B%9C%20%EA%B3%84%ED%9A%8D.md)\n" in index_of(root)
+
+
+# --- 인덱스가 없는 지식 저장소 -------------------------------------------------------------
+# 따로 클론한 사람과 에이전트에게 인덱스는 온톨로지 층의 유일한 진입점이다(ADR 0006). 없는 것도 어긋난 것이다.
+
+
+def test_인덱스가_없는_지식_저장소는_어긋난_인덱스로_잡고_종료_코드는_1이다(onto_cli):
+    root = sample(onto_cli, BILLING)  # build하지 않았다
+
+    result, findings = validate(onto_cli, root)
+
+    assert result.returncode == 1
+    assert [finding[:4] for finding in findings] == [mismatch()]
+    assert "인덱스가 없다" in findings[0][4]
+
+
+def test_페이지가_하나도_없는_지식_저장소도_인덱스가_없으면_잡는다(onto_cli):
+    root = sample(onto_cli, {"billing": repo("billing", title="결제")})
+
+    assert mismatches(onto_cli, root) == [mismatch()]
+
+
+def test_build한_뒤_인덱스를_지우면_어긋난_인덱스로_잡고_다시_만들면_사라진다(onto_cli):
+    root = built(onto_cli, BILLING)
+    (root / "projects" / "billing" / INDEX).unlink()
+    assert mismatches(onto_cli, root) == [mismatch()]
+
+    build(onto_cli, root)
+
+    assert validate(onto_cli, root)[1] == []
+
+
+def test_온톨로지_층이_없거나_ontology_yaml을_읽을_수_없는_저장소는_인덱스가_없어도_어긋난_인덱스로_잡지_않는다(onto_cli):
+    """인덱스를 만들 수 없는 저장소다. 그 원인(층이 없다, 읽을 수 없다)이 따로 보고된다."""
+    root = sample(
+        onto_cli,
+        {
+            "plain": {"README.md": "# 온톨로지 층이 없다\n"},
+            "broken": {f"{ONTOLOGY_DIR}/ontology.yaml": "name: [깨진\n"},
+        },
+    )
+
+    findings = validate(onto_cli, root)[1]
+
+    assert {finding[3] for finding in findings} == {"missing-ontology-layer", "unreadable-file"}
+
+
+def test_OntoCli_root는_기본으로_인덱스를_갖춘_견본을_만든다(onto_cli):
+    """다른 검사 항목의 테스트에 인덱스 문제가 끼지 않게 하는 테스트 받침의 약속이다. 인덱스가 없어야 하면 indexed=False다."""
+    indexed = onto_cli.root(BILLING)
+    unindexed = onto_cli.root(BILLING, indexed=False)
+
+    assert index_of(indexed) == BILLING_INDEX
+    assert not (unindexed / "projects" / "billing" / INDEX).exists()
+    assert not onto_cli.build_dir.exists()  # 견본을 갖추느라 한 build의 산출물은 남기지 않는다
+
+
+# --- 읽을 수 없는 파일이 있는 지식 저장소 ----------------------------------------------------
+
+
+def test_읽을_수_없는_파일이_있는_저장소는_고칠_수_없는_안내를_덧붙이지_않고_원인만_보고한다(onto_cli):
+    """`build`는 읽을 수 없는 파일이 있으면 멈춘다. 그런 저장소에 "다시 build한다"고 알릴 수는 없다."""
+    root = built(onto_cli, BILLING)
+    (root / "projects" / "billing" / ONTOLOGY_DIR / "plan" / "launch.md").write_text("# frontmatter 없음\n", encoding="utf-8")
+
+    result, findings = validate(onto_cli, root)
+
+    assert result.returncode == 1
+    assert [finding[3] for finding in findings] == ["unreadable-file"]
+
+
+# --- 인덱스 경로가 심볼릭 링크나 디렉토리인 지식 저장소 ---------------------------------------
+# 지식 저장소는 팀이 공유한다. 거기에 커밋된 심볼릭 링크를 따라가면 `build`가 저장소 밖의 파일을 덮어쓴다.
+
+
+def link_index(root, target) -> None:
+    link = root / "projects" / "billing" / INDEX
+    link.symlink_to(target)
+
+
+def test_인덱스가_심볼릭_링크이면_build는_따라가지_않고_링크_대상을_바꾸지_않는다(onto_cli):
+    root = sample(onto_cli, BILLING)
+    outside = root / "outside.txt"
+    outside.write_text("지식 저장소 밖의 파일\n", encoding="utf-8")
+    link_index(root, outside)
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode != 0
+    assert outside.read_text(encoding="utf-8") == "지식 저장소 밖의 파일\n"
+    assert (root / "projects" / "billing" / INDEX).is_symlink()  # 링크를 지우거나 바꾸지도 않는다
+    assert f"projects/billing/{INDEX}" in result.stderr and "심볼릭 링크" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not onto_cli.graph_file.exists()  # 아무것도 쓰기 전에 멈춘다
+
+
+def test_인덱스가_없는_파일을_가리키는_심볼릭_링크이면_build가_그_자리에_파일을_새로_만들지_않는다(onto_cli):
+    root = sample(onto_cli, BILLING)
+    outside = root / "outside.txt"
+    link_index(root, outside)  # outside.txt는 없다
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode != 0
+    assert not outside.exists()
+    assert "Traceback" not in result.stderr
+
+
+def test_인덱스가_심볼릭_링크이면_스크립트_검사는_링크_대상을_읽지_않고_어긋난_인덱스로_보고한다(onto_cli):
+    root = built(onto_cli, BILLING)
+    secret = root / "secret.txt"
+    secret.write_text("비밀 줄 하나\n비밀 줄 둘\n", encoding="utf-8")
+    index_file = root / "projects" / "billing" / INDEX
+    index_file.unlink()
+    link_index(root, secret)
+
+    result, findings = validate(onto_cli, root)
+
+    assert result.returncode == 1
+    assert [finding[:4] for finding in findings] == [mismatch()]
+    assert "심볼릭 링크" in findings[0][4]
+    assert "비밀" not in result.stdout + result.stderr
+    assert secret.read_text(encoding="utf-8") == "비밀 줄 하나\n비밀 줄 둘\n"
+
+
+def test_인덱스_자리가_디렉토리이면_build는_traceback_없이_오류로_알리고_validate는_어긋난_인덱스로_보고한다(onto_cli):
+    root = sample(onto_cli, BILLING)
+    (root / "projects" / "billing" / INDEX).mkdir()
+
+    build_result = onto_cli.run(root, "build")
+    _, findings = validate(onto_cli, root)
+
+    assert build_result.returncode != 0
+    assert f"projects/billing/{INDEX}" in build_result.stderr and "일반 파일이 아니다" in build_result.stderr
+    assert "Traceback" not in build_result.stderr
+    assert not onto_cli.graph_file.exists()
+    assert [finding[:4] for finding in findings] == [mismatch()]
+
+
+def test_온톨로지_층_디렉토리가_지식_저장소_밖을_가리키는_링크이면_build는_밖에_인덱스를_만들지_않는다(onto_cli):
+    outside = onto_cli.root({}) / "elsewhere"
+    root = onto_cli.root({}, indexed=False)
+    for relative, text in BILLING["billing"].items():
+        target = outside / Path(relative).relative_to(ONTOLOGY_DIR)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    docs = root / "projects" / "billing" / "docs"
+    docs.mkdir(parents=True)
+    (docs / "ontology").symlink_to(outside)
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode != 0
+    assert not (outside / "index.md").exists()
+    assert "지식 저장소 밖" in result.stderr and "Traceback" not in result.stderr
+
+
+# --- 이름이 겹치는 지식 저장소 ----------------------------------------------------------------
+# 엔티티의 IRI가 `name`으로 만들어져 두 저장소의 엔티티가 하나로 합쳐진다. 한 저장소의 제목이 다른 저장소의 인덱스에 들 수 있다.
+
+SECRET = "개인 비밀 메모"
+
+
+def clashing(onto_cli, *, indexed: bool = False):
+    """`aaa`가 `name: shop`을 베껴 쓴 견본. 디렉토리 이름이 `shop`인 저장소와 이름이 겹친다."""
+    return onto_cli.root(
+        {
+            "aaa": repo("shop", page("component/api", "Component", title=SECRET, partOf="project")),
+            "shop": repo("shop", page("component/api", "Component", title="상점 API", partOf="project"), title="상점"),
+        },
+        indexed=indexed,
+    )
+
+
+def test_저장소의_name이_겹치면_build는_멈추고_어느_저장소에도_인덱스를_쓰지_않는다(onto_cli):
+    root = clashing(onto_cli)
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode != 0
+    assert f"projects/aaa/{ONTOLOGY_DIR}/ontology.yaml" in result.stderr and "`shop`" in result.stderr
+    for name in ("aaa", "shop"):
+        assert not (root / "projects" / name / INDEX).exists()
+    assert not onto_cli.graph_file.exists()
+
+
+def test_저장소의_name이_겹쳐도_이미_있던_인덱스를_다른_저장소의_제목으로_고치지_않는다(onto_cli):
+    root = onto_cli.root({"shop": BILLING_AS_SHOP})
+    before = index_of(root, "shop")
+    stray = root / "projects" / "aaa" / ONTOLOGY_DIR
+    stray.mkdir(parents=True)
+    for relative, text in repo("shop", page("component/gateway", "Component", title=SECRET, partOf="project")).items():
+        target = root / "projects" / "aaa" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode != 0
+    assert index_of(root, "shop") == before
+    assert SECRET not in before
+
+
+def test_저장소의_name이_겹치면_query도_멈춘다(onto_cli):
+    result = onto_cli.run(clashing(onto_cli), "query", "ASK { ?s ?p ?o }")
+
+    assert result.returncode != 0
+    assert "`shop`" in result.stderr
+
+
+def test_저장소의_name이_겹치면_스크립트_검사가_name을_베낀_저장소에_오류를_보고하고_인덱스는_따지지_않는다(onto_cli):
+    root = clashing(onto_cli)
+
+    result, findings = validate(onto_cli, root)
+
+    assert result.returncode == 1
+    yaml_of = lambda name: f"projects/{name}/{ONTOLOGY_DIR}/ontology.yaml"  # noqa: E731
+    assert ("오류", "aaa", yaml_of("aaa"), "duplicate-repository-name") in [finding[:4] for finding in findings]
+    assert "index-mismatch" not in [finding[3] for finding in findings]  # 섞인 그래프로 만든 인덱스를 기준으로 삼지 않는다
+    assert all(finding[1] != "shop" or finding[3] != "duplicate-repository-name" for finding in findings)  # 고칠 곳은 베낀 쪽이다
+
+
+def test_이름이_겹치는_저장소를_고치면_각자_자기_페이지만_인덱스에_싣는다(onto_cli):
+    root = clashing(onto_cli)
+    yaml_file = root / "projects" / "aaa" / ONTOLOGY_DIR / "ontology.yaml"
+    yaml_file.write_text(yaml_file.read_text(encoding="utf-8").replace('"shop"', '"aaa"'), encoding="utf-8")
+
+    build(onto_cli, root)
+
+    assert SECRET in index_of(root, "aaa") and "상점 API" not in index_of(root, "aaa")
+    assert "상점 API" in index_of(root, "shop") and SECRET not in index_of(root, "shop")

@@ -16,8 +16,8 @@ from ..iri import entity_iri
 from ..keys import PAGE_CLASS_DIRECTORIES
 from ..rules import RuleSet
 from .catalog import INVALID_IDENTIFIER, MISNAMED_PAGE, MISPLACED_PAGE
-from .classes import ClassIndex
-from .labels import class_label
+from ..classes import ClassIndex
+from ..labels import class_label
 from .model import Issue
 
 

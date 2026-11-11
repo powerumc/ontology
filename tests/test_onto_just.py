@@ -5,6 +5,7 @@
 """
 
 import json
+import shutil
 from pathlib import Path
 
 from support.onto_cli import ONTOLOGY_DIR, copy_onto, page, parse_table, repo, snapshot
@@ -274,12 +275,18 @@ def test_just_onto_validate는_문제가_없으면_아무것도_보고하지_않
         sandbox, page("component/gateway", "Component", title="게이트웨이", partOf="project"), title="결제"
     )
 
+    # 지식 저장소는 인덱스가 있어야 검사를 통과한다. 만든 인덱스까지 포함해 검사 전후의 작업 트리를 비교한다.
+    assert sandbox.just("onto", "build", cwd=root).returncode == 0
+    shutil.rmtree(root / "onto" / ".build")
+    status = ("status", "--porcelain", "--untracked-files=all")
+    before = (sandbox.git(*status, cwd=root).stdout, sandbox.git(*status, cwd=root / "projects" / "billing").stdout)
+
     result = sandbox.just("onto", "validate", cwd=root)
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
     assert not (root / GRAPH).parent.exists()
-    assert sandbox.git("status", "--porcelain", cwd=root).stdout == ""
+    assert (sandbox.git(*status, cwd=root).stdout, sandbox.git(*status, cwd=root / "projects" / "billing").stdout) == before
 
 
 def test_just_onto_rules는_루트_기본_규칙과_저장소가_덮어쓴_규칙을_보여_주고_파일을_만들지_않는다(sandbox):

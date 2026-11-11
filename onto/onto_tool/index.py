@@ -13,6 +13,7 @@
 """
 
 import posixpath
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from urllib.parse import quote
@@ -21,11 +22,11 @@ from rdflib import Graph, Literal, URIRef
 from rdflib.namespace import DCTERMS, RDF
 
 from . import vocab
-from .checks.classes import ClassIndex
-from .checks.labels import class_label
+from .classes import ClassIndex
 from .compiler import PROJECT_IDENTIFIER, Compiled
 from .iri import entity_iri
 from .keys import PAGE_CLASS_DIRECTORIES
+from .labels import class_label
 
 # 클래스에 닿지 못해 어느 클래스 묶음에도 들지 못한 페이지의 묶음. 인덱스에서 페이지가 조용히 빠지지 않게 한다.
 UNCLASSIFIED = "분류되지 않음"
@@ -69,7 +70,8 @@ class RepositoryIndex:
 def collect(compiled: Compiled) -> list[RepositoryIndex]:
     """컴파일한 지식 저장소마다 인덱스에 들어갈 내용을 모은다. `ontology.yaml`을 읽지 못해 이름을 모르는 저장소는 뺀다.
 
-    그래프에 오른 페이지만 싣는다. 읽을 수 없는 페이지는 스크립트 검사가 따로 보고한다. 페이지의 클래스는 상위 클래스를 따라가 닿는
+    그래프에 오른 페이지만 싣는다. 읽을 수 없는 페이지는 스크립트 검사가 따로 보고한다. 다른 지식 저장소와 `name`이 겹치는 저장소는 뺀다.
+    엔티티의 IRI가 `name`으로 만들어져 두 저장소의 엔티티가 하나로 합쳐지므로, 한 저장소의 제목이 다른 저장소의 인덱스에 들 수 있다. 페이지의 클래스는 상위 클래스를 따라가 닿는
     공통 어휘의 클래스로 묶는다(`checks.classes`). 그래서 하위 클래스의 페이지도 공통 클래스의 묶음에 들고, 하위 클래스의 이름은 항목에 붙는다.
     """
     graph = compiled.graph
@@ -77,9 +79,11 @@ def collect(compiled: Compiled) -> list[RepositoryIndex]:
     namespace = vocab.onto_namespace(graph)
     common = {URIRef(namespace + name): name for name in PAGE_CLASS_DIRECTORIES}
 
+    shared = Counter(record.name for record in compiled.records if record.name is not None)
+
     result: list[RepositoryIndex] = []
     for record in compiled.records:
-        if record.name is None:
+        if record.name is None or shared[record.name] > 1:
             continue
         grouped: dict[str, list[Entry]] = {name: [] for name in PAGE_CLASS_DIRECTORIES}
         grouped[UNCLASSIFIED] = []

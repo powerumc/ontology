@@ -508,7 +508,7 @@ def test_지식_저장소_최상위에_표준_라이브러리나_의존성과_�
 
 
 def test_build는_지식_저장소의_인덱스_말고는_작업_트리에_아무것도_만들지_않고_산출물은_도구_디렉토리에_둔다(onto_cli):
-    root = onto_cli.root(billing(page("plan/auth-redesign", "Plan", title="인증 재설계")))
+    root = onto_cli.root(billing(page("plan/auth-redesign", "Plan", title="인증 재설계")), indexed=False)
     before = snapshot(root)
 
     result = onto_cli.run(root, "build")
