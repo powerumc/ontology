@@ -25,6 +25,12 @@ def root_with_billing(sandbox, *pages, **project) -> Path:
     return root.work
 
 
+def sync_billing(sandbox, root: Path) -> None:
+    """등록한 `billing`을 최신화한다. 등록하면 `just repo add`가 최신화까지 하므로 이 상태가 정상이다.
+    최신화하지 않으면 스크립트 검사가 루트 관리 파일이 없다고 경고(`outdated-managed-files`)해 검사 결과에 끼어든다."""
+    assert sandbox.just("onto", "sync", "billing", cwd=root).returncode == 0
+
+
 def query(sandbox, root: Path, sparql: str, *, cwd: Path | None = None):
     return sandbox.just("onto", "query", sparql, cwd=cwd or root)
 
@@ -82,6 +88,7 @@ def test_인덱스를_커밋한_뒤_같은_페이지로_다시_build해도_지�
 
 def test_just_onto_validate는_커밋된_인덱스가_페이지와_어긋나면_오류로_보고한다(sandbox):
     root = root_with_billing(sandbox, page("plan/auth-redesign", "Plan", title=PLAN_TITLE))
+    sync_billing(sandbox, root)
     assert sandbox.just("onto", "build", cwd=root).returncode == 0
     page_file = root / PLAN_FILE
     page_file.write_text(page_file.read_text(encoding="utf-8").replace(PLAN_TITLE, "인증 재설계 2차"), encoding="utf-8")
@@ -261,6 +268,7 @@ def test_just_onto_validate는_문제를_보고하고_오류가_있으면_0이_�
     root = root_with_billing(
         sandbox, page("component/gateway", "Component", title="게이트웨이", partOf="project", owner="kim"), title="결제"
     )
+    sync_billing(sandbox, root)
 
     result = sandbox.just("onto", "validate", cwd=root)
 
@@ -274,6 +282,7 @@ def test_just_onto_validate는_문제가_없으면_아무것도_보고하지_않
     root = root_with_billing(
         sandbox, page("component/gateway", "Component", title="게이트웨이", partOf="project"), title="결제"
     )
+    sync_billing(sandbox, root)
 
     # 지식 저장소는 인덱스가 있어야 검사를 통과한다. 만든 인덱스까지 포함해 검사 전후의 작업 트리를 비교한다.
     assert sandbox.just("onto", "build", cwd=root).returncode == 0

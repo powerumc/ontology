@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ..errors import OntoError
 from ..paths import TOOL_DIR
-from ..sync import MANAGED_DIR, ROOT_TREE
+from ..managed import MANAGED_DIR, ROOT_TREE
 from ..workspace import Within, Workspace
 
 

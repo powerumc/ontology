@@ -92,7 +92,21 @@ def test_예(onto_cli):
 - 지식 저장소 안에서 `just -f .onto/Justfile …`을 부르면 도구가 `.onto/` 안에 가상환경과 `__pycache__`를 만든다. 작업 트리를 앞뒤로 비교하는 테스트는 이를 빼고 비교한다.
 - `.onto/.sync-record.json`을 손으로 꾸며(`.onto/` 밖이나 `..`, 절대 경로가 든 기록) 기록이 저장소 밖의 파일을 지우지 못하는 것을 본다. 최신화의 인덱스 생성 기준은 `build`와 같다(규칙에서 오류인 읽기 문제가 있을 때만 못 만든다).
 - 출력의 순서는 `sh -c 'just … 2>&1'`로 두 출력을 한 파이프에 모아 본다. 두 파이프로 따로 받으면 순서를 알 수 없다.
+- 건너뛴 파일의 보고: 같은 위치(링크, 디렉토리가 아닌 조각)가 막은 파일만 같은 이유끼리 묶고(`.onto/ 아래 파일 N개`), 손으로 고친 파일처럼 파일마다 사정이 다른 것은 몇 개든 하나씩 이유와 함께 적는다. 지식 저장소가 `.onto/`를 이미 추적하는 것은 건너뛴 것이 아니라 `확인 필요`로 알리고(복사는 계속한다) 종료 코드는 1이다.
+- 최신화가 부르는 git은 `GIT_DIR`, `GIT_INDEX_FILE` 같은 환경 변수와 위 디렉토리의 저장소를 따르지 않는다. 환경 변수를 둔 채 실행하려면 `sandbox.run([just, "onto", "sync", …], cwd=…, env={**sandbox.env, "GIT_INDEX_FILE": …})`로 부른다(`sandbox.just`는 환경을 받지 않는다).
 - `just repo add`가 등록 직후 최신화를 자동으로 실행하는 것은 `test_repo_add.py`가 본다. 그래서 등록하면 지식 저장소에 미커밋 파일(`.gitignore`, `docs/ontology/`)이 생기고, 방금 등록한 저장소를 바로 떼려면 `repo remove --force`가 필요하다(`test_repo_remove.py`).
+
+### 지침 파일의 블록(`test_onto_guidance.py`)
+
+최신화가 프로젝트 지침 파일(`CLAUDE.md`, 없으면 `AGENTS.md`, 둘 다 없으면 `AGENTS.md`를 만든다)에 넣는 표시된 블록(`<!-- onto:begin …` ~ `<!-- onto:end -->`)을 `just onto sync`로 본다. 지침 파일은 팀의 것이라 블록 밖이 한 글자도 바뀌지 않는 것(CRLF, 끝에 줄바꿈이 없는 파일 포함), 블록이 이미 있으면 그 자리에서 바뀌고 중복되지 않는 것, 커밋하지 않은 수정이 있어도 블록만 교체하고 다음 최신화가 막히지 않는 것, 두 번째 실행이 파일을 다시 쓰지 않는 것을 확인한다. 블록의 내용은 글자 하나하나가 아니라 약속을 본다: 인덱스를 먼저 가리키고, 복사된 기능(`.onto/`)이 "있으면" 규약 문서·스킬·`just -f .onto/Justfile`을 쓰라고 하며, 루트 저장소나 다른 지식 저장소를 언급하지 않고, 복사된 기능이 없는 클론(지침 파일과 온톨로지 층만 커밋해 따로 클론한다)에서 조건 앞이 가리키는 파일이 모두 있다. 지침 파일이 링크인 경우도 본다: 이 저장소 안의 일반 파일을 가리키면(`CLAUDE.md -> AGENTS.md`, 다른 디렉토리의 파일) 링크는 두고 대상 파일의 블록을 고치며 보고도 대상 이름으로 하고 두 후보가 같은 파일이어도 한 번만 고친다. 저장소 밖, 없는 대상, 디렉토리, `.onto/`를 가리키면 따라가지 않고 이유가 서로 다른 `건너뜀`으로 보고한다. 한 테스트에서 루트를 둘 만들 때는 `sandbox.root(name=…)`로 이름을 달리 준다.
+
+### 공통 어휘의 버전과 뒤처진 루트 관리 파일(`test_onto_outdated.py`)
+
+- 공통 어휘의 버전(`onto/vocab/onto.ttl`의 `owl:versionInfo`)이 semver이고 지식 저장소의 `.onto/vocab/onto.ttl`에 찍히는 것.
+- `outdated-managed-files`(경고): 루트 저장소가 `onto/`를 고치고 최신화하지 않은 지식 저장소를 `just onto validate`가 경고한다. 내용으로 판단하므로 버전 번호를 올리지 않고 코드만 고쳐도 잡힌다. 없는 파일, 내용이 다른 파일(손으로 고친 사본 포함), 루트에서 없어졌는데 남은 파일, `.onto/`가 없거나 링크인 경우를 본다. 최신화한 저장소와 초기화하지 않은 서브모듈은 경고하지 않는다. 이 항목은 도구가 루트 저장소의 `onto/`에서 돌 때만 비교하므로(`onto_cli`의 견본 루트는 아니다) 가장 높은 이음매(`sandbox.root()`)로 본다.
+- `just onto validate`의 출력을 보는 다른 테스트(`test_onto_just.py`)는 등록한 저장소를 먼저 `just onto sync`한다(`sync_billing`). 등록하면 `just repo add`가 최신화까지 하므로 그 상태가 정상이고, 최신화하지 않으면 `.onto/`가 없다는 경고가 검사 결과에 끼어든다.
+- 루트의 검사는 지식 저장소의 `.onto/vocab/`을 읽지 않고 항상 루트의 공통 어휘로 돌린다: 사본의 구조 제약을 지워도 같은 위반이 보고된다.
+- 최신화 뒤의 구조 제약 보고: `just onto sync`가 끝에 최신화한 저장소의 페이지 가운데 공통 어휘와 구조 제약이 정하는 검사 항목(`relation-domain` 같은 것)에 어긋난 것을 `validate`와 같은 다섯 칸으로 보고한다. 루트가 구조 제약을 좁힌 뒤 최신화하면 이전에 통과한 페이지가 걸리는 것을 본다. 고아 페이지처럼 어휘와 무관한 것은 보고하지 않고, 저장소의 규칙이 끈 항목은 따른다. 종료 코드는 바꾸지 않는다.
 
 ### 지식 저장소 안에서의 실행(`test_onto_within_repository.py`, `test_onto_repository_just.py`)
 
@@ -101,7 +115,7 @@ def test_예(onto_cli):
 - `test_onto_repository_just.py`(가장 높은 이음매): 루트 저장소(`sandbox.root()`)에 지식 저장소를 `just repo add`로 붙이고(등록하면 최신화가 `.onto/`를 복사한다) 그 안에서 복사된 `Justfile`을 직접 가리켜 실행한다. Justfile이 있는 디렉토리의 이름(`.onto`인지 `onto`인지)으로 어디 안에서 도는지를 가려 도구에 넘기는 연결(`-f .onto/Justfile`, 지식 저장소의 팀 `Justfile`이 `mod onto '.onto/Justfile'`이나 `import '.onto/Justfile'`로 부르는 경우, 루트에서 `just -f onto/Justfile`로 직접 가리키는 경우), `-d`로 실행 위치를 바꾸거나 `import`로 실행 위치가 저장소의 상위 디렉토리가 되어도 도구가 `.onto/`의 위를 그 저장소로 보는 것(루트 저장소에서 `-f onto/Justfile -d …`로 바꿔도 `Justfile`이 먼저 루트 저장소로 옮겨 가 모든 지식 저장소를 합쳐 다룬다), 도구가 있는 곳(`onto/`인지 `.onto/`인지)과 받은 범위가 맞지 않으면 바른 명령을 알리며 거부하는 것, 저장소의 하위 디렉토리에서 불러도 그 저장소가 기준인 것, 루트와 같은 파일을 쓰는 것, 루트 저장소의 실행 결과가 그대로인 것, 지식 저장소의 `Justfile`을 만들거나 고치지 않는 것을 본다. 지식 저장소 안에서 `just -f .onto/Justfile …`을 부르면 `.onto/` 안에 가상환경과 산출물이 생기므로 작업 트리를 비교하는 테스트는 이를 빼고 비교한다.
 - `test_onto_within_repository.py`(도구의 명령줄 진입점): 지식 저장소 하나의 견본(`onto_cli.repository`)을 `--within repository`로 실행한다. 경로가 저장소 기준인 것, 교차 참조(다른 저장소를 가리키는 `<저장소>:<식별자>`)와 여러 저장소에 걸친 검사를 건너뛰고 건너뛰었다고 알리는 것, 같은 저장소 안의 참조는 검사하는 것, 읽을 수 없는 파일의 규칙, `status`·`rules`·`sync`, 루트 저장소와 다른 지식 저장소를 읽지 않는 것을 본다.
 
-`checks.catalog`의 검사 항목은 `across_repositories=True`로 여러 저장소에 걸친 항목을 표시한다(교차 참조 `unregistered-repository`, 저장소 간 중복, `name` 겹침, 공유 범위 `scope-violation`, 다른 저장소에서 들어오는 참조에 따라 결과가 달라지는 `orphan-page`). 지식 저장소 안의 `validate`는 이 항목들을 돌리지 않는다. 한 저장소만 보고 판단할 수 있는 루트 전용 항목(`invalid-scope`, `path-reference`, `outside-link`)은 지식 저장소 안에서도 돈다.
+`checks.catalog`의 검사 항목은 `across_repositories=True`로 이 저장소 밖(다른 지식 저장소, 루트 저장소)의 사실이 필요한 항목을 표시한다(교차 참조 `unregistered-repository`, 저장소 간 중복, `name` 겹침, 공유 범위 `scope-violation`, 다른 저장소에서 들어오는 참조에 따라 결과가 달라지는 `orphan-page`, 루트의 `onto/`와 `.onto/` 사본을 견주는 `outdated-managed-files`). 지식 저장소 안의 `validate`는 이 항목들을 돌리지 않는다. 한 저장소만 보고 판단할 수 있는 루트 전용 항목(`invalid-scope`, `path-reference`, `outside-link`)은 지식 저장소 안에서도 돈다.
 
 ### 템플릿과 규약 문서(`test_onto_templates.py`)
 

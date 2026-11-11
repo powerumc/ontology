@@ -40,6 +40,7 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
+from . import gitenv
 from .keys import SOURCE_ENTRY_KEYS
 from .pages import FrontmatterError, ValueKindError
 from .rules import Sources
@@ -136,21 +137,6 @@ def read_skipped(path: Path) -> list[SourceEntry]:
 
 # --- 해시 ---------------------------------------------------------------------------
 
-# 어느 저장소를 해시하는지를 바꾸는 환경 변수. 사용자의 셸이나 git 훅(`pre-push` 등)이 물려줄 수 있어 버린다.
-_GIT_LOCATION_VARIABLES = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_COMMON_DIR",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_NAMESPACE",
-    "GIT_PREFIX",
-    "GIT_SUPER_PREFIX",
-    "GIT_INTERNAL_SUPER_PREFIX",
-)
-
-
 class _GitFailure(Exception):
     """git으로 해시를 내지 못했다. 메시지는 이유다."""
 
@@ -200,9 +186,7 @@ def _git_hashes(repository: Path, paths: list[str]) -> dict[str, str]:
     상위 디렉토리로 올라가 다른 저장소(루트 저장소)를 찾지 않게 하며(`GIT_CEILING_DIRECTORIES`), `core.safecrlf`를 끈다.
     """
     real = repository.resolve()
-    environment = {key: value for key, value in os.environ.items() if key not in _GIT_LOCATION_VARIABLES}
-    environment["GIT_CEILING_DIRECTORIES"] = str(real.parent)
-    environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment = gitenv.environment(real.parent)
     command = ["git", "-c", "core.safecrlf=false", "-C", str(real), "hash-object"]
 
     def run(arguments: list[str], text: bytes = b"") -> list[str]:

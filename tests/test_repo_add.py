@@ -471,5 +471,21 @@ def test_최신화가_일부만_건너뛰어도_복사하지_못했다고_알리
     sub = root.work / "projects" / "billing"
     assert result.returncode != 0
     assert (sub / ".onto" / "Justfile").is_file() and ".onto/" in (sub / ".gitignore").read_text(encoding="utf-8")  # 복사는 끝났다
-    assert "최신화를 마치지 못했습니다" in result.stderr and "복사하지 못했" not in result.stderr
+    assert "최신화가 문제를 보고했습니다" in result.stderr and "복사하지 못했" not in result.stderr
+    assert "just onto sync billing" in result.stderr
+
+
+def test_최신화가_확인_필요만_알려도_건너뛴_것이_있다고_하지_않고_위의_보고를_보라고_알린다(sandbox):
+    """이미 `.onto/`를 커밋한 저장소다. 최신화는 아무것도 건너뛰지 않았고 `확인 필요`만 알린다. 등록은 유지된다."""
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing", files={"README.md": "# billing\n", ".onto/stray.txt": "누가 커밋했다\n"})
+
+    result = _add(sandbox, root, billing.url)
+
+    sub = root.work / "projects" / "billing"
+    assert result.returncode != 0
+    assert sub.is_dir() and (sub / ".onto" / "Justfile").is_file()  # 등록도 복사도 끝났다
+    assert "건너뜀" not in result.stdout and "확인 필요" in result.stdout  # 최신화의 분류가 위에 있다
+    assert "최신화가 문제를 보고했습니다" in result.stderr and "건너뛴 것과" not in result.stderr
+    assert "`건너뜀`" in result.stderr and "`확인 필요`" in result.stderr  # 두 분류를 모두 가리킨다
     assert "just onto sync billing" in result.stderr

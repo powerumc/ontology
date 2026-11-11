@@ -63,6 +63,8 @@ checks:
   repository-name-mismatch: {enabled: true, severity: error}
   duplicate-repository-name: {enabled: true, severity: error}
   missing-ontology-layer: {enabled: true, severity: warning}
+  # 루트 관리 파일(.onto/)이 루트의 onto/와 다르다: 최신화가 필요하다. 내용으로 판단하고(버전 번호를 올리지 않고 코드만 고쳐도 잡는다) `just onto sync`가 고친다.
+  outdated-managed-files: {enabled: true, severity: warning}
   invalid-rules: {enabled: true, severity: error}
   # 공유 범위(루트 전용): 지식 저장소의 규칙으로 끄거나 심각도를 바꿀 수 없다. 공유 범위를 지키려는 안전장치이고 이 파일만 정한다.
   # `scope`(ontology.yaml)는 private, team, team:<팀 이름>, public 중 하나이고 적지 않으면 private이다(`invalid-scope`). 범위를 알 수 없는

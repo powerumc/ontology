@@ -191,7 +191,7 @@ add url name='' branch='':
             *[[:space:]]*) shown="'$name'" ;;
             *) shown=$name ;;
         esac
-        echo "오류: $path 는 등록했지만 최신화를 마치지 못했습니다. 건너뛴 것과 이유는 위에 있습니다. 해결한 뒤 다시 실행하세요: just onto sync $shown" >&2
+        echo "오류: $path 는 등록했지만 최신화가 문제를 보고했습니다. 위의 \`건너뜀\`이나 \`확인 필요\` 줄에 대상과 이유가 있습니다. 해결한 뒤 다시 실행하세요: just onto sync $shown" >&2
         exit 1
     fi
 

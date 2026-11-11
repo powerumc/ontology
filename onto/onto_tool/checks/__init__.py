@@ -4,8 +4,9 @@
 `validate`가 문제마다 규칙(`rules.yaml`, 지식 저장소가 덮어쓰면 그 값)이 정한 켬/끔과 심각도를 붙여 보고할 목록을 만든다.
 어떤 파일도 고치지 않는다.
 
-지식 저장소 안에서 돌리면(`workspace.Within.REPOSITORY`) 그 저장소만 검사한다. 여러 지식 저장소에 걸친 검사 항목(`Check.across_repositories`: 교차 참조,
-공유 범위, 저장소 간 중복)은 건너뛴다. 교차 참조의 대상은 다른 저장소에 있어 이 저장소만으로는 알 수 없기 때문이다. 루트 저장소가 전체를 합쳐 검사한다.
+지식 저장소 안에서 돌리면(`workspace.Within.REPOSITORY`) 그 저장소만 검사한다. 이 저장소 밖의 사실이 필요한 검사 항목(`Check.across_repositories`: 교차 참조,
+공유 범위, 저장소 간 중복, 루트의 `onto/`와 `.onto/` 사본의 비교)은 건너뛴다. 교차 참조의 대상은 다른 저장소에 있고 루트의 `onto/`는 루트 저장소에 있어
+이 저장소만으로는 알 수 없기 때문이다. 루트 저장소가 전체를 합쳐 검사한다.
 """
 
 from collections.abc import Collection
@@ -23,6 +24,7 @@ from . import (
     layout,
     links,
     orphans,
+    outdated,
     overrides,
     problems,
     references,
@@ -51,6 +53,7 @@ __all__ = [
 _MODULES = (
     problems,
     repositories,
+    outdated,
     overrides,
     frontmatter,
     layout,
@@ -67,7 +70,7 @@ _MODULES = (
 # 지식 저장소의 규칙이 덮어쓸 수 없는 검사 항목
 ROOT_ONLY_CHECKS: Collection[str] = tuple(check.name for check in CHECKS if check.root_only)
 
-# 여러 지식 저장소에 걸친 검사 항목. 지식 저장소 안에서는 건너뛴다.
+# 이 저장소 밖(다른 지식 저장소, 루트 저장소)의 사실이 필요한 검사 항목. 지식 저장소 안에서는 건너뛴다.
 ACROSS_REPOSITORIES_CHECKS: tuple[str, ...] = tuple(check.name for check in CHECKS if check.across_repositories)
 
 

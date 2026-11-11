@@ -5,10 +5,11 @@
 여기의 항목을 가리켜 문제를 보고한다. 이름은 규칙 파일이 항목을 가리키는 키가 되고 보고에도 나온다.
 루트 전용 항목(지식 저장소의 규칙이 끄거나 심각도를 바꿀 수 없는 것)은 `root_only=True`로 적는다. 공유 범위 검사, 규칙을 담은
 `ontology.yaml` 자체의 문제를 보고하는 항목, 지식 저장소 사이의 `name` 겹침이 그렇다.
-여러 지식 저장소에 걸친 항목(교차 참조, 공유 범위, 저장소 간 중복, 다른 저장소에서 들어오는 참조에 따라 결과가 달라지는 고아 페이지)은
+이 저장소 밖의 사실이 필요한 항목(교차 참조, 공유 범위, 저장소 간 중복, 다른 저장소에서 들어오는 참조에 따라 결과가 달라지는 고아 페이지,
+루트의 `onto/`와 지식 저장소의 `.onto/` 사본을 견주는 뒤처진 루트 관리 파일)은
 `across_repositories=True`로 적는다. 지식 저장소 안에서 돌릴 때는 그 저장소만 다루므로 이 항목들을 건너뛰고(`checks.validate`) 건너뛰었다고 알린다.
 루트 전용인 것과는 별개다. 루트 전용이지만 한 저장소만 보고 판단할 수 있는 항목(`invalid-ontology-yaml`, `invalid-class-declaration`,
-`invalid-scope`, `path-reference`, `outside-link`)은 지식 저장소 안에서도 돈다. 새 항목이 어느 쪽인지는 그 항목이 다른 저장소의 사실에 기대는지로 정한다.
+`invalid-scope`, `path-reference`, `outside-link`)은 지식 저장소 안에서도 돈다. 새 항목이 어느 쪽인지는 그 항목이 다른 저장소나 루트 저장소의 사실에 기대는지로 정한다.
 """
 
 from .. import compiler
@@ -71,6 +72,11 @@ DUPLICATE_REPOSITORY_NAME = Check(
     across_repositories=True,
 )
 MISSING_ONTOLOGY_LAYER = Check("missing-ontology-layer", "등록된 지식 저장소에 온톨로지 층(ontology.yaml)이 없어 검사하지 못했다")
+OUTDATED_MANAGED_FILES = Check(
+    "outdated-managed-files",
+    "지식 저장소의 루트 관리 파일(.onto/)이 루트 저장소의 onto/와 내용이 다르다(없는 파일, 다른 파일, 루트에서 없어졌는데 남은 파일). 버전 번호가 아니라 내용으로 판단하므로 버전을 올리지 않고 코드만 고친 경우도 잡는다. 최신화(just onto sync)가 필요하다",
+    across_repositories=True,
+)
 INVALID_RULES = Check(
     "invalid-rules", "ontology.yaml의 rules가 틀렸다(정의되지 않은 키, 값의 종류, 루트 전용 규칙을 덮어쓰려는 시도). 그 저장소는 루트 기본 규칙으로 검사한다"
 )
@@ -133,6 +139,7 @@ CHECKS = (
     REPOSITORY_NAME_MISMATCH,
     DUPLICATE_REPOSITORY_NAME,
     MISSING_ONTOLOGY_LAYER,
+    OUTDATED_MANAGED_FILES,
     INVALID_RULES,
     STALE_PAGE,
     MISSING_SOURCE,

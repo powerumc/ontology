@@ -162,6 +162,8 @@ def test_8의_기본_심각도가_루트_기본_규칙의_값으로_옮겨져_�
         "scope-violation": "error",
         "path-reference": "error",
         "outside-link": "error",
+        # #13이 더한 뒤처진 루트 관리 파일 검사(경고)
+        "outdated-managed-files": "warning",
     }
     assert all(rule["enabled"] is True for rule in checks.values())
 

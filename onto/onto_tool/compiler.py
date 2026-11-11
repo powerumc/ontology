@@ -155,6 +155,7 @@ class Compiled:
     source_files: dict[str, str] = field(default_factory=dict)
     notices: list[str] = field(default_factory=list)  # 알릴 것(원본 문서의 해시를 git으로 내지 못했다). 검사 항목이 따로 보고하지 않는다
     within: Within = Within.ROOT  # 어디 안에서 컴파일했는지(루트 저장소 또는 지식 저장소 안). 공유 범위와 무관하다
+    root: Path | None = None  # 컴파일한 작업 공간의 루트. 레코드의 `path`가 이 위치 기준이다. 파일을 직접 읽어야 하는 검사 항목이 쓴다
 
     def repository_of(self, file: str) -> str:
         """`file`(작업 공간 기준 경로)이 속한 지식 저장소의 이름(서브모듈 디렉토리 이름). 어느 저장소의 것도 아니면 빈 글자다.
@@ -224,7 +225,7 @@ def compile_workspace(workspace: Workspace) -> Compiled:
 
     problems += duplicates
     raw.parse(data=json.dumps({"@context": context, "@graph": nodes}), format="json-ld", base=UNRESOLVED_BASE)
-    return Compiled(canonical(raw), files, names, warnings, problems, records, source_files, notices, workspace.within)
+    return Compiled(canonical(raw), files, names, warnings, problems, records, source_files, notices, workspace.within, workspace.root)
 
 
 def _duplicate_names(records: list[RepositoryRecord]) -> list[Problem]:
