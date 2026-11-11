@@ -107,7 +107,7 @@ PATH_REFERENCE = Check(
 )
 OUTSIDE_LINK = Check(
     compiler.OUTSIDE_LINK,
-    "페이지 본문의 링크(절대 경로, file: 주소, 저장소의 루트 위로 나가는 상대 경로), 페이지 파일(심볼릭 링크), 원본 문서의 기록(derivedFrom, 넘긴 문서의 목록)의 path가 지식 저장소 밖의 파일을 가리킨다",
+    "페이지 본문의 링크(절대 경로, file: 주소, 저장소의 루트 위로 나가는 상대 경로), 페이지 파일·ontology.yaml·skipped.yaml(심볼릭 링크), 원본 문서의 기록(derivedFrom, 넘긴 문서의 목록)의 path가 지식 저장소 밖의 파일을 가리킨다",
     root_only=True,
 )
 

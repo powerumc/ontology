@@ -526,6 +526,11 @@ OUTSIDE_LINKS = {
     "울타리는_3칸까지_더_들여써도_닫는다": f"```\n코드\n   ```\n\n[x]({OUTSIDE}x.md)\n",
     "코드_안의_주석_표시_사이의_링크": f"주석은 `<!--`로 열고 [x]({OUTSIDE}x.md)를 지나 `-->`로 닫는다.\n",
     "주석_안의_백틱은_코드를_열지_않는다": f"<!-- 메모의 ` 하나 -->\n[x]({OUTSIDE}x.md) 그리고 `코드`\n",
+    "다른_속성_값에_href_글자가_든_태그의_진짜_href": f'<a title="href=./ok" href="{OUTSIDE}x.md">x</a>',
+    "다른_속성_값에_src_글자가_든_태그의_진짜_src": f"<img alt='a src=./ok b' src={OUTSIDE}a.png>",
+    "대문자_속성_이름": f'<a HREF="{OUTSIDE}x.md">x</a>',
+    "xlink_href": f'<svg><image xlink:href="{OUTSIDE}x.png"/></svg>',
+    "공백_없이_이어진_속성": f'<a title="x"href="{OUTSIDE}x.md">x</a>',
 }
 
 
@@ -577,12 +582,58 @@ INSIDE_LINKS = {
     "본문_평문의_src와_href": "설정의 src=/etc/app.conf 값을 바꾸고 href=/login 으로 보낸다.\n",
     "html_태그_밖의_href": "href=/login 은 <b>굵게</b> 쓴다.\n",
     "울타리_안에_4칸_들여쓴_울타리가_든_코드_블록": f"```md\n- 목록\n\n    ```\n    [x]({OUTSIDE}x.md)\n    ```\n```\n",
+    # 링크가 아닌 속성 값 안의 `href=`, `src=` 글자와, `href`·`src`로 끝나는 다른 속성의 이름
+    "다른_속성_값_안의_href_글자": '<abbr title="see href=/etc/passwd">API</abbr>',
+    "작은따옴표_속성_값_안의_src_글자": "<abbr title='a src=../../../../x.png b'>x</abbr>",
+    "data_src_속성": f'<img data-src="{OUTSIDE}x.png">',
+    "data_href_속성": f"<a data-href={OUTSIDE}x.md>x</a>",
+    "따옴표_없는_data_src_속성": f"<img data-src={OUTSIDE}x.png alt=그림>",
 }
 
 
 @pytest.mark.parametrize("body", INSIDE_LINKS.values(), ids=INSIDE_LINKS.keys())
 def test_본문의_링크가_지식_저장소_안이거나_파일이_아니거나_코드_안이면_잡지_않는다(onto_cli, body):
     assert outside_links(onto_cli, body) == []
+
+
+def test_링크가_아닌_속성_값_안의_href_글자는_대상으로_보고하지_않고_진짜_링크만_보고한다(onto_cli):
+    body = f'<abbr title="see href=/etc/passwd">API</abbr> <a href="{OUTSIDE}x.md">설계</a>\n'
+
+    findings = validate(onto_cli, onto_cli.root(with_body(body)))[1]
+
+    assert [finding[3] for finding in findings] == ["outside-link"]
+    assert "x.md" in findings[0][4] and "/etc/passwd" not in findings[0][4]
+
+
+# 마크다운의 줄바꿈은 `\n`, `\r\n`, `\r`뿐이다. 유니코드의 줄 구분 문자(U+2028 등)는 줄을 나누지 않는다. 나누면 한 줄 중간의 ```가 줄 맨 앞의
+# 울타리로 읽혀 그 뒤의 링크가 코드 블록 안에 숨는다.
+LINE_SEPARATORS = {
+    "U+2028": "\u2028",
+    "U+2029": "\u2029",
+    "U+0085": "\x85",
+    "수직_탭": "\x0b",
+    "폼_피드": "\x0c",
+    "파일_구분자": "\x1c",
+    "그룹_구분자": "\x1d",
+    "레코드_구분자": "\x1e",
+}
+
+
+@pytest.mark.parametrize("separator", LINE_SEPARATORS.values(), ids=LINE_SEPARATORS.keys())
+def test_줄바꿈이_아닌_구분_문자_뒤의_울타리는_코드_블록을_열지_않아_그_뒤의_링크를_숨기지_않는다(onto_cli, separator):
+    body = f"앞 글{separator}```\n[x]({OUTSIDE}x.md)\n```\n"
+
+    assert outside_links(onto_cli, body) == [(ERROR, "billing", file("component/gateway"), "outside-link")]
+
+
+@pytest.mark.parametrize("line_break", ["\r\n", "\r"], ids=["CRLF", "CR"])
+def test_CRLF와_CR_줄바꿈의_코드_블록도_코드_블록으로_읽는다(onto_cli, line_break):
+    body = line_break.join(["```", f"[x]({OUTSIDE}code.md)", "```", "", f"[y]({OUTSIDE}after.md)", ""])
+
+    findings = validate(onto_cli, onto_cli.root(with_body(body)))[1]
+
+    assert [finding[3] for finding in findings] == ["outside-link"]
+    assert "after.md" in findings[0][4] and "code.md" not in findings[0][4]
 
 
 # 링크를 찾는 정규식이 입력에 따라 지수 시간으로 되돌아가면 `validate`가 끝나지 않고, 푸시 관문(`--force`까지)이 멈춘다. 끝나지 않는 입력은 시간 상한으로 가린다.
@@ -735,6 +786,62 @@ def test_저장소_안을_가리키는_깨진_심볼릭_링크_페이지는_알�
     (root / "projects/team" / ONTOLOGY_DIR / "component/z.md").symlink_to("../term/gone.md")
 
     assert found(onto_cli, root) == []
+
+
+# `ontology.yaml`과 `skipped.yaml`도 지식 저장소가 커밋하는 파일이다. 페이지처럼 저장소 밖(다른 지식 저장소)의 파일을 가리키는 심볼릭 링크이면 읽지 않고
+# `outside-link`로 알린다. 읽으면 다른 저장소의 이름과 설정, 원본 문서의 경로가 이 저장소의 사실이 된다.
+
+
+def test_ontology_yaml이_다른_저장소의_파일을_가리키는_심볼릭_링크이면_읽지_않고_오류로_알린다(onto_cli):
+    root = onto_cli.root({"team": team_repo(), "secret": secret_repo(title=SECRET_TITLE, description="비밀 설명")})
+    link = root / "projects/team" / ONTOLOGY_DIR / "ontology.yaml"
+    link.unlink()
+    link.symlink_to(root / "projects/secret" / ONTOLOGY_DIR / "ontology.yaml")
+
+    result, findings = validate(onto_cli, root)
+
+    assert (ERROR, "team", yaml_file("team"), "outside-link") in [finding[:4] for finding in findings]
+    assert "duplicate-repository-name" not in [finding[3] for finding in findings]  # secret의 name을 이 저장소의 것으로 읽지 않았다
+    assert "심볼릭 링크" in next(finding[4] for finding in findings if finding[3] == "outside-link")
+    assert result.returncode == 1
+    built = onto_cli.run(root, "build")
+    assert built.returncode == 1 and yaml_file("team") in built.stderr
+    assert "비밀 설명" not in built.stdout + built.stderr
+
+
+def test_ontology_yaml이_같은_저장소_안을_가리키는_심볼릭_링크이면_그대로_읽는다(onto_cli):
+    root = onto_cli.root({"team": team_repo()})
+    layer = root / "projects/team" / ONTOLOGY_DIR
+    (layer / "ontology.real.yaml").write_text((layer / "ontology.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+    (layer / "ontology.yaml").unlink()
+    (layer / "ontology.yaml").symlink_to("ontology.real.yaml")
+
+    assert found(onto_cli, root) == []
+
+
+def test_skipped_yaml이_다른_저장소의_파일을_가리키는_심볼릭_링크이면_읽지_않고_오류로_알린다(onto_cli):
+    """읽으면 그 파일에 적힌 원본 문서의 경로가 이 저장소의 `missing-skipped-source` 경고로 드러난다."""
+    root = onto_cli.root({"team": team_repo()})
+    other = root / "other-notes.yaml"  # 지식 저장소 밖
+    other.write_text(f'- path: docs/secret-meeting.md\n  hash: "{"a" * 40}"\n', encoding="utf-8")
+    (root / "projects/team" / ONTOLOGY_DIR / "skipped.yaml").symlink_to(other)
+
+    result, findings = validate(onto_cli, root)
+
+    skipped = f"projects/team/{ONTOLOGY_DIR}/skipped.yaml"
+    assert [finding[:4] for finding in findings] == [(ERROR, "team", skipped, "outside-link")]
+    assert "secret-meeting" not in result.stdout + result.stderr
+    assert result.returncode == 1
+    assert onto_cli.run(root, "build").returncode == 1
+
+
+def test_가리키는_파일이_없는_skipped_yaml_심볼릭_링크도_저장소_밖을_가리키면_오류로_알린다(onto_cli):
+    root = onto_cli.root({"team": team_repo()})
+    (root / "projects/team" / ONTOLOGY_DIR / "skipped.yaml").symlink_to("/Users/me/private-notes/skipped.yaml")
+
+    findings = found(onto_cli, root)
+
+    assert findings == [(ERROR, "team", f"projects/team/{ONTOLOGY_DIR}/skipped.yaml", "outside-link")]
 
 
 # --- 본문에 교차 참조 모양으로 쓴 링크 ---------------------------------------------------------

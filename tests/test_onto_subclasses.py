@@ -288,6 +288,43 @@ def test_순환하는_선언은_순환에_든_클래스와_그_아래의_클래�
     assert "순환" in result.stderr
 
 
+# 거부된 선언(상위 클래스 오류, 순환, `Project`·`Source` 아래)은 선언되지 않은 것으로 다룬다. 그 이름을 쓴 페이지는 어느 클래스도 가리키지 않는 풀리지 않은 클래스를
+# 갖는다. 선언한 클래스의 IRI를 받으면 그래프에 정의가 없는 클래스가 엔티티의 타입이 된다. 루트 규칙이 선언 오류를 경고로 낮췄을 때 `build`가 그 그래프를 만든다.
+REJECTED_USED = {
+    "없는_상위_클래스": {"Invoice": {"subClassOf": "Widget"}},
+    "자기_자신이_상위_클래스": {"Invoice": {"subClassOf": "Invoice"}},
+    "순환": {"Invoice": {"subClassOf": "Loop"}, "Loop": {"subClassOf": "Invoice"}},
+    "Project의_하위_클래스": {"Invoice": {"subClassOf": "Project"}},
+    "Source의_하위_클래스": {"Invoice": {"subClassOf": "Source"}},
+    "거부된_클래스의_하위_클래스": {"Base": {"subClassOf": "Widget"}, "Invoice": {"subClassOf": "Base"}},
+    "순환_아래의_클래스": {"A": {"subClassOf": "B"}, "B": {"subClassOf": "A"}, "Invoice": {"subClassOf": "A"}},
+}
+
+
+@pytest.mark.parametrize("classes", REJECTED_USED.values(), ids=REJECTED_USED.keys())
+def test_거부된_선언의_클래스를_쓴_페이지는_풀리지_않은_클래스를_갖는다(onto_cli, classes):
+    onto_cli.set_root_check("invalid-class-declaration", severity="warning")
+    root = onto_cli.root(billing_with(classes, page("component/inv", "Invoice", title="청구서")))
+
+    built = onto_cli.run(root, "build")
+    typed = onto_cli.query(root, 'SELECT (STR(?c) AS ?class) WHERE { ?e dcterms:title "청구서" ; a ?c }')
+    declared = onto_cli.query(root, "SELECT (STR(?c) AS ?iri) WHERE { ?c a owl:Class ; onto:declaredIn 'billing' }")
+
+    assert built.returncode == 0, built.stderr
+    assert typed and all(c.startswith("https://onto.invalid/unresolved/") for (c,) in typed)
+    assert all(iri != INVOICE for (iri,) in declared)  # 거부된 선언은 그래프에 클래스로 실리지 않는다
+
+
+def test_거부된_선언의_클래스를_쓴_페이지는_허용되지_않는_클래스로_오류_보고된다(onto_cli):
+    root = onto_cli.root(billing_with({"Invoice": {"subClassOf": "Widget"}}, page("component/inv", "Invoice", title="청구서", partOf="project")))
+
+    result = onto_cli.run(root, "validate")
+
+    findings = {tuple(line.split("\t")[:4]) for line in result.stdout.splitlines()}
+    assert ("오류", "billing", file("component/inv"), "disallowed-class") in findings
+    assert ("오류", "billing", f"{BILLING}/ontology.yaml", "invalid-class-declaration") in findings
+
+
 @pytest.mark.parametrize("superclass", ["Component", "Plan", "Policy", "Term", "Decision", "Report"])
 def test_페이지를_갖는_공통_클래스_여섯_개는_모두_상위_클래스가_될_수_있다(onto_cli, superclass):
     root = onto_cli.root(

@@ -1,13 +1,16 @@
 r"""마크다운 본문의 링크: 어떤 대상을 가리키는지 찾고, 그 대상이 지식 저장소 밖의 파일인지 가린다.
 
 링크는 다섯 모양을 찾는다: 인라인 링크와 이미지(`[글](대상)`, `![글](대상)`), 참조 정의(`[이름]: 대상`), 자동 링크(`<file:///…>`),
-HTML 태그의 `href`와 `src`(따옴표가 없어도 된다. 태그 밖의 평문 `src=…`는 링크가 아니다). 링크로 보지 않는 글: 코드 블록(```나 ~~~로 둘러싼 것,
+HTML 태그의 `href`와 `src`(따옴표가 없어도 된다. 태그 밖의 평문 `src=…`는 링크가 아니다. 속성 이름이 `href`·`src`·`xlink:href`인 것만 보므로 `data-src`는 링크가 아니고,
+다른 속성의 따옴표 값 안에 든 `href=…`도 링크가 아니다). 링크로 보지 않는 글: 코드 블록(```나 ~~~로 둘러싼 것,
 목록 안에서 들여쓴 것 포함), 인라인 코드(`…`), HTML 주석(`<!-- … -->`). 인라인 코드와 HTML 주석은 먼저 시작하는 쪽이 이긴다(렌더러가 왼쪽부터
 읽는 것과 같다). 그래서 코드 안의 `<!--`는 주석을 열지 않고, 주석 안의 백틱은 코드를 열지 않는다. 대상은 본문에 적힌 글자 그대로 돌려준다(제목, 꺾쇠는 뗀다).
 
 울타리 코드 블록은 여는 줄(0칸 이상 들여쓴 ```나 ~~~)과 같은 글자로 3개 이상인 닫는 줄 사이다. 닫는 줄은 여는 줄보다 3칸까지만 더 들여쓸 수 있다
 (CommonMark와 같다). 그보다 더 들여쓴 줄은 코드 안의 글이다. 닫는 줄이 없으면 본문 끝까지 코드이지만, 4칸 이상 들여써 연 울타리가 닫히지 않으면
 울타리가 아니라 들여쓴 코드 블록 안의 글로 본다(그 뒤의 링크를 숨기지 않는다).
+
+줄은 `\n`, `\r\n`, `\r`로만 나눈다. U+2028 같은 유니코드 줄 구분 문자 뒤의 ```는 줄 맨 앞이 아니라 울타리를 열지 않는다.
 
 한계: 4칸 들여쓴 코드 블록(울타리 없는 것)은 목록의 이어지는 줄과 구별하기 어려워 코드로 보지 않는다. 그 안의 링크는 링크로 본다.
 닫히지 않은 HTML 주석은 주석으로 보지 않는다(뒤의 링크를 숨기지 않는다).
@@ -28,6 +31,8 @@ import posixpath
 import re
 from urllib.parse import unquote
 
+from .textfile import split_lines
+
 # 울타리는 들여쓴 것도 연다(목록 안의 코드 블록). 백틱 울타리의 같은 줄에 백틱이 또 있으면 울타리가 아니라 인라인 코드다.
 _FENCE_OPEN = re.compile(r"([ \t]*)(`{3,}(?![^\n]*`)|~{3,})")
 _FENCE_CLOSE_EXTRA_INDENT = 3  # 닫는 줄이 여는 줄보다 더 들여쓸 수 있는 칸
@@ -43,7 +48,12 @@ _CODE_OR_COMMENT = re.compile(f"{_INLINE_CODE.pattern}|{_HTML_COMMENT.pattern}",
 _HTML_TAG = re.compile(r"""<[A-Za-z][A-Za-z0-9-]*+(?=[\s/>])(?:=\s*+(?:"[^"]*+"|'[^']*+')|[^<>])*+>""")
 _REFERENCE_DEFINITION = re.compile(r"^ {0,3}\[[^\]\n]+\]:[ \t]*(<[^>\n]*>|\S+)", re.MULTILINE)
 _AUTOLINK = re.compile(r"<([A-Za-z][A-Za-z0-9+.-]*:[^<>\s]*)>")
-_HTML_ATTRIBUTE = re.compile(r"""\b(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=`]+))""", re.IGNORECASE)
+# 태그 안의 속성을 앞에서부터 하나씩 읽는다. 이름은 공백, `/`, `>`, `=` 전까지이고, 값은 `=` 바로 뒤(공백은 건너뛴다)의 따옴표 값이나 공백과 `>` 전까지의 따옴표 없는 값이다.
+# 속성 이름과 값을 따로 읽어야 다른 속성의 따옴표 값 안에 든 `href=`나 `data-src` 같은 이름을 링크로 잡지 않는다. 한 번 읽은 글자는 되돌아가 다시 읽지 않아 입력 길이에 비례한다.
+_HTML_TAG_NAME = re.compile(r"<[A-Za-z][A-Za-z0-9-]*+")
+_HTML_ATTRIBUTE = re.compile(r"""(?P<name>[^\s/>=]++)(?:\s*+=\s*+(?:"(?P<double>[^"]*+)"|'(?P<single>[^']*+)'|(?P<bare>[^\s>]++)))?""")
+# 링크를 담는 속성. `xlink:href`는 SVG의 링크 속성이다.
+_LINK_ATTRIBUTES = frozenset({"href", "src", "xlink:href"})
 _SCHEME = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*):")
 _DRIVE = re.compile(r"[A-Za-z]:[\\/]")
 
@@ -59,9 +69,15 @@ def destinations(body: str) -> list[str]:
     for match in _AUTOLINK.finditer(text):
         found.append((match.start(1), match[1]))
     for tag in _HTML_TAG.finditer(text):
-        for match in _HTML_ATTRIBUTE.finditer(tag[0]):
-            found.append((tag.start() + match.start(), next(group for group in match.groups() if group is not None)))
+        for match in _HTML_ATTRIBUTE.finditer(tag[0], _HTML_TAG_NAME.match(tag[0]).end()):
+            if match["name"].lower() in _LINK_ATTRIBUTES and (value := _attribute_value(match)) is not None:
+                found.append((tag.start() + match.start(), value))
     return list(dict.fromkeys(destination for _, destination in sorted(found) if destination))
+
+
+def _attribute_value(match: re.Match[str]) -> str | None:
+    """`_HTML_ATTRIBUTE`가 읽은 속성의 값. 값이 없는 속성(`<a href>`)은 None이다."""
+    return next((value for value in match.group("double", "single", "bare") if value is not None), None)
 
 
 def _blank(match: re.Match[str]) -> str:
@@ -75,7 +91,7 @@ def _width(indent: str) -> int:
 
 def _without_code_blocks(body: str) -> str:
     """울타리 코드 블록(```, ~~~)의 줄을 뺀다. 닫히지 않으면 끝까지 코드다(4칸 이상 들여써 연 것은 울타리로 보지 않는다)."""
-    lines = body.splitlines()
+    lines = split_lines(body)
     kept: list[str] = []
     unclosed: list[tuple[str, int, int]] = []  # 닫는 줄을 끝내 못 찾은 울타리 `(글자, 길이, 들여쓰기)`. 같거나 더 까다로운 울타리는 찾아볼 것도 없다
     index = 0

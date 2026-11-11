@@ -37,10 +37,10 @@ def run(args: argparse.Namespace) -> int:
             raise OntoError(f"지식 저장소 `{name}`가 없다(있는 것: {', '.join(known) or '없음'})")
         yaml_file = known[name].path / ONTOLOGY_YAML
         where = workspace.display(yaml_file)
+        if not yaml_file.exists():
+            raise OntoError(f"{where}: 온톨로지 층이 없다")
         try:
             data = read_ontology_yaml(yaml_file)
-        except FileNotFoundError as exc:
-            raise OntoError(f"{where}: 온톨로지 층이 없다") from exc
         except OntologyYamlError as exc:
             raise OntoError(f"{where}: {exc}") from exc
         if undefined := undefined_keys_message(data):  # `rule:` 같은 오타가 조용히 기본값으로 읽히지 않게 한다

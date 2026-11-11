@@ -6,6 +6,8 @@
 검사 항목(이름), 설명. 문제가 없으면 아무것도 출력하지 않는다. 오류가 하나라도 있으면 종료 코드 1, 경고만 있으면 0이다.
 """
 
+import os
+
 import pytest
 
 from support.onto_cli import ONTOLOGY_DIR, page, repo, snapshot
@@ -334,6 +336,76 @@ def test_ontology_yaml을_읽을_수_없으면_오류로_보고한다(onto_cli):
 
     assert (ERROR, "billing", yaml_file("billing"), "unreadable-file") in [f[:4] for f in findings]
     assert result.returncode == 1
+
+
+# 읽을 권한이 없거나 사라진 파일은 추적 로그로 죽지 않고 읽을 수 없는 파일로 보고한다. 푸시 관문은 종료 코드 1을 "검사 오류"로 읽으므로 죽음과 구별되어야 한다.
+needs_unprivileged_user = pytest.mark.skipif(os.geteuid() == 0, reason="root는 읽기 권한이 없는 파일도 읽는다")
+
+
+def without_read_permission(path):
+    """`path`의 읽기 권한을 없앤다. 테스트 디렉토리를 치울 수 있게 되돌리는 일은 `restore`가 한다."""
+    path.chmod(0)
+    return lambda: path.chmod(0o644)
+
+
+@needs_unprivileged_user
+def test_읽을_권한이_없는_페이지는_추적_로그_없이_오류로_보고하고_나머지_페이지의_검사를_계속한다(onto_cli):
+    repos = clean_repos()
+    repos["billing"].update(page("component/ledger", "Component", title="원장", partOf="project", owner="kim"))
+    root = onto_cli.root(repos)
+    restore = without_read_permission(root / "projects/billing" / ONTOLOGY_DIR / "plan/launch.md")
+    try:
+        result, findings = validate(onto_cli, root)
+        built = onto_cli.run(root, "build")
+    finally:
+        restore()
+
+    assert "Traceback" not in result.stderr + built.stderr
+    assert (ERROR, "billing", file("plan/launch"), "unreadable-file") in [f[:4] for f in findings]
+    assert (ERROR, "billing", file("component/ledger"), "undefined-key") in [f[:4] for f in findings]
+    assert "읽을 수 없다" in next(f[4] for f in findings if f[3] == "unreadable-file")
+    assert result.returncode == 1
+    assert built.returncode == 1 and file("plan/launch") in built.stderr
+
+
+@needs_unprivileged_user
+def test_읽을_권한이_없는_ontology_yaml은_추적_로그_없이_오류로_보고한다(onto_cli):
+    root = onto_cli.root(clean_repos())
+    restore = without_read_permission(root / "projects/billing" / ONTOLOGY_DIR / "ontology.yaml")
+    try:
+        result, findings = validate(onto_cli, root)
+        built = onto_cli.run(root, "build")
+        rules = onto_cli.run(root, "rules", "billing")
+    finally:
+        restore()
+
+    assert "Traceback" not in result.stderr + built.stderr + rules.stderr
+    assert (ERROR, "billing", yaml_file("billing"), "unreadable-file") in [f[:4] for f in findings]
+    assert result.returncode == 1 and built.returncode == 1
+    assert rules.returncode == 1 and yaml_file("billing") in rules.stderr  # 규칙을 읽는 명령도 같은 이유로 알린다
+
+
+# 줄바꿈은 `\n`, `\r\n`, `\r`뿐이다. 유니코드의 줄 구분 문자는 줄을 나누지 않으므로, 그 문자 뒤에 `---`가 와도 frontmatter의 경계가 아니다.
+LINE_SEPARATORS = {
+    "U+2028": "\u2028",
+    "U+2029": "\u2029",
+    "U+0085": "\x85",
+    "수직_탭": "\x0b",
+    "폼_피드": "\x0c",
+    "파일_구분자": "\x1c",
+    "그룹_구분자": "\x1d",
+    "레코드_구분자": "\x1e",
+}
+
+
+@pytest.mark.parametrize("separator", LINE_SEPARATORS.values(), ids=LINE_SEPARATORS.keys())
+def test_줄바꿈이_아닌_구분_문자로_이어진_펜스는_frontmatter를_열지_못한다(onto_cli, separator):
+    repos = clean_repos()
+    repos["billing"][f"{ONTOLOGY_DIR}/component/split.md"] = f"---{separator}class: Component\ntitle: 나뉜 펜스\n---\n본문\n"
+
+    findings = found(onto_cli, onto_cli.root(repos))
+
+    assert (ERROR, "billing", file("component/split"), "unreadable-file") in findings
 
 
 @pytest.mark.parametrize(

@@ -398,6 +398,35 @@ def test_스킬_사본의_부모_디렉토리에_팀이_무시하는_파일이_�
     assert ".claude/skills/" not in output
 
 
+def test_팀이_claude_아래의_파일을_추적하면_무시되는_파일을_한_번씩만_알리고_개수도_맞춘다(sandbox):
+    """`.claude/settings.json`을 팀이 추적하면 `.claude/`는 한 줄로 접히지 않는다. 같은 파일이 두 번 나오거나 디렉토리와 그 안의 파일이 함께 세어지면 안 된다."""
+    root = sandbox.root()
+    root.register(
+        sandbox.knowledge_remote("billing", files={"README.md": "# billing\n", ".claude/settings.json": "{}\n"})
+    )
+    sub = _sub(root)
+    _ignore(sandbox, sub, ".onto/", ".claude/skills/onto-*/", ".claude/settings.local.json", ".claude/cache/")
+    (sub / ".onto").mkdir()
+    (sub / ".onto" / "Justfile").write_text("# 복사된 기능\n", encoding="utf-8")
+    (sub / ".claude" / "skills" / "onto-ingest").mkdir(parents=True)
+    (sub / ".claude" / "skills" / "onto-ingest" / "SKILL.md").write_text("# 복사된 스킬\n", encoding="utf-8")
+    (sub / ".claude" / "settings.local.json").write_text("{}\n", encoding="utf-8")
+    (sub / ".claude" / "cache").mkdir()
+    for number in range(2):
+        (sub / ".claude" / "cache" / str(number)).write_text("x\n", encoding="utf-8")
+    assert sandbox.git("status", "--porcelain", cwd=sub).stdout == ""
+
+    result = _remove(sandbox, root, "billing")
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, result.stderr
+    assert "무시되는 파일 (3개" in output  # settings.local.json과 cache 안의 파일 둘. 루트 관리 파일은 세지 않는다
+    assert output.count(".claude/settings.local.json") == 1
+    assert output.count(".claude/cache/0") == 1 and output.count(".claude/cache/1") == 1
+    assert ".claude/cache/\n" not in output  # 디렉토리와 그 안의 파일을 함께 알리지 않는다
+    assert "onto-ingest" not in output and ".onto" not in output
+
+
 def test_거부할_때는_이유와_강제_옵션이_있다는_것을_알린다(sandbox):
     root = sandbox.root()
     root.register(sandbox.knowledge_remote("billing"))

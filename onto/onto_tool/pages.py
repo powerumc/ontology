@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from .keys import PAGE_KEYS, SOURCE_KEY
+from .textfile import parse_yaml, read_text, split_lines
 
 FENCE = "---"
 INDEX_FILE = "index.md"  # 페이지에서 생성되는 인덱스. 페이지가 아니다.
@@ -97,21 +98,13 @@ def read_page(path: Path) -> tuple[dict[str, object], str]:
     frontmatter는 `---`로 둘러싼 맨 앞의 YAML을 읽은 키와 값의 목록이고, 비어 있으면 빈 목록이다. 값은 읽은 그대로다(날짜는
     `datetime.date`, 없는 날짜는 `NonexistentDate`). 값의 종류는 `page_values`가 따진다. 본문은 닫는 `---` 다음 줄부터의 글이다(줄바꿈은 `\n`).
     """
-    try:
-        lines = path.read_text(encoding="utf-8-sig").splitlines()
-    except UnicodeDecodeError as exc:
-        raise FrontmatterError("UTF-8 문서가 아니다") from exc
+    lines = split_lines(read_text(path, FrontmatterError))
     if not lines or lines[0].strip() != FENCE:
         raise FrontmatterError(f"첫 줄이 {FENCE}가 아니라 frontmatter가 없다")
     closing = next((i for i in range(1, len(lines)) if lines[i].strip() == FENCE), None)
     if closing is None:
         raise FrontmatterError(f"{FENCE}로 닫히지 않았다")
-    try:
-        meta = yaml.load("\n".join(lines[1:closing]), Loader=_FrontmatterLoader)
-    except yaml.YAMLError as exc:
-        raise FrontmatterError(f"YAML 문법 오류: {_first_line(exc)}") from exc
-    except ValueError as exc:
-        raise FrontmatterError(f"값을 읽을 수 없다: {exc}") from exc
+    meta = parse_yaml("\n".join(lines[1:closing]), FrontmatterError, _FrontmatterLoader)
     body = "\n".join(lines[closing + 1 :])
     if meta is None:
         return {}, body
@@ -150,7 +143,3 @@ def scalar_values(meta: dict[str, object]) -> dict[str, object]:
         converted = [item.isoformat() if isinstance(item, datetime.date) else item for item in items]
         result[str(key)] = converted if isinstance(value, list) else converted[0]
     return result
-
-
-def _first_line(exc: Exception) -> str:
-    return str(exc).strip().splitlines()[0]

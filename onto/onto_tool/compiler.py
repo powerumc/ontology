@@ -15,6 +15,7 @@
 """
 
 import json
+import os
 import re
 from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
@@ -68,6 +69,8 @@ DUPLICATE_REPOSITORY_NAME = "duplicate-repository-name"
 # 페이지 파일이 지식 저장소 밖의 파일을 가리키는 심볼릭 링크다. 읽지 않는다. 페이지 본문의 링크가 저장소 밖을 가리키는 문제와 같은 항목이다.
 # 다른 저장소의 페이지를 링크로 가져오면 그 제목이 이 저장소의 그래프와 커밋되는 인덱스에 실리고 링크가 다른 저장소의 경로를 담는다. 루트 전용이다.
 OUTSIDE_LINK = "outside-link"
+# 설정 파일(`ontology.yaml`, `skipped.yaml`)이 저장소 밖의 파일을 가리키는 심볼릭 링크일 때의 설명. 읽지 않는다.
+_LINK_OUTSIDE = "{}이 지식 저장소 밖의 파일을 가리키는 심볼릭 링크라 읽지 않는다. 다른 저장소의 설정과 원본 문서는 가져오지 않는다. 다른 저장소의 지식은 교차 참조로 가리킨다"
 
 
 @dataclass(frozen=True)
@@ -289,6 +292,11 @@ def _read_repository(
     """지식 저장소 하나를 JSON-LD 객체로 읽는다. 읽을 수 없는 파일은 모아 두고 나머지를 계속 읽는다."""
     read = _RepositoryRead(_record(workspace, repository, has_layer=True))
     yaml_file = read.record.yaml_file
+    repository_root = repository.path.resolve()
+    if not _inside(repository.path / ONTOLOGY_YAML, repository_root):
+        # 읽으면 다른 지식 저장소의 이름과 설정이 이 저장소의 것이 된다. 페이지 파일과 같다.
+        read.problems.append(Problem(yaml_file, _LINK_OUTSIDE.format("ontology.yaml"), OUTSIDE_LINK))
+        return read
     try:
         data = read_ontology_yaml(repository.path / ONTOLOGY_YAML)
     except OntologyYamlError as exc:
@@ -319,7 +327,6 @@ def _read_repository(
 
     read.record.misnamed_pages = [workspace.relative(path) for path in find_misnamed_pages(repository.ontology_dir)]
     _read_index(repository, read.record)
-    repository_root = repository.path.resolve()
     for path in find_dangling_page_links(repository.ontology_dir):
         # 가리키는 파일이 없어 읽을 것은 없지만, 링크 파일이 담은 대상(다른 저장소의 이름, 절대 경로)은 지식 저장소를 단독으로 열어도 남는다.
         if not _inside(path, repository_root):
@@ -378,12 +385,16 @@ def _read_repository(
         except FrontmatterError as exc:
             read.problems.append(Problem(file, f"frontmatter를 읽을 수 없다: {exc}", _kind(exc)))
 
-    try:
-        skipped = load_skipped(repository.path / SKIPPED_YAML)
-        read.problems += _outside_sources(read.record.skipped_file, "넘긴 문서의 목록", skipped)
-        read.record.skipped = parse_skipped(skipped)
-    except FrontmatterError as exc:
-        read.problems.append(Problem(read.record.skipped_file, f"넘긴 문서의 목록을 읽을 수 없다: {exc}", _kind(exc)))
+    skipped_path = repository.path / SKIPPED_YAML
+    if os.path.lexists(skipped_path) and not _inside(skipped_path, repository_root):
+        read.problems.append(Problem(read.record.skipped_file, _LINK_OUTSIDE.format("넘긴 문서의 목록(skipped.yaml)"), OUTSIDE_LINK))
+    else:
+        try:
+            skipped = load_skipped(skipped_path)
+            read.problems += _outside_sources(read.record.skipped_file, "넘긴 문서의 목록", skipped)
+            read.record.skipped = parse_skipped(skipped)
+        except FrontmatterError as exc:
+            read.problems.append(Problem(read.record.skipped_file, f"넘긴 문서의 목록을 읽을 수 없다: {exc}", _kind(exc)))
     referenced = {entry.path for page in read.record.pages for entry in page.sources} | {entry.path for entry in read.record.skipped}
     read.record.document_hashes, notice = document_hashes(repository.path, referenced)
     if notice:
@@ -486,7 +497,8 @@ def _declare_classes(
     """`ontology.yaml`의 `classes`를 클래스 선언의 JSON-LD 객체로 바꾼다. 선언된 클래스 이름의 집합도 돌려준다.
 
     선언 하나는 `{이름: {subClassOf: 상위 클래스 이름}}`이다. 상위 클래스는 공통 어휘의 클래스이거나 같은 `classes`에 선언한
-    클래스다. 틀린 선언은 `problems`에 모으고 그 클래스를 선언하지 않은 것으로 하며, 나머지 선언은 계속 읽는다.
+    클래스다. 틀린 선언은 `problems`에 모으고 그 클래스를 선언하지 않은 것으로 하며, 나머지 선언은 계속 읽는다. 틀린 선언 아래의 선언도 선언하지 않은
+    것이다. 돌려주는 이름의 집합에는 그래프에 실은 선언만 든다. 그렇지 않으면 페이지가 그래프에 정의가 없는 클래스를 가리키게 된다.
     """
     result = _Declarations()
 
@@ -524,6 +536,7 @@ def _declare_classes(
             superclasses[name] = declaration["subClassOf"].strip()
 
     declared = set(superclasses)
+    accepted: set[str] = set()  # 선언으로 받아들인 클래스. 거부된 선언과 그 아래의 선언은 들지 않는다
     for name, superclass in superclasses.items():
         where = f"`{CLASSES_KEY}.{name}`"
         if superclass not in declared and superclass not in common_classes:
@@ -551,7 +564,8 @@ def _declare_classes(
                 "onto:declaredIn": repository,
             }
         )
-    return result, declared
+        accepted.add(name)
+    return result, accepted
 
 
 def _root(name: str, superclasses: dict[str, str], common_classes: dict[str, URIRef]) -> tuple[str | None, bool]:
