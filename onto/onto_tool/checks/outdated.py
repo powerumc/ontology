@@ -33,7 +33,7 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
         if not managed.is_repository(repo):
             continue
         if drift := managed.drift(repo, sources):
-            yield Issue(OUTDATED_MANAGED_FILES, f"{record.path}/{managed.MANAGED_DIR}", _message(record, repo, drift, root_version))
+            yield Issue(OUTDATED_MANAGED_FILES, record.under(managed.MANAGED_DIR), _message(record, repo, drift, root_version))
 
 
 def _message(record: RepositoryRecord, repo: Path, drift: managed.Drift, root_version: str | None) -> str:

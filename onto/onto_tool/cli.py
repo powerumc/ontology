@@ -6,6 +6,7 @@ import sys
 
 from .commands import build, query, rules, status, sync, validate
 from .errors import OntoError
+from .workspace import Within
 
 # 새 명령은 모듈을 만들어 여기에 더한다(규약은 commands/__init__.py).
 COMMANDS = (build, query, rules, status, sync, validate)
@@ -13,6 +14,17 @@ COMMANDS = (build, query, rules, status, sync, validate)
 
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="onto", description="모듈형 온톨로지 도구")
+    parser.add_argument(
+        "--within",
+        type=Within,
+        choices=list(Within),
+        default=Within.ROOT,
+        help=(
+            "어디 안에서 도는가. root(기본)는 루트 저장소에서 `projects/` 아래 모든 지식 저장소를 합쳐 다루고, "
+            "repository는 지식 저장소 안에서 그 저장소만 다룬다. 복사된 Justfile이 어느 쪽으로 불렸는지 가려 넘긴다. "
+            "도구가 있는 곳(루트의 onto/인지 지식 저장소의 .onto/인지)과 맞지 않으면 거부한다. 지식 저장소의 공유 범위(scope)와 무관하다. 명령 앞에 쓴다"
+        ),
+    )
     subcommands = parser.add_subparsers(dest="command", required=True, metavar="명령")
     for command in COMMANDS:
         subparser = subcommands.add_parser(command.NAME, help=command.HELP, description=command.HELP)

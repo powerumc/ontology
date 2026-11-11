@@ -53,7 +53,7 @@ def collect(workspace: Workspace, compiled: Compiled, rules: RuleSet) -> tuple[l
         if record.has_layer and record.name is not None and record.directory not in rules.problems:
             found, notice = _repository_entries(workspace.root / record.path, record, rules.of(record.directory).sources)
             entries.extend(found)
-            if notice and (message := f"{record.path}: {notice}") not in compiled.notices:  # 컴파일이 이미 알린 것은 빼고
+            if notice and (message := f"{record.label}: {notice}") not in compiled.notices:  # 컴파일이 이미 알린 것은 빼고
                 notices.append(message)
     return sorted(entries, key=lambda entry: (entry.repository, _ORDER.index(entry.state), entry.path)), notices
 

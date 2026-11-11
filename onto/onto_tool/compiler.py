@@ -3,8 +3,10 @@
 페이지의 frontmatter를 JSON-LD context(`vocab/context.jsonld`)로 RDF에 대응시킨다.
 같은 입력에서는 같은 그래프가 나온다. 파일을 이름 순으로 읽고, 트리플을 정렬해 싣는다.
 
-여러 지식 저장소가 하나의 그래프로 합쳐진다. 관계의 값은 같은 저장소의 식별자이거나, 다른 저장소의 엔티티를 가리키는
-교차 참조(`<저장소 이름>:<식별자>`)이고, 가리키는 엔티티가 있는지는 따지지 않는다. 모든 엔티티에는 온 지식 저장소의 이름을
+루트 저장소에서는 여러 지식 저장소가 하나의 그래프로 합쳐진다. 지식 저장소 안에서는 그 저장소 하나만 컴파일하고(`workspace.Within`),
+보고하는 파일 경로도 그 저장소 기준이다. 루트 저장소나 다른 지식 저장소는 읽지 않는다.
+관계의 값은 같은 저장소의 식별자이거나, 다른 저장소의 엔티티를 가리키는 교차 참조(`<저장소 이름>:<식별자>`)이고,
+가리키는 엔티티가 있는지는 따지지 않는다. 모든 엔티티에는 온 지식 저장소의 이름을
 `onto:repository`로 적는다. 저장소는 `ontology.yaml`의 `classes`로 자기 하위 클래스를 선언할 수 있다.
 페이지의 `derivedFrom`은 항목(원본 문서의 경로와 해시)마다 `Source` 엔티티가 되어 페이지가 `onto:derivedFrom`으로 가리킨다.
 `Source`는 페이지가 없어 `onto:repository`를 적지 않고, 구조 제약의 대상 엔티티가 아니다. 파일은 `Compiled.source_files`가 알려 준다.
@@ -38,7 +40,7 @@ from .pages import (
     scalar_values,
 )
 from .sources import SourceEntry, document_hashes, parse_entries, read_skipped
-from .workspace import ONTOLOGY_DIR, ONTOLOGY_YAML, SKIPPED_YAML, Repository, Workspace
+from .workspace import ONTOLOGY_DIR, ONTOLOGY_YAML, PROJECTS_DIR, SKIPPED_YAML, Repository, Within, Workspace
 
 PROJECT_IDENTIFIER = "project"
 # 지식 저장소가 선언하는 클래스의 이름. 공통 어휘의 클래스 이름처럼 영어로 쓰고 대문자로 시작한다.
@@ -100,12 +102,15 @@ class PageRecord:
 
 @dataclass
 class RepositoryRecord:
-    """`projects/` 아래에서 찾은 지식 저장소 후보 하나. 컴파일이 무엇을 읽었는지 스크립트 검사가 되짚는 데 쓴다."""
+    """다루는 지식 저장소 후보 하나(루트 저장소에서는 `projects/` 아래의 것). 컴파일이 무엇을 읽었는지 스크립트 검사가 되짚는 데 쓴다.
+
+    경로는 작업 공간 기준이다. 루트 저장소에서는 루트 기준(`projects/billing/…`), 지식 저장소 안에서는 그 저장소 기준(`docs/…`)이다.
+    """
 
     directory: str  # 서브모듈 디렉토리 이름
-    path: str  # 루트 저장소 기준 디렉토리 경로
-    yaml_file: str  # 루트 저장소 기준 `ontology.yaml` 경로
-    index_file: str  # 루트 저장소 기준 인덱스(`index.md`)의 경로. 파일이 없어도 있어야 할 자리다
+    path: str  # 작업 공간 기준 디렉토리 경로. 지식 저장소 안에서는 저장소 자신이라 `.`이다
+    yaml_file: str  # 작업 공간 기준 `ontology.yaml` 경로
+    index_file: str  # 작업 공간 기준 인덱스(`index.md`)의 경로. 파일이 없어도 있어야 할 자리다
     has_layer: bool  # `ontology.yaml`이 있다. 없으면 컴파일이 건너뛴다
     name: str | None = None  # `ontology.yaml`의 `name`. 파일이 없거나 읽을 수 없으면 알 수 없다
     rules: object = None  # `ontology.yaml`의 `rules` 값 그대로. 규칙을 읽고 검증하는 것은 스크립트 검사의 몫이다. 없으면 None
@@ -123,23 +128,44 @@ class RepositoryRecord:
 
     @property
     def skipped_file(self) -> str:
-        """루트 저장소 기준 넘긴 문서의 목록(`skipped.yaml`)의 경로. 파일이 없어도 있어야 할 자리다."""
-        return f"{self.path}/{SKIPPED_YAML.as_posix()}"
+        """작업 공간 기준 넘긴 문서의 목록(`skipped.yaml`)의 경로. 파일이 없어도 있어야 할 자리다."""
+        return self.under(SKIPPED_YAML.as_posix())
+
+    @property
+    def label(self) -> str:
+        """메시지 머리에 둘 이름. 루트 저장소에서는 루트 기준 디렉토리 경로이고, 지식 저장소 안에서는 저장소 이름이다."""
+        return self.directory if self.path == "." else self.path
+
+    def under(self, relative: str) -> str:
+        """이 지식 저장소 안의 경로 `relative`를 작업 공간 기준 경로로 바꾼다."""
+        return relative if self.path == "." else f"{self.path}/{relative}"
 
 
 @dataclass
 class Compiled:
     graph: Graph  # 읽을 수 있었던 파일의 사실만 담는다. 추론은 하지 않은, 적힌 그대로의 사실이다.
-    files: dict[str, str]  # 엔티티 IRI -> 루트 저장소 기준 파일 경로. 질의 결과에서 엔티티를 파일로 보여 준다.
+    files: dict[str, str]  # 엔티티 IRI -> 작업 공간 기준 파일 경로. 질의 결과에서 엔티티를 파일로 보여 준다.
     repositories: list[str]  # 컴파일한 지식 저장소의 이름
     warnings: list[str]
     problems: list[Problem] = field(default_factory=list)  # 읽을 수 없는 파일과 이유
     records: list[RepositoryRecord] = field(default_factory=list)  # 지식 저장소 후보마다 하나. 디렉토리 이름 순
-    # `Source` 엔티티 IRI -> 루트 저장소 기준 원본 문서의 경로. 질의 결과에서 `Source`를 원본 문서의 파일로 보여 준다.
+    # `Source` 엔티티 IRI -> 작업 공간 기준 원본 문서의 경로. 질의 결과에서 `Source`를 원본 문서의 파일로 보여 준다.
     # `files`에 섞지 않는다: `files`의 키는 페이지가 있는 엔티티(`onto:repository`를 가진 것)이고 검사가 그렇게 읽는다.
     source_files: dict[str, str] = field(default_factory=dict)
     notices: list[str] = field(default_factory=list)  # 알릴 것(원본 문서의 해시를 git으로 내지 못했다). 검사 항목이 따로 보고하지 않는다
+    within: Within = Within.ROOT  # 어디 안에서 컴파일했는지(루트 저장소 또는 지식 저장소 안). 공유 범위와 무관하다
     root: Path | None = None  # 컴파일한 작업 공간의 루트. 레코드의 `path`가 이 위치 기준이다. 파일을 직접 읽어야 하는 검사 항목이 쓴다
+
+    def repository_of(self, file: str) -> str:
+        """`file`(작업 공간 기준 경로)이 속한 지식 저장소의 이름(서브모듈 디렉토리 이름). 어느 저장소의 것도 아니면 빈 글자다.
+
+        루트 저장소에서는 `projects/<지식 저장소>/…`의 가운데 조각이다. 지식 저장소 안에서는 경로가 저장소 기준이라 접두어가 없고,
+        모든 파일이 그 저장소의 것이다.
+        """
+        if self.within is Within.REPOSITORY:
+            return self.records[0].directory
+        parts = file.split("/")
+        return parts[1] if len(parts) > 1 and parts[0] == PROJECTS_DIR else ""
 
 
 @dataclass
@@ -153,7 +179,10 @@ class _RepositoryRead:
 
 
 def compile_workspace(workspace: Workspace) -> Compiled:
-    """루트 저장소의 `projects/` 아래 지식 저장소를 모두 컴파일한다. 읽을 수 없는 파일은 `problems`에 모은다."""
+    """작업 공간의 지식 저장소를 모두 컴파일한다(루트 저장소에서는 `projects/` 아래 전부, 지식 저장소 안에서는 그 저장소 하나).
+
+    읽을 수 없는 파일은 `problems`에 모은다.
+    """
     context = vocab.load_context()
     raw = Graph(bind_namespaces="none")
     vocab.load_vocab(raw)
@@ -170,10 +199,9 @@ def compile_workspace(workspace: Workspace) -> Compiled:
 
     for repository in workspace.repositories():
         if not (repository.path / ONTOLOGY_YAML).is_file():
-            warnings.append(
-                f"{workspace.relative(repository.path)}: 온톨로지 층({ONTOLOGY_YAML.as_posix()})이 없어 건너뛰었다"
-            )
-            records.append(_record(workspace, repository, has_layer=False))
+            record = _record(workspace, repository, has_layer=False)
+            warnings.append(f"{record.label}: 온톨로지 층({ONTOLOGY_YAML.as_posix()})이 없어 건너뛰었다")
+            records.append(record)
             continue
         read = _read_repository(workspace, repository, context, common_classes)
         records.append(read.record)
@@ -196,7 +224,7 @@ def compile_workspace(workspace: Workspace) -> Compiled:
 
     problems += duplicates
     raw.parse(data=json.dumps({"@context": context, "@graph": nodes}), format="json-ld", base=UNRESOLVED_BASE)
-    return Compiled(canonical(raw), files, names, warnings, problems, records, source_files, notices, root=workspace.root)
+    return Compiled(canonical(raw), files, names, warnings, problems, records, source_files, notices, workspace.within, workspace.root)
 
 
 def _duplicate_names(records: list[RepositoryRecord]) -> list[Problem]:
@@ -344,7 +372,7 @@ def _read_repository(
     referenced = {entry.path for page in read.record.pages for entry in page.sources} | {entry.path for entry in read.record.skipped}
     read.record.document_hashes, notice = document_hashes(repository.path, referenced)
     if notice:
-        read.notices.append(f"{read.record.path}: {notice}")
+        read.notices.append(f"{read.record.label}: {notice}")
     return read
 
 
@@ -360,7 +388,7 @@ def _source(read: _RepositoryRead, repository: str, entry: SourceEntry) -> str:
     """원본 문서의 기록 하나를 `Source` 엔티티로 싣고 그 IRI를 돌려준다. 같은 경로와 해시는 하나로 합쳐진다."""
     iri = source_iri(repository, entry.path, entry.hash)
     if iri not in read.source_files:
-        read.source_files[iri] = f"{read.record.path}/{entry.path}"
+        read.source_files[iri] = read.record.under(entry.path)
         read.nodes.append({"@id": iri, "class": "Source", "onto:sourcePath": entry.path, "onto:sourceHash": entry.hash})
     return iri
 

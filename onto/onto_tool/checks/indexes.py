@@ -22,16 +22,16 @@ from .. import index
 from ..compiler import Compiled
 from ..rules import RuleSet
 from .catalog import INDEX_MISMATCH
-from .model import Issue, repository_of
+from .model import Issue
 
 _SHOWN = 3  # 설명에 보여 주는 어긋난 줄의 수(한쪽당)
 
 
 def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     unreadable = {
-        repository_of(problem.file)
+        compiled.repository_of(problem.file)
         for problem in compiled.problems
-        if rules.of(repository_of(problem.file)).checks[problem.check].stops_build
+        if rules.of(compiled.repository_of(problem.file)).checks[problem.check].stops_build
     }
     expected = {content.index_file: index.render(content) for content in index.collect(compiled)}
     for record in compiled.records:
