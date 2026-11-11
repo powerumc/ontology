@@ -306,10 +306,11 @@ class KnowledgeRemote:
         """원격의 기본 브랜치(HEAD가 가리키는 브랜치)를 바꾼다. 그 브랜치는 이미 있어야 한다."""
         self._sandbox.git("symbolic-ref", "HEAD", f"refs/heads/{branch}", cwd=self.url)
 
-    def commit(self, *, branch: str = "main") -> str:
+    def commit(self, *, branch: str = "main", files: dict[str, str] | None = None) -> str:
         """`branch`에 커밋 하나를 쌓아 원격에 푸시하고 그 해시를 돌려준다.
 
-        브랜치가 없으면 `main`의 끝에서 만든다.
+        브랜치가 없으면 `main`의 끝에서 만든다. `files`(경로: 내용)를 주면 그 파일을 쓰거나 고친다.
+        주지 않으면 매번 새 메모 파일(`docs/note-<n>.md`)을 더한다.
         """
         git = self._sandbox.git
         known = git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", cwd=self.seed, check=False)
@@ -318,7 +319,8 @@ class KnowledgeRemote:
         else:
             git("checkout", "-b", branch, "main", cwd=self.seed)
         self._n += 1
-        _write(self.seed / "docs" / f"note-{self._n}.md", f"# 메모 {self._n}\n")
+        for rel, text in (files or {f"docs/note-{self._n}.md": f"# 메모 {self._n}\n"}).items():
+            _write(self.seed / rel, text)
         git("add", "-A", cwd=self.seed)
         git("commit", "-m", f"note {self._n} on {branch}", cwd=self.seed)
         git("push", "origin", branch, cwd=self.seed)
@@ -395,12 +397,28 @@ class RootRepo:
         theirs = git("show", ":3:.gitmodules", cwd=self.work).stdout
         (self.work / ".gitmodules").write_text(ours + theirs, encoding="utf-8")
 
+    def commit(self, files: dict[str, str]) -> str:
+        """소유자의 작업 사본에서 `files`(경로: 내용)를 쓰거나 고친 커밋 하나를 쌓아 `main`을 푸시하고 그 해시를 돌려준다."""
+        git = self._sandbox.git
+        for rel, text in files.items():
+            _write(self.work / rel, text)
+        git("add", "-A", cwd=self.work)
+        git("commit", "-m", f"edit {', '.join(files)}", cwd=self.work)
+        git("push", "origin", "main", cwd=self.work)
+        return self._sandbox.head(self.work)
+
     def clone(self) -> Path:
         """원격에서 새로 클론한다. 서브모듈은 초기화하지 않는다. 새 기기에서 받은 직후의 상태다."""
         self._clones += 1
         dest = self._sandbox.base / "clones" / f"{self._name}-{self._clones}"
         dest.parent.mkdir(exist_ok=True)
         self._sandbox.git("clone", self.origin, dest, cwd=dest.parent)
+        return dest
+
+    def set_up_clone(self) -> Path:
+        """원격에서 새로 클론하고 `just setup`까지 돌린다. 서브모듈이 추적 브랜치에 체크아웃된, 쓸 수 있는 작업 사본이다."""
+        dest = self.clone()
+        self._sandbox.just("setup", cwd=dest, check=True)
         return dest
 
 
