@@ -20,6 +20,8 @@ default:
 setup:
     #!/usr/bin/env sh
     set -eu
+    # 서브모듈 순회(knowledge_repos), 추적 브랜치(tracking_branch), 기록한 커밋(indexed_commit)은 git 모듈과 같은 함수를 쓴다.
+    . "{{source_directory()}}/git/lib.sh"
 
     # --- 도구 확인 ---
     missing=""
@@ -38,13 +40,8 @@ setup:
         name=$1
         path=$2
 
-        # 루트가 기록한 커밋. 인덱스의 gitlink 항목은 "160000 <해시> 0<탭><경로>"이다.
-        set -- $(git ls-files --stage -- "$path")
-        if [ "${1:-}" != "160000" ]; then
-            echo "주의: $path: .gitmodules에는 있지만 루트에 기록된 커밋이 없어 건너뛰었다" >&2
-            return 0
-        fi
-        recorded=$2
+        # 루트가 기록한 커밋. `knowledge_repos`가 기록이 있는 항목만 주므로 있다. 스테이징만 한 등록(`just repo add`)의 것도 인덱스에서 읽는다.
+        recorded=$(indexed_commit "$path") || return 1
 
         if [ ! -e "$path/.git" ]; then
             git submodule update --init -- "$path" || return 1
@@ -62,11 +59,7 @@ setup:
         fi
 
         # 추적 브랜치: .gitmodules에 기록된 것, 없으면 원격의 기본 브랜치.
-        branch=$(git config -f .gitmodules --get "submodule.$name.branch" || true)
-        if [ -z "$branch" ]; then
-            branch=$(git -C "$path" symbolic-ref --quiet --short refs/remotes/origin/HEAD || true)
-            branch=${branch#origin/}
-        fi
+        branch=$(tracking_branch "$name" "$path" || true)
         if [ -z "$branch" ]; then
             echo "주의: $path: 추적 브랜치를 알 수 없어 detached HEAD로 두었다" >&2
             return 0
@@ -94,41 +87,31 @@ setup:
 
     failed=""
     knowledge=""
-    nl=$(printf '\nx')
-    nl=${nl%x}
-    if [ -f .gitmodules ]; then
-        # 종료 코드 1은 항목이 없다는 뜻이고, 그 밖은 .gitmodules를 읽지 못한 것이다(예: 충돌 표시가 남은 경우).
-        status=0
-        keys=$(git config -f .gitmodules --name-only --get-regexp '^submodule\..*\.path$') || status=$?
-        if [ "$status" -gt 1 ]; then
-            echo "오류: .gitmodules를 읽지 못했다" >&2
-            exit 1
-        fi
-        # 이름에 공백이 있어도 쪼개지지 않도록 줄 단위로 읽는다. 서브모듈 안의 명령(ssh 등)이
-        # 반복문의 입력을 먹지 않도록 setup_submodule에는 빈 입력을 준다.
-        while IFS= read -r key; do
-            [ -n "$key" ] || continue
-            name=${key#submodule.}
-            name=${name%.path}
-            path=$(git config -f .gitmodules --get "$key")
-            if ! setup_submodule "$name" "$path" </dev/null; then
-                echo "오류: $path: 서브모듈을 설정하지 못했다" >&2
-                failed="$failed $path"
-            else
-                # 최신화할 지식 저장소: `projects/<이름>/`에 초기화되어 있고 온톨로지 층이 있다. 줄바꿈으로 구분해 이름에 공백이 있어도 쪼개지지 않게 한다.
-                case $path in
-                    projects/.*|projects/*/*) ;;
-                    projects/*)
-                        if [ -e "$path/.git" ] && [ -f "$path/docs/ontology/ontology.yaml" ]; then
-                            knowledge="$knowledge${path#projects/}$nl"
-                        fi
-                        ;;
-                esac
-            fi
-        done <<EOF
-    $keys
-    EOF
+    # 등록된 서브모듈을 한 줄에 `<경로><탭><서브모듈 이름>`으로 받는다. 이름에 공백이 있어도 쪼개지지 않는다. .gitmodules를 읽지 못하면
+    # `knowledge_repos`가 이유를 알리고, 루트가 기록한 커밋이 없는 항목은 알린 뒤 건너뛴다. 서브모듈 안의 명령(ssh 등)이 반복문의 입력을
+    # 먹지 않도록 setup_submodule에는 빈 입력을 준다.
+    if ! repos=$(knowledge_repos </dev/null); then
+        exit 1
     fi
+    while IFS="$TAB" read -r path name; do
+        [ -n "$path" ] || continue
+        if ! setup_submodule "$name" "$path" </dev/null; then
+            echo "오류: $path: 서브모듈을 설정하지 못했다" >&2
+            failed="$failed $path"
+        else
+            # 최신화할 지식 저장소: `projects/<이름>/`에 초기화되어 있고 온톨로지 층이 있다. 줄바꿈으로 구분해 이름에 공백이 있어도 쪼개지지 않게 한다.
+            case $path in
+                projects/.*|projects/*/*) ;;
+                projects/*)
+                    if [ -e "$path/.git" ] && [ -f "$path/docs/ontology/ontology.yaml" ]; then
+                        knowledge="$knowledge${path#projects/}$NL"
+                    fi
+                    ;;
+            esac
+        fi
+    done <<EOF
+    $repos
+    EOF
 
     # --- 복사된 기능의 최신화 ---
     # 서브모듈 설정이 일부 실패했어도 설정된 저장소는 최신화한다. 최신화가 실패해도 위의 결과는 그대로이고, 실패한 저장소는 끝에 알린다.

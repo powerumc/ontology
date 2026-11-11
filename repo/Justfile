@@ -21,6 +21,8 @@ default:
 add url name='' branch='':
     #!/usr/bin/env sh
     set -eu
+    # `.gitmodules`에서 서브모듈 이름을 찾는 함수(gitmodules_name_of)는 git 모듈과 같은 파일에 있다.
+    . "{{source_directory()}}/../git/lib.sh"
 
     die() {
         echo "오류: $*" >&2
@@ -71,20 +73,6 @@ add url name='' branch='':
         u=${u%/}
         u=${u%.git}
         printf '%s\n' "${u%/}"
-    }
-
-    # .gitmodules(두 번째 인자로 다른 파일을 줄 수 있다)에서 경로가 $1인 항목의 서브모듈 이름을 찾는다. 없으면 아무것도 출력하지 않는다.
-    gitmodules_name_of() {
-        file=${2:-.gitmodules}
-        [ -f "$file" ] || return 0
-        git config -f "$file" --name-only --get-regexp '^submodule\..*\.path$' |
-            while IFS= read -r key; do
-                if [ "$(git config -f "$file" --get "$key")" = "$1" ]; then
-                    sub=${key#submodule.}
-                    printf '%s\n' "${sub%.path}"
-                    break
-                fi
-            done
     }
 
     url=$1
@@ -208,6 +196,8 @@ add url name='' branch='':
 remove *args:
     #!/usr/bin/env sh
     set -eu
+    # `.gitmodules`에서 서브모듈 이름을 찾는 함수(gitmodules_name_of)는 git 모듈과 같은 파일에 있다.
+    . "{{source_directory()}}/../git/lib.sh"
 
     die() {
         echo "오류: $*" >&2
@@ -235,20 +225,6 @@ remove *args:
     if [ -n "$(git --literal-pathspecs ls-files --unmerged -- .gitmodules "$path")" ]; then
         die ".gitmodules나 $path 가 병합 충돌 상태입니다. 충돌을 먼저 해결하세요(해결한 파일을 git add). 아무것도 바꾸지 않았습니다."
     fi
-
-    # .gitmodules(두 번째 인자로 다른 파일을 줄 수 있다)에서 경로가 $1인 항목의 서브모듈 이름을 찾는다. 없으면 아무것도 출력하지 않는다.
-    gitmodules_name_of() {
-        file=${2:-.gitmodules}
-        [ -f "$file" ] || return 0
-        git config -f "$file" --name-only --get-regexp '^submodule\..*\.path$' |
-            while IFS= read -r key; do
-                if [ "$(git config -f "$file" --get "$key")" = "$1" ]; then
-                    sub=${key#submodule.}
-                    printf '%s\n' "${sub%.path}"
-                    break
-                fi
-            done
-    }
 
     # --- 등록된 지식 저장소인지: 루트가 기록한 커밋(gitlink)이나 .gitmodules 항목이 있어야 한다 ---
     # 등록되지 않은 디렉토리는 이름이 같아도 지우지 않는다.

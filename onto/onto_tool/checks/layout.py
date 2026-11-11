@@ -16,7 +16,6 @@ from ..iri import entity_iri
 from ..keys import PAGE_CLASS_DIRECTORIES
 from ..rules import SEVERITIES, RuleSet
 from .catalog import INVALID_IDENTIFIER, MISNAMED_PAGE, MISPLACED_PAGE
-from ..classes import ClassIndex
 from ..labels import class_label
 from .model import Issue
 
@@ -24,7 +23,7 @@ from .model import Issue
 def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     namespace = vocab.onto_namespace(compiled.graph)
     directory_of = {URIRef(namespace + name): directory for name, directory in PAGE_CLASS_DIRECTORIES.items()}
-    classes = ClassIndex(compiled.graph)
+    classes = compiled.class_index
     for record in compiled.records:
         repository_rules = rules.of(record.directory)
         identifier_form = re.compile(repository_rules.language.identifier_pattern)

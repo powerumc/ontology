@@ -15,7 +15,6 @@ from rdflib.namespace import RDF, SH, XSD
 from .. import vocab
 from ..compiler import Compiled
 from ..rules import RuleSet
-from ..classes import ClassIndex
 from ..labels import class_label, entity_label
 from .catalog import BY_NAME, INVALID_ONTOLOGY_YAML, INVALID_VALUE, MISSING_PROPERTY, RELATION_DOMAIN, RELATION_RANGE
 from .model import Issue
@@ -35,7 +34,7 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     _, report, _ = validate(compiled.graph, shacl_graph=shapes, inference="none")
     keys = vocab.property_keys(vocab.load_context())
     check_predicate = URIRef(vocab.onto_namespace(shapes) + "check")
-    classes = ClassIndex(compiled.graph)
+    classes = compiled.class_index
     # `Project` 엔티티의 파일. 규칙을 담은 파일의 문제는 저장소가 규칙으로 묻지 못하도록 `invalid-ontology-yaml`로 보고한다.
     ontology_yaml_files = {record.yaml_file for record in compiled.records}
 

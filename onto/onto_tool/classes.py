@@ -13,11 +13,18 @@ from .keys import PAGE_CLASS_DIRECTORIES
 
 
 class ClassIndex:
+    """컴파일한 그래프의 클래스를 공통 어휘의 클래스로 환원한다. 컴파일된 그래프마다 하나를 만들어 함께 쓴다(`Compiled.class_index`).
+
+    그래프는 컴파일이 끝난 뒤 바뀌지 않으므로, 클래스마다 환원한 결과를 한 번만 계산해 둔다. 엔티티가 수천 개여도 클래스는 수십 개라, 엔티티마다
+    상위 클래스를 다시 따라가지 않는다.
+    """
+
     def __init__(self, graph: Graph) -> None:
         self._graph = graph
         namespace = vocab.onto_namespace(graph)
         self._common = set(vocab.common_classes(graph).values())
         self._allowed = {URIRef(namespace + name) for name in (*PAGE_CLASS_DIRECTORIES, "Project")}
+        self._roots_of_class: dict[object, frozenset[URIRef]] = {}
 
     def roots(self, entity: object) -> set[URIRef]:
         """엔티티의 적힌 클래스마다, 상위 클래스를 따라가 닿는 공통 어휘의 클래스.
@@ -26,9 +33,15 @@ class ClassIndex:
         """
         result: set[URIRef] = set()
         for cls in self._graph.objects(entity, RDF.type):
-            reached = set(self._graph.transitive_objects(cls, RDFS.subClassOf))  # cls 자신을 포함한다
-            result |= (reached & self._common) or {cls}
+            result |= self._reduced(cls)
         return result
+
+    def _reduced(self, cls: object) -> frozenset[URIRef]:
+        """클래스 `cls`가 상위 클래스를 따라가 닿는 공통 어휘의 클래스. 없으면 `cls` 자신이다."""
+        if cls not in self._roots_of_class:
+            reached = set(self._graph.transitive_objects(cls, RDFS.subClassOf))  # cls 자신을 포함한다
+            self._roots_of_class[cls] = frozenset((reached & self._common) or {cls})
+        return self._roots_of_class[cls]
 
     def has_allowed_class(self, entity: object) -> bool:
         """페이지로 서술하는 공통 클래스(또는 그 하위 클래스)나 Project의 엔티티다. 클래스가 없거나 풀리지 않으면 거짓이다."""

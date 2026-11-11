@@ -19,12 +19,14 @@ import os
 import re
 from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 
 from rdflib import Graph, URIRef
 from rdflib.namespace import OWL, RDFS
 
 from . import vocab
+from .classes import ClassIndex
 from .errors import OntoError
 from .graphs import canonical
 from .iri import UNRESOLVED_BASE, class_iri, entity_iri, resolve_reference, source_iri, unresolved_iri
@@ -159,6 +161,11 @@ class Compiled:
     notices: list[str] = field(default_factory=list)  # 알릴 것(원본 문서의 해시를 git으로 내지 못했다). 검사 항목이 따로 보고하지 않는다
     within: Within = Within.ROOT  # 어디 안에서 컴파일했는지(루트 저장소 또는 지식 저장소 안). 공유 범위와 무관하다
     root: Path | None = None  # 컴파일한 작업 공간의 루트. 레코드의 `path`가 이 위치 기준이다. 파일을 직접 읽어야 하는 검사 항목이 쓴다
+
+    @cached_property
+    def class_index(self) -> ClassIndex:
+        """이 그래프의 클래스를 공통 어휘의 클래스로 환원하는 색인. 검사 항목과 인덱스가 함께 쓰므로 한 번만 만든다."""
+        return ClassIndex(self.graph)
 
     def repository_of(self, file: str) -> str:
         """`file`(작업 공간 기준 경로)이 속한 지식 저장소의 이름(서브모듈 디렉토리 이름). 어느 저장소의 것도 아니면 빈 글자다.

@@ -19,7 +19,6 @@ from .. import vocab
 from ..compiler import Compiled
 from ..rules import Duplicates, RuleSet
 from .catalog import DUPLICATE_ENTITY, DUPLICATE_ENTITY_ACROSS_REPOSITORIES
-from ..classes import ClassIndex
 from ..labels import class_label
 from .model import Issue
 
@@ -31,8 +30,7 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     repository = URIRef(vocab.onto_namespace(graph) + "repository")
     entities = [URIRef(iri) for iri in compiled.files]
     repository_of = {entity: str(graph.value(entity, repository)) for entity in entities}
-    index = ClassIndex(graph)
-    classes = {entity: index.roots(entity) for entity in entities}
+    classes = {entity: compiled.class_index.roots(entity) for entity in entities}
     settings = {entity: rules.of(compiled.repository_of(compiled.files[str(entity)])).duplicates for entity in entities}
 
     # 비교 방법마다 한 번씩: 엔티티 -> 이름(비교하는 형태 -> 쓴 그대로의 표기), (클래스, 비교하는 형태) -> 그 이름을 가진 엔티티

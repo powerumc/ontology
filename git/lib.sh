@@ -1,4 +1,5 @@
 # git 모듈의 레시피가 함께 쓰는 셸 함수(POSIX sh). 레시피가 `. "<이 파일>"`로 읽어 쓴다. 이 파일만 실행하지는 않는다.
+# 서브모듈을 다루는 루트의 `setup`과 `repo` 모듈의 `add`·`remove`도 같은 파일을 읽어, 서브모듈 순회와 `.gitmodules` 읽기를 한 정의로 둔다.
 #
 # - 루트 저장소에서 실행한다고 가정한다. 저장소는 경로로 가리킨다: 루트 저장소는 `.`, 지식 저장소는 `projects/<이름>`.
 # - 여기 있는 함수는 읽기만 하고 원격에 접속하지 않는다. 받기(`pull`)와 푸시(`push`)처럼 바꾸는 일은 각 레시피가 한다.
@@ -58,6 +59,20 @@ knowledge_repos() {
     done <<EOF
 $kr_keys
 EOF
+}
+
+# `.gitmodules`(둘째 인자로 다른 파일을 줄 수 있다)에서 경로가 $1인 항목의 서브모듈 이름을 적는다. 없으면 아무것도 적지 않는다.
+gitmodules_name_of() {
+    gnn_file=${2:-.gitmodules}
+    [ -f "$gnn_file" ] || return 0
+    git config -f "$gnn_file" --name-only --get-regexp '^submodule\..*\.path$' |
+        while IFS= read -r gnn_key; do
+            if [ "$(git config -f "$gnn_file" --get "$gnn_key")" = "$1" ]; then
+                gnn_sub=${gnn_key#submodule.}
+                printf '%s\n' "${gnn_sub%.path}"
+                break
+            fi
+        done
 }
 
 # 지식 저장소(서브모듈 이름 $1, 경로 $2)의 추적 브랜치. .gitmodules에 기록된 것, 없으면 원격의 기본 브랜치. 모르면 아무것도 적지 않는다.
@@ -130,6 +145,18 @@ pointer_changes() {
 # 루트 저장소가 기록한 서브모듈 $1의 커밋과 실제로 체크아웃된 커밋이 다른가(스테이징하지 않은 포인터 변경). 서브모듈 안의 미커밋 변경은 보지 않는다.
 pointer_changed() {
     ! git diff-files --quiet --ignore-submodules=dirty -- "$1"
+}
+
+# 루트 저장소의 인덱스(스테이징한 것 포함)가 경로 $1에 기록한 서브모듈 커밋을 적는다. 커밋하지 않은 등록(`just repo add`)의 것도 본다. 기록이 없으면 실패한다.
+# 인덱스의 gitlink 항목은 "160000 <해시> 0<탭><경로>"이다.
+indexed_commit() {
+    ic_line=$(git --literal-pathspecs ls-files --stage -- "$1" | sed -n '1p')
+    case $ic_line in
+        "160000 "*) ;;
+        *) return 1 ;;
+    esac
+    ic_rest=${ic_line#160000 }
+    printf '%s\n' "${ic_rest%% *}"
 }
 
 # 루트 저장소의 커밋 $2(기본은 HEAD)가 경로 $1에 기록한 서브모듈 커밋을 적는다. 그 커밋에 서브모듈 기록이 없으면(커밋 전의

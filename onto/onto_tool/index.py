@@ -22,7 +22,6 @@ from rdflib import Graph, Literal, URIRef
 from rdflib.namespace import DCTERMS, RDF
 
 from . import vocab
-from .classes import ClassIndex
 from .compiler import PROJECT_IDENTIFIER, Compiled
 from .iri import entity_iri
 from .keys import PAGE_CLASS_DIRECTORIES
@@ -77,7 +76,7 @@ def collect(compiled: Compiled) -> list[RepositoryIndex]:
     그래서 하위 클래스의 페이지도 공통 클래스의 묶음에 들고, 하위 클래스의 이름은 항목에 붙는다.
     """
     graph = compiled.graph
-    classes = ClassIndex(graph)
+    classes = compiled.class_index
     namespace = vocab.onto_namespace(graph)
     common = {URIRef(namespace + name): name for name in PAGE_CLASS_DIRECTORIES}
 

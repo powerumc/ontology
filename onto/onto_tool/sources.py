@@ -39,12 +39,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-import yaml
-
 from . import gitenv
 from .keys import SOURCE_ENTRY_KEYS
 from .pages import FrontmatterError, ValueKindError
 from .rules import Sources
+from .textfile import load_yaml_text
 from .workspace import ONTOLOGY_DIR
 
 # git 해시: SHA-1이 내는 40자리 소문자 16진수
@@ -140,21 +139,9 @@ def _outside_reason(path: str) -> str | None:
 
 def load_skipped(path: Path) -> object:
     """넘긴 문서의 목록(`skipped.yaml`)의 값을 검증 없이 읽는다. 파일이 없거나 비어 있으면 `None`이다. 읽을 수 없으면 `FrontmatterError`다."""
-    try:
-        text = path.read_text(encoding="utf-8-sig")
-    except FileNotFoundError:
+    if not path.exists():
         return None
-    except UnicodeDecodeError as exc:
-        raise FrontmatterError("UTF-8 문서가 아니다") from exc
-    except OSError as exc:  # 디렉토리이거나 권한이 없다
-        raise FrontmatterError(f"읽을 수 없다: {exc.strerror or exc}") from exc
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        raise FrontmatterError(f"YAML 문법 오류: {str(exc).strip().splitlines()[0]}") from exc
-    except ValueError as exc:  # `2026-02-30`처럼 날짜 모양이지만 없는 날짜
-        raise FrontmatterError(f"값을 읽을 수 없다: {exc}") from exc
-    return data
+    return load_yaml_text(path, FrontmatterError)
 
 
 def parse_skipped(data: object) -> list[SourceEntry]:

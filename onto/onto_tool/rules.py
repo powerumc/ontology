@@ -19,7 +19,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-import yaml
+from .textfile import load_yaml_text
 
 SEVERITIES = ("error", "warning")
 DUPLICATE_NAME_SOURCES = ("title", "aliases")
@@ -272,18 +272,9 @@ class _Reader:
 
 def load_root_rules(path: Path, *, known_checks: Collection[str]) -> Rules:
     """루트 기본 규칙 파일을 읽는다. 읽을 수 없거나, 모르는 키나 틀린 값이 있거나, 키가 빠졌으면 `RulesError`다."""
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8-sig"))
-    except FileNotFoundError as exc:
-        raise RulesError("루트 기본 규칙 파일이 없다") from exc
-    except OSError as exc:  # 디렉토리이거나 권한이 없다
-        raise RulesError(f"읽을 수 없다: {exc.strerror or exc}") from exc
-    except UnicodeDecodeError as exc:
-        raise RulesError("UTF-8 문서가 아니다") from exc
-    except yaml.YAMLError as exc:
-        raise RulesError(f"YAML 문법 오류: {str(exc).strip().splitlines()[0]}") from exc
-    except ValueError as exc:  # `2026-02-30`처럼 날짜 모양이지만 없는 날짜는 YAMLError가 아니라 ValueError로 나온다
-        raise RulesError(f"값을 읽을 수 없다: {exc}") from exc
+    if not path.exists():
+        raise RulesError("루트 기본 규칙 파일이 없다")
+    data = load_yaml_text(path, RulesError)
     reader = _Reader((), (), complete=True)
     values = reader.read(data, _schema(known_checks))
     if reader.problems:
