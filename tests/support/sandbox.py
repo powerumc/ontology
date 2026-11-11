@@ -304,7 +304,7 @@ class RootRepo:
 
         sandbox.git("init", "--bare", "--initial-branch=main", self.origin, cwd=self.origin)
         sandbox.git("init", "--initial-branch=main", cwd=self.work)
-        _copy_tracked_files(sandbox, source, self.work)
+        copy_tracked_files(sandbox, source, self.work)
         sandbox.git("remote", "add", "origin", self.origin, cwd=self.work)
         sandbox.git("add", "-A", cwd=self.work)
         sandbox.git("commit", "-m", "init", cwd=self.work)
@@ -353,8 +353,10 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _copy_tracked_files(sandbox: Sandbox, src: Path, dest: Path) -> None:
+def copy_tracked_files(sandbox: Sandbox, src: Path, dest: Path, *, under: str | None = None) -> None:
     """`src` 저장소가 추적하는 파일을 `dest`로 복사한다. 작업 트리의 현재 내용을 복사한다.
+
+    `under`를 주면 그 디렉토리 아래의 파일만, 그 경로를 뗀 위치에 복사한다(예: `under="onto"`이면 `onto/x`가 `dest/x`가 된다).
 
     서브모듈 등록(gitlink와 `.gitmodules`)은 복사하지 않는다. 받아 쓰는 루트는 자기 지식 저장소의
     등록을 커밋해 두는데(ADR 0007), 이를 가져오면 샌드박스가 실제 원격으로 나가려 한다.
@@ -375,10 +377,12 @@ def _copy_tracked_files(sandbox: Sandbox, src: Path, dest: Path) -> None:
         meta, rel = entry.split("\t", 1)
         if meta.split()[0] == "160000" or rel == ".gitmodules":
             continue
+        if under is not None and not rel.startswith(f"{under}/"):
+            continue
         source = src / rel
         if not (source.exists() or source.is_symlink()):
             continue  # 지워졌지만 아직 스테이지하지 않은 파일
-        target = dest / rel
+        target = dest / (rel if under is None else rel[len(under) + 1 :])
         target.parent.mkdir(parents=True, exist_ok=True)
         if source.is_symlink():
             target.symlink_to(os.readlink(source))

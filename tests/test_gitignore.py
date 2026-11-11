@@ -18,6 +18,8 @@ def _ignored(sandbox, root, path):
         "dist/ontology.whl",
         "build/lib/x.py",
         "onto.egg-info/PKG-INFO",
+        "onto/.build/graph.ttl",
+        "onto/.venv/bin/python",
     ],
 )
 def test_gitignore가_빌드_산출물과_claude_config를_제외한다(sandbox, path):

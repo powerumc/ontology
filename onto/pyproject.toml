@@ -1,0 +1,20 @@
+# 온톨로지 도구의 uv 프로젝트. 루트의 pyproject.toml(테스트 환경)과 무관하게 이 디렉토리 안에서 자족적으로 돈다.
+# 이 디렉토리는 지식 저장소에 `.onto/`로 그대로 복사되어, 그 안에서도 같은 명령으로 돈다.
+# 실행은 `onto/Justfile`이 맡는다: `uv run --locked --project <이 디렉토리> python -m onto_tool …`
+[project]
+name = "onto-tool"
+version = "0.1.0"
+description = "모듈형 온톨로지 도구: 페이지를 그래프로 컴파일하고 질의한다."
+requires-python = ">=3.11"
+dependencies = [
+    "rdflib>=7.6",   # RDF 그래프와 SPARQL, JSON-LD
+    "pyyaml>=6",     # 페이지의 frontmatter와 ontology.yaml
+]
+
+[build-system]
+requires = ["uv_build>=0.8.10,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "onto_tool"
+module-root = ""
