@@ -327,6 +327,30 @@ def test_d로_실행_위치를_바꿔도_그_저장소만_다룬다(sandbox):
         assert parse_table(query.stdout) == [["e"], [f"{ONTOLOGY_DIR}/{BILLING_PLAN}.md"]], directory
 
 
+def test_루트_저장소에서_onto_Justfile에_d를_줘도_루트_저장소의_모든_지식_저장소를_합쳐_다룬다(sandbox):
+    """`-f onto/Justfile -d <위치>`의 실행 위치는 `<위치>`의 한 단계 위다. 도구가 그곳을 루트 저장소로 믿으면 `projects/`를 찾지 못해 저장소를 하나도 못 찾은 채 0으로 끝난다."""
+    root, billing, _ = knowledge_repos(sandbox)
+    (billing / ONTOLOGY_DIR / "plan" / "ghost.md").write_text("---\nclass: Plan\ntitle: 유령\nowner: kim\n---\n", encoding="utf-8")
+    sparql = "SELECT ?e WHERE { ?e a onto:Plan } ORDER BY ?e"
+
+    for directory in (".", "projects", "projects/billing", "onto"):  # 저장소 안, 지식 저장소들의 상위, 지식 저장소 안, 도구의 디렉토리
+        validate = sandbox.just("-f", "onto/Justfile", "-d", directory, "validate", cwd=root)
+        query = sandbox.just("-f", "onto/Justfile", "-d", directory, "query", sparql, cwd=root)
+
+        assert validate.returncode == 1, (directory, validate.stdout, validate.stderr)
+        assert f"projects/billing/{ONTOLOGY_DIR}/plan/ghost.md" in validate.stdout, directory  # 루트 기준 경로로 지식 저장소를 검사한다
+        assert "이 저장소만 검사했다" not in validate.stderr, directory
+        assert [row[0] for row in parse_table(query.stdout)[1:]] == [  # 두 지식 저장소의 엔티티가 모두, 루트 기준 경로로 나온다
+            f"projects/billing/{ONTOLOGY_DIR}/{BILLING_PLAN}.md",
+            f"projects/billing/{ONTOLOGY_DIR}/plan/ghost.md",
+            f"projects/shop/{ONTOLOGY_DIR}/{SHOP_PLAN}.md",
+        ], directory
+    build = sandbox.just("-f", "onto/Justfile", "-d", ".", "build", cwd=root)
+    assert "지식 저장소 2개" in build.stdout, build.stderr or build.stdout
+    assert (root / "onto" / ".build" / "index.md").is_file()
+    assert not (root.parent / "projects").exists() and not (root.parent / "docs").exists()  # 실행 위치였던 루트의 상위에 아무것도 만들지 않는다
+
+
 def tool_command(tool_dir, *args: str) -> list:
     """`just`를 거치지 않고 도구를 직접 실행하는 명령줄. 범위를 `Justfile`이 아니라 손으로 넘긴다."""
     return ["uv", "run", "--locked", "--quiet", "--project", tool_dir, "python", "-P", "-X", "utf8", "-m", "onto_tool", *args]
