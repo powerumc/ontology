@@ -10,7 +10,8 @@
 # 상위 클래스의 엔티티로 취급되어, 상위 클래스에 허용된 관계를 쓰고 상위 클래스를 가리키는 자리에 올 수 있다.
 #
 # 엔티티는 컴파일이 `onto:repository`를 적은 노드다. 하위 클래스 선언에는 `onto:declaredIn`을 적으므로 여기에 걸리지 않는다.
-# 필수 속성은 `class`와 `title`이다. `Project`의 제목은 필수가 아니다(`ontology.yaml`에는 `name`만 있어도 된다).
+# 필수 속성은 `class`와 `title`이다. 제목은 비어 있지 않아야 하고, 클래스를 알 수 없는 엔티티도 갖춰야 한다.
+# `Project`의 제목은 필수가 아니다(`ontology.yaml`에는 `name`만 있어도 된다).
 # `description`, `date`, `aliases`와 관계는 선택이다.
 
 @prefix onto: <https://onto.invalid/vocab#> .
@@ -25,7 +26,8 @@
 
 # 이 도형 파일이 SPARQL 제약에서 쓰는 접두사.
 <https://onto.invalid/shape> a owl:Ontology ;
-    sh:declare [ sh:prefix "onto" ; sh:namespace "https://onto.invalid/vocab#"^^xsd:anyURI ] .
+    sh:declare [ sh:prefix "onto" ; sh:namespace "https://onto.invalid/vocab#"^^xsd:anyURI ] ,
+                [ sh:prefix "rdfs" ; sh:namespace "http://www.w3.org/2000/01/rdf-schema#"^^xsd:anyURI ] .
 
 # --- 클래스 --------------------------------------------------------------------
 
@@ -67,13 +69,17 @@ shape:ProjectIsNotAPage a sh:NodeShape ;
 
 # --- 필수 속성 -----------------------------------------------------------------
 
-shape:PageHasTitle a sh:NodeShape ;
-    sh:targetClass onto:Component, onto:Plan, onto:Policy, onto:Term, onto:Decision, onto:Report ;
-    sh:property shape:PageHasTitle-title .
-
-shape:PageHasTitle-title onto:check "missing-property" ;
-    sh:path dcterms:title ;
-    sh:minCount 1 .
+# 제목은 `Project`를 뺀 모든 엔티티가 가진다. 클래스를 알 수 없는 엔티티(클래스가 없거나 풀리지 않은 클래스)도 갖춰야 해서,
+# 클래스를 고친 뒤에야 제목 누락이 새로 드러나지 않는다. `Project` 엔티티는 ontology.yaml이 만들고 IRI가 `<저장소 이름>/project`다.
+# 제목이 공백뿐이어도 없는 것과 같다.
+shape:EntityHasTitle a sh:NodeShape ;
+    onto:check "missing-property" ;
+    sh:targetSubjectsOf onto:repository ;
+    sh:or (
+        [ sh:class onto:Project ; sh:pattern "^https://onto\\.invalid/entity/[^/]+/project$" ]
+        [ sh:property [ sh:path dcterms:title ; sh:minCount 1 ; sh:pattern "\\S" ] ]
+    ) ;
+    sh:message "필수 속성 `title`이 없거나 비어 있다" .
 
 # --- 값의 종류 -----------------------------------------------------------------
 # 관계의 값이 식별자 문자열인지는 컴파일이 확인한다(그래프에 오기 전에 걸린다).
@@ -165,7 +171,9 @@ shape:governs-range-values onto:check "relation-range" ;
     sh:or ( [ sh:class onto:Project ] [ sh:class onto:Component ] ) ;
     sh:message "governs: Project와 Component만 가리킬 수 있다" .
 
-# supersedes는 어느 클래스의 페이지든 쓸 수 있고, 가리키는 쪽과 같은 클래스(적힌 클래스 가운데 하나)의 엔티티만 가리킬 수 있다.
+# supersedes는 어느 클래스의 페이지든 쓸 수 있고, 가리키는 쪽과 같은 클래스의 엔티티만 가리킬 수 있다. 같은 클래스는 상위 클래스를
+# 따라가 닿는 공통 클래스가 같다는 뜻이다. 두 엔티티의 클래스가 상위 클래스(자기 자신 포함) 하나를 공유하면 그렇다.
+# 하위 클래스의 엔티티는 상위 클래스의 엔티티를 대체할 수 있다. 질의에서 같은 클래스로 집계되기 때문이다.
 shape:supersedes-range a sh:NodeShape ;
     onto:check "relation-range" ;
     sh:targetSubjectsOf onto:supersedes ;
@@ -176,7 +184,7 @@ shape:supersedes-range a sh:NodeShape ;
             SELECT $this ?value
             WHERE {
                 $this onto:supersedes ?value .
-                FILTER NOT EXISTS { $this a ?class . ?value a ?class }
+                FILTER NOT EXISTS { $this a/rdfs:subClassOf* ?shared . ?value a/rdfs:subClassOf* ?shared }
             }
         """
     ] .

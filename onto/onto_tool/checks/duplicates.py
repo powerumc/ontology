@@ -2,18 +2,20 @@
 
 같은 대상이 여러 페이지로 갈라져 집계가 틀어지는 것을 잡는다. 같은 지식 저장소 안의 중복은 한 저장소가 스스로 고칠 수 있는
 오류이고, 지식 저장소 사이의 중복은 같은 대상을 다른 저장소가 각자 다룰 수도 있어 경고다.
-클래스는 적힌 클래스(`class:`)이다. 하위 클래스의 엔티티는 상위 클래스의 엔티티와 다른 클래스로 본다.
+클래스는 상위 클래스를 따라가 닿는 공통 어휘의 클래스다(`checks.classes`). 질의가 하위 클래스의 엔티티도 상위 클래스로 집계하므로,
+하위 클래스의 엔티티와 상위 클래스의 엔티티, 서로 다른 저장소가 선언한 하위 클래스의 엔티티끼리도 같은 클래스에서 비교한다.
 """
 
 from collections import defaultdict
 from collections.abc import Iterator
 
 from rdflib import Graph, Literal, URIRef
-from rdflib.namespace import DCTERMS, RDF, SKOS
+from rdflib.namespace import DCTERMS, SKOS
 
 from .. import vocab
 from ..compiler import Compiled
 from .catalog import DUPLICATE_ENTITY, DUPLICATE_ENTITY_ACROSS_REPOSITORIES
+from .classes import ClassIndex
 from .labels import class_label
 from .model import Issue
 
@@ -23,7 +25,8 @@ def find(compiled: Compiled) -> Iterator[Issue]:
     repository = URIRef(vocab.onto_namespace(graph) + "repository")
     entities = [URIRef(iri) for iri in compiled.files]
     repository_of = {entity: str(graph.value(entity, repository)) for entity in entities}
-    classes = {entity: set(graph.objects(entity, RDF.type)) for entity in entities}
+    index = ClassIndex(graph)
+    classes = {entity: index.roots(entity) for entity in entities}
     names = {entity: _names(graph, entity) for entity in entities}
 
     # (클래스, 정규화한 이름) -> 그 이름을 가진 엔티티

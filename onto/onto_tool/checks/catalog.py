@@ -12,7 +12,9 @@ WARNING = Severity.WARNING
 
 # --- 읽을 수 없는 파일: 컴파일이 찾는다 ---------------------------------------------
 UNREADABLE_FILE = Check(compiler.UNREADABLE_FILE, ERROR, "페이지나 ontology.yaml을 읽을 수 없다(YAML 문법 오류, frontmatter 없음)")
-INVALID_VALUE = Check(compiler.INVALID_VALUE, ERROR, "속성의 값의 종류가 맞지 않는다(문자열이어야 하는 자리에 숫자나 중첩된 값, 틀린 날짜 등)")
+INVALID_VALUE = Check(
+    compiler.INVALID_VALUE, ERROR, "속성의 값의 종류가 맞지 않는다(문자열이어야 하는 자리에 숫자나 중첩된 값, 없는 날짜 등)"
+)
 INVALID_CLASS_DECLARATION = Check(
     compiler.INVALID_CLASS_DECLARATION, ERROR, "ontology.yaml의 classes에 선언한 하위 클래스가 틀렸다"
 )
@@ -20,8 +22,12 @@ INVALID_IDENTIFIER = Check(
     compiler.INVALID_IDENTIFIER, ERROR, "식별자 형식에 어긋난 페이지 경로(경로 조각은 영어 소문자, 숫자, 하이픈만)"
 )
 
+# --- 페이지의 위치 --------------------------------------------------------------------
+MISPLACED_PAGE = Check("misplaced-page", ERROR, "페이지가 자기 클래스의 디렉토리에 있지 않다(하위 클래스는 공통 조상 클래스의 디렉토리)")
+MISNAMED_PAGE = Check("misnamed-page", ERROR, "페이지처럼 보이는 파일의 확장자가 .md가 아니라 페이지로 읽히지 않는다(.MD, .markdown)")
+
 # --- 구조 제약: SHACL이 찾는다(vocab/shapes.ttl) ------------------------------------
-MISSING_PROPERTY = Check("missing-property", ERROR, "필수 속성(class, title)이 없다")
+MISSING_PROPERTY = Check("missing-property", ERROR, "필수 속성(class, title)이 없거나 title이 비어 있다")
 DISALLOWED_CLASS = Check("disallowed-class", ERROR, "페이지의 클래스로 쓸 수 없는 클래스다")
 RELATION_DOMAIN = Check("relation-domain", ERROR, "관계를 쓸 수 없는 클래스의 페이지가 그 관계를 썼다")
 RELATION_RANGE = Check("relation-range", ERROR, "관계가 가리킬 수 없는 클래스의 엔티티를 가리켰다")
@@ -48,6 +54,8 @@ CHECKS = (
     INVALID_VALUE,
     INVALID_CLASS_DECLARATION,
     INVALID_IDENTIFIER,
+    MISPLACED_PAGE,
+    MISNAMED_PAGE,
     MISSING_PROPERTY,
     DISALLOWED_CLASS,
     RELATION_DOMAIN,

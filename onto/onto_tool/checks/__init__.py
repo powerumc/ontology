@@ -8,14 +8,14 @@ from collections.abc import Collection, Mapping
 from types import MappingProxyType
 
 from ..compiler import Compiled
-from . import duplicates, frontmatter, orphans, problems, references, repositories, structure
+from . import duplicates, frontmatter, layout, orphans, problems, references, repositories, structure
 from .catalog import BY_NAME, CHECKS
 from .model import Check, Finding, Severity, repository_of
 
 __all__ = ["BY_NAME", "CHECKS", "Check", "Finding", "Severity", "validate"]
 
 # 검사를 돌리는 모듈. 모듈마다 `find(compiled)`가 문제를 찾는다.
-_MODULES = (problems, repositories, frontmatter, references, orphans, duplicates, structure)
+_MODULES = (problems, repositories, frontmatter, layout, references, orphans, duplicates, structure)
 
 
 def validate(

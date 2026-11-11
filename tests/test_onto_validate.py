@@ -452,7 +452,7 @@ def test_페이지가_없는_지식_저장소의_project는_고아로_보고하�
 def linked(*pages):
     """`(식별자, 클래스, 속성)`마다 `project`에 이어진 페이지. 고아 경고가 섞이지 않는다. 구성요소는 `partOf`로, 나머지는 `about`으로 잇는다."""
     return [
-        page(identifier, cls, **{"partOf" if cls in ("Component", "Invoice") else "about": "project"}, **fields)
+        page(identifier, cls, **{"partOf" if cls in ("Component", "Invoice", "Gateway") else "about": "project"}, **fields)
         for identifier, cls, fields in pages
     ]
 
@@ -541,11 +541,45 @@ def test_같은_저장소_안의_중복과_다른_저장소와의_중복은_항�
     ]
 
 
-def test_하위_클래스의_엔티티는_상위_클래스의_같은_이름과_중복이_아니다(onto_cli):
+def test_하위_클래스의_엔티티와_상위_클래스의_엔티티도_이름이_같으면_중복이다(onto_cli):
+    """질의는 하위 클래스의 엔티티를 상위 클래스로 집계한다. 같은 대상이 갈라지는 것은 마찬가지다."""
     root = onto_cli.root(
         with_pages(
-            *linked(("component/ledger", "Component", {"title": "원장"}), ("component/ledger-v2", "Invoice", {"title": "원장"})),
+            *linked(("component/a-ledger", "Component", {"title": "원장"}), ("component/b-ledger", "Invoice", {"title": "원장"})),
             classes={"Invoice": {"subClassOf": "Component"}},
+        )
+    )
+
+    assert found(onto_cli, root) == [
+        (ERROR, "billing", file("component/a-ledger"), "duplicate-entity"),
+        (ERROR, "billing", file("component/b-ledger"), "duplicate-entity"),
+    ]
+
+
+def test_저장소마다_따로_선언한_하위_클래스의_엔티티끼리도_같은_클래스에서_비교한다(onto_cli):
+    """하위 클래스의 IRI는 저장소마다 따로다. 하위 클래스를 쓰는 저장소가 늘어도 저장소 간 중복 경고가 꺼지지 않는다."""
+    gateway = {"Gateway": {"subClassOf": "Component"}}
+    repos = {
+        "billing": repo("billing", *linked(("component/gateway", "Gateway", {"title": "결제 게이트웨이"})), classes=gateway),
+        "shop": repo("shop", *linked(("component/gateway", "Gateway", {"title": "결제 게이트웨이"})), classes=gateway),
+        "pay": repo("pay", *linked(("component/gateway", "Component", {"title": "결제 게이트웨이"}))),
+    }
+
+    result, findings = validate(onto_cli, onto_cli.root(repos))
+
+    assert [f[:4] for f in findings] == [
+        (WARNING, "billing", file("component/gateway"), "duplicate-entity-across-repositories"),
+        (WARNING, "pay", file("component/gateway", "pay"), "duplicate-entity-across-repositories"),
+        (WARNING, "shop", file("component/gateway", "shop"), "duplicate-entity-across-repositories"),
+    ]
+    assert result.returncode == 0
+
+
+def test_공통_조상이_다른_하위_클래스의_엔티티는_이름이_같아도_중복이_아니다(onto_cli):
+    root = onto_cli.root(
+        with_pages(
+            *linked(("component/ledger", "Invoice", {"title": "원장"}), ("term/ledger", "Glossary", {"title": "원장"})),
+            classes={"Invoice": {"subClassOf": "Component"}, "Glossary": {"subClassOf": "Term"}},
         )
     )
 
@@ -852,16 +886,32 @@ def test_supersedes가_다른_클래스의_엔티티를_가리키면_오류로_�
     assert result.returncode == 1
 
 
-def test_supersedes는_하위_클래스와_상위_클래스를_같은_클래스로_보지_않는다(onto_cli):
+def test_supersedes는_공통_클래스가_같으면_하위_클래스와_상위_클래스도_같은_클래스로_본다(onto_cli):
+    """하위 클래스의 엔티티는 질의에서 상위 클래스로 집계된다. 새 것이 옛 것을 대체하는 데 걸림이 없다."""
     root = onto_cli.root(
         with_pages(
-            page("component/new", "Invoice", title="새 것", supersedes="component/old"),
+            page("component/new", "Invoice", title="새 것", supersedes=["component/old", "component/sibling"]),
             page("component/old", "Component", title="옛 것"),
-            classes={"Invoice": {"subClassOf": "Component"}},
+            page("component/sibling", "Receipt", title="형제"),
+            page("component/newest", "Component", title="가장 새 것", supersedes="component/new"),
+            classes={"Invoice": {"subClassOf": "Component"}, "Receipt": {"subClassOf": "Component"}},
+        )
+    )
+
+    assert of_check(onto_cli, root, "relation-range") == []
+
+
+def test_supersedes는_공통_클래스가_다르면_하위_클래스끼리도_오류로_잡는다(onto_cli):
+    root = onto_cli.root(
+        with_pages(
+            page("component/new", "Invoice", title="새 것", supersedes="term/old"),
+            page("term/old", "Glossary", title="옛 것"),
+            classes={"Invoice": {"subClassOf": "Component"}, "Glossary": {"subClassOf": "Term"}},
         )
     )
 
     assert of_check(onto_cli, root, "relation-range") == [(ERROR, "billing", file("component/new"), "relation-range")]
+
 
 
 def test_Project의_속성도_값의_종류를_따진다(onto_cli):
@@ -943,3 +993,225 @@ def test_검사는_루트의_구조_제약으로_돌고_지식_저장소의_사�
     findings = found(onto_cli, onto_cli.root(repos))
 
     assert findings == [(ERROR, "billing", file("component/ledger"), "missing-property")]
+
+
+# --- S1-07 리뷰 지적 -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("title", ["", "   ", "\t"], ids=["빈_문자열", "공백", "탭"])
+def test_비어_있는_title은_title이_없는_것과_같이_필수_속성_누락으로_잡는다(onto_cli, title):
+    root = onto_cli.root(with_pages(page("component/api", "Component", title=title, partOf="project")))
+
+    findings = [f for f in validate(onto_cli, root)[1] if f[3] == "missing-property"]
+
+    assert [f[:3] for f in findings] == [(ERROR, "billing", file("component/api"))]
+    assert "title" in findings[0][4]
+
+
+def test_class_가_빈_값이면_허용되지_않는_클래스로_보고하고_설명이_빈_값이라고_알린다(onto_cli):
+    root = onto_cli.root(with_pages(page("component/api", "", title="API", partOf="project")))
+
+    findings = [f for f in validate(onto_cli, root)[1] if f[3] == "disallowed-class"]
+
+    assert len(findings) == 1 and "빈 값" in findings[0][4]
+
+
+def test_자기_자신만_가리키는_페이지는_고아다(onto_cli):
+    """자기 자신은 다른 엔티티가 아니다."""
+    root = onto_cli.root(
+        with_pages(
+            page("component/self", "Component", title="자기", partOf="component/self"),
+            page("component/a", "Component", title="A", dependsOn="component/b"),
+            page("component/b", "Component", title="B"),
+        )
+    )
+
+    assert of_check(onto_cli, root, "orphan-page") == [(WARNING, "billing", file("component/self"), "orphan-page")]
+
+
+def test_값의_종류가_틀린_속성이_있어도_같은_페이지의_다른_문제를_함께_보고한다(onto_cli):
+    root = onto_cli.root(
+        with_pages(
+            page(
+                "component/kind",
+                "Component",
+                title={"ko": "중첩"},
+                owner="kim",
+                hasPart="component/other",
+                partOf="component/nope",
+            ),
+            page("component/other", "Component", title="다른 것", partOf="project"),
+        )
+    )
+
+    findings = [f[3] for f in validate(onto_cli, root)[1] if f[2] == file("component/kind") and f[0] == ERROR]
+
+    assert sorted(findings) == ["broken-reference", "invalid-value", "reverse-relation", "undefined-key"]
+
+
+def test_따옴표_없는_없는_날짜는_따옴표를_친_없는_날짜와_같은_값의_종류_오류로_보고한다(onto_cli):
+    """YAML이 날짜로 읽지 못해도 페이지 전체를 읽을 수 없게 만들지 않는다. 같은 페이지의 다른 문제도 함께 나온다."""
+    unquoted = {"docs/ontology/report/r.md": "---\nclass: Report\ntitle: R\ndate: 2026-02-30\nowner: kim\n---\n"}
+    quoted = {"docs/ontology/report/r.md": '---\nclass: Report\ntitle: R\ndate: "2026-02-30"\nowner: kim\n---\n'}
+
+    results = []
+    for text in (unquoted, quoted):
+        repos = clean_repos()
+        repos["billing"].update(text)
+        findings = validate(onto_cli, onto_cli.root(repos))[1]
+        results.append(sorted(f[3] for f in findings if f[2] == file("report/r") and f[3] != "orphan-page"))
+        assert "unreadable-file" not in [f[3] for f in findings]
+
+    # 값의 종류가 틀린 페이지는 그래프에 오르지 않아 고아 여부는 따지지 않는다. 나머지 문제는 두 쓰기 방식에서 같다.
+    assert results[0] == results[1] == ["invalid-value", "undefined-key"]
+
+
+# --- 클래스별 디렉토리 ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("identifier", "cls", "expected"),
+    [
+        ("plan/is-component", "Component", "component"),
+        ("loose", "Component", "component"),
+        ("report/auth", "Decision", "decision"),
+        ("component/is-a-term", "Term", "term"),
+    ],
+    ids=["다른_클래스의_디렉토리", "최상위", "구현_결과_디렉토리의_결정", "구성요소_디렉토리의_용어"],
+)
+def test_페이지가_자기_클래스의_디렉토리에_있지_않으면_오류로_잡는다(onto_cli, identifier, cls, expected):
+    root = onto_cli.root(with_pages(page(identifier, cls, title="페이지", about="project")))
+
+    findings = [f for f in validate(onto_cli, root)[1] if f[3] == "misplaced-page"]
+
+    assert [f[:3] for f in findings] == [(ERROR, "billing", file(identifier))]
+    assert f"`{expected}/`" in findings[0][4]  # 어느 디렉토리에 둬야 하는지 알려 준다
+
+
+def test_클래스가_둘_이상이어서_디렉토리_하나에_둘_수_없는_페이지는_오류로_잡는다(onto_cli):
+    root = onto_cli.root(with_pages(page("component/both", ["Component", "Plan"], title="둘 다", partOf="project", about="project")))
+
+    assert of_check(onto_cli, root, "misplaced-page") == [(ERROR, "billing", file("component/both"), "misplaced-page")]
+
+
+@pytest.mark.parametrize("cls", PAGE_CLASSES)
+def test_페이지가_자기_클래스의_디렉토리에_있으면_통과한다(onto_cli, cls):
+    root = onto_cli.root(with_pages(page(f"{PAGE_CLASSES[cls]}/x", cls, title="X"), page(f"{PAGE_CLASSES[cls]}/deeper/y", cls, title="Y")))
+
+    assert of_check(onto_cli, root, "misplaced-page") == []
+
+
+def test_하위_클래스의_페이지는_공통_조상_클래스의_디렉토리에_둔다(onto_cli):
+    root = onto_cli.root(
+        with_pages(
+            page("component/invoice", "Invoice", title="청구", partOf="project"),
+            page("component/recurring", "RecurringInvoice", title="정기 청구", partOf="project"),
+            page("plan/wrong-invoice", "Invoice", title="엉뚱한 곳", partOf="project"),
+            classes={"Invoice": {"subClassOf": "Component"}, "RecurringInvoice": {"subClassOf": "Invoice"}},
+        )
+    )
+
+    assert of_check(onto_cli, root, "misplaced-page") == [(ERROR, "billing", file("plan/wrong-invoice"), "misplaced-page")]
+
+
+def test_클래스를_알_수_없는_페이지는_디렉토리_오류로_겹쳐_보고하지_않는다(onto_cli):
+    root = onto_cli.root(with_pages(page("plan/widget", "Widget", title="위젯", about="project"), page("plan/none", None, title="없음", about="project")))
+
+    assert of_check(onto_cli, root, "misplaced-page") == []
+
+
+def test_reports가_implements로_쓴_참조가_디렉토리_규약을_따르면_깨지지_않는다(onto_cli):
+    """디렉토리 규약이 지켜지면 식별자의 첫 조각이 클래스를 드러내 `decision/auth`가 `Decision`을 가리킨다."""
+    root = onto_cli.root(
+        with_pages(page("decision/auth", "Decision", title="인증", about="project"), page("report/auth", "Report", title="인증 결과", implements="decision/auth"))
+    )
+
+    assert validate(onto_cli, root)[1] == []
+
+
+# --- 페이지로 읽히지 않는 파일 -------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["upper.MD", "mixed.Md", "long.markdown"])
+def test_확장자가_md가_아닌_페이지_파일을_조용히_건너뛰지_않고_오류로_알린다(onto_cli, name):
+    repos = clean_repos()
+    repos["billing"][f"{ONTOLOGY_DIR}/component/{name}"] = "---\nclass: Component\ntitle: 확장자가 틀렸다\n---\n"
+
+    result, findings = validate(onto_cli, onto_cli.root(repos))
+
+    assert [f[:4] for f in findings] == [(ERROR, "billing", f"projects/billing/{ONTOLOGY_DIR}/component/{name}", "misnamed-page")]
+    assert result.returncode == 1
+
+
+def test_페이지가_아닌_파일과_숨김_파일은_보고하지_않는다(onto_cli):
+    repos = clean_repos()
+    for name in ("notes.txt", "diagram.png", ".draft.MD", "component/.hidden.markdown", "skipped.yaml"):
+        repos["billing"][f"{ONTOLOGY_DIR}/{name}"] = "내용\n"
+
+    assert validate(onto_cli, onto_cli.root(repos))[1] == []
+
+
+# --- 연쇄 오류 억제의 일관성 ---------------------------------------------------
+
+
+def test_클래스가_없는_페이지의_관계는_도메인도_범위도_따지지_않는다(onto_cli):
+    root = onto_cli.root(
+        with_pages(
+            page("component/none", None, title="클래스 없음", partOf="project", supersedes="component/old"),
+            page("component/old", "Component", title="옛 것", partOf="project"),
+        )
+    )
+
+    assert [f[3] for f in validate(onto_cli, root)[1]] == ["missing-property"]
+
+
+def test_클래스가_허용되지_않는_페이지의_관계도_도메인과_범위를_따지지_않는다(onto_cli):
+    root = onto_cli.root(
+        with_pages(
+            page("component/widget", "Widget", title="위젯", partOf="project", supersedes="component/old"),
+            page("component/old", "Component", title="옛 것", partOf="project"),
+            page("plan/p", "Plan", title="계획", about="component/widget"),
+        )
+    )
+
+    assert [f[3] for f in validate(onto_cli, root)[1]] == ["disallowed-class"]
+
+
+def test_클래스가_없는_엔티티를_가리키는_관계는_범위를_따지지_않는다(onto_cli):
+    root = onto_cli.root(
+        with_pages(page("component/a", "Component", title="A", partOf="component/none"), page("component/none", None, title="클래스 없음"))
+    )
+
+    assert [f[3] for f in validate(onto_cli, root)[1]] == ["missing-property"]
+
+
+@pytest.mark.parametrize("cls", [None, "Widget"], ids=["클래스_없음", "허용되지_않는_클래스"])
+def test_클래스를_알_수_없는_페이지도_제목이_필요하다(onto_cli, cls):
+    """클래스를 고친 뒤에야 제목 누락이 새로 드러나지 않는다."""
+    root = onto_cli.root(with_pages(page("component/x", cls, about="project")))
+
+    assert sorted(f[3] for f in validate(onto_cli, root)[1] if f[0] == ERROR) == sorted(
+        ["missing-property", "missing-property"] if cls is None else ["disallowed-class", "missing-property"]
+    )
+
+
+def test_ontology_yaml을_읽을_수_없는_저장소를_가리키는_교차_참조는_깨진_참조로_보고하지_않는다(onto_cli):
+    """그 저장소의 엔티티를 알 수 없다. 읽을 수 없는 ontology.yaml이 한 번만 보고된다."""
+    repos = clean_repos()
+    repos["shop"][f"{ONTOLOGY_DIR}/ontology.yaml"] = "title: 이름이 없다\n"
+    repos["billing"].update(page("component/ledger", "Component", title="원장", partOf="project", dependsOn="shop:component/api"))
+
+    findings = found(onto_cli, onto_cli.root(repos))
+
+    assert (ERROR, "shop", yaml_file("shop"), "unreadable-file") in findings
+    assert [f for f in findings if f[3] in ("broken-reference", "unregistered-repository")] == []
+
+
+def test_온톨로지_층이_없는_서브모듈을_가리키는_교차_참조는_등록되지_않았다고_하지_않고_층이_없다고_알린다(onto_cli):
+    repos = {**clean_repos(), "empty": {"README.md": "온톨로지 층이 없다\n"}}
+    repos["billing"].update(page("component/ledger", "Component", title="원장", partOf="project", dependsOn="empty:component/api"))
+
+    findings = [f for f in validate(onto_cli, onto_cli.root(repos))[1] if f[2] == file("component/ledger")]
+
+    assert [f[3] for f in findings] == ["broken-reference"]
+    assert "온톨로지 층이 없다" in findings[0][4]

@@ -23,7 +23,15 @@ from .graphs import canonical
 from .iri import UNRESOLVED_BASE, class_iri, entity_iri, resolve_reference, unresolved_iri
 from .keys import CLASS_DECLARATION_KEYS, CLASSES_KEY, PAGE_KEYS, PROJECT_KEYS, RELATION_KEYS
 from .ontology_yaml import OntologyYamlError, read_ontology_yaml
-from .pages import FrontmatterError, ValueKindError, find_pages, read_page, scalar_values
+from .pages import (
+    FrontmatterError,
+    ValueKindError,
+    find_misnamed_pages,
+    find_pages,
+    page_values,
+    read_frontmatter,
+    scalar_values,
+)
 from .workspace import ONTOLOGY_YAML, Repository, Workspace
 
 PROJECT_IDENTIFIER = "project"
@@ -60,7 +68,7 @@ class PageRecord:
 
     identifier: str  # 온톨로지 층 기준 상대 경로에서 확장자를 뺀 것
     file: str  # 루트 저장소 기준 경로
-    meta: dict[str, object] | None  # frontmatter. 정의되지 않은 키도 들어 있다. 읽을 수 없으면 None
+    meta: dict[str, object] | None  # 읽은 frontmatter 그대로(정의되지 않은 키와 값의 종류가 틀린 값도 든다). 읽을 수 없으면 None
 
 
 @dataclass
@@ -73,6 +81,7 @@ class RepositoryRecord:
     has_layer: bool  # `ontology.yaml`이 있다. 없으면 컴파일이 건너뛴다
     name: str | None = None  # `ontology.yaml`의 `name`. 파일이 없거나 읽을 수 없으면 알 수 없다
     pages: list[PageRecord] = field(default_factory=list)
+    misnamed_pages: list[str] = field(default_factory=list)  # 페이지처럼 보이지만 확장자가 `.md`가 아니라 읽지 않은 파일의 경로
 
 
 @dataclass
@@ -171,15 +180,23 @@ def _read_repository(
     except FrontmatterError as exc:
         read.problems.append(Problem(yaml_file, str(exc), _kind(exc)))
 
+    read.record.misnamed_pages = [workspace.relative(path) for path in find_misnamed_pages(repository.ontology_dir)]
     for identifier, path in find_pages(repository.ontology_dir):
         file = workspace.relative(path)
+        meta: dict[str, object] | None
+        values: dict[str, object] = {}
+        failure: Problem | None = None
         try:
-            meta = read_page(identifier, path).meta
+            meta = read_frontmatter(path)
         except FrontmatterError as exc:
             meta = None
             failure = Problem(file, f"frontmatter를 읽을 수 없다: {exc}", _kind(exc))
         else:
-            failure = None
+            try:
+                values = page_values(meta)
+            except ValueKindError as exc:
+                failure = Problem(file, f"frontmatter를 읽을 수 없다: {exc}", _kind(exc))
+        # 값의 종류가 틀려도 읽은 frontmatter는 남긴다. 같은 페이지의 다른 문제(정의되지 않은 키, 깨진 참조)가 가려지지 않게 한다.
         read.record.pages.append(PageRecord(identifier, file, meta))
         if identifier == PROJECT_IDENTIFIER:
             # 같은 IRI라서 두 파일이 제목과 클래스가 둘인 엔티티 하나로 조용히 합쳐진다.
@@ -195,7 +212,7 @@ def _read_repository(
             read.problems.append(failure)
             continue
         try:
-            add(identifier, meta, file)
+            add(identifier, values, file)
         except FrontmatterError as exc:
             read.problems.append(Problem(file, f"frontmatter를 읽을 수 없다: {exc}", _kind(exc)))
     return read
