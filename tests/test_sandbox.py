@@ -17,8 +17,15 @@ def _git_at(sandbox, repo: Path, *args: str) -> str:
     ).stdout
 
 
-def _tracked_files(sandbox, repo: Path) -> set[str]:
-    return {p for p in _git_at(sandbox, repo, "ls-files", "-z").split("\0") if p}
+def _copyable_files(sandbox, repo: Path) -> set[str]:
+    """`repo`의 추적 파일 가운데 루트 저장소를 만들 때 복사되는 것. 서브모듈 등록(gitlink와 `.gitmodules`)은 뺀다."""
+    entries = (e for e in _git_at(sandbox, repo, "ls-files", "--stage", "-z").split("\0") if e)
+    files = set()
+    for entry in entries:
+        meta, rel = entry.split("\t", 1)
+        if meta.split()[0] != "160000" and rel != ".gitmodules":
+            files.add(rel)
+    return files
 
 
 def _registration_state(sandbox, repo: Path) -> dict:
@@ -87,8 +94,17 @@ def test_테스트_환경에는_이_저장소의_가상환경이_새지_않는�
 def test_루트_저장소는_이_저장소의_추적_파일을_복사해_만든다(sandbox):
     work = sandbox.root().work
 
-    assert _tracked_files(sandbox, work) == _tracked_files(sandbox, SOURCE_REPO)
+    assert _copyable_files(sandbox, work) == _copyable_files(sandbox, SOURCE_REPO)
     assert (work / "Justfile").read_bytes() == (SOURCE_REPO / "Justfile").read_bytes()
+
+
+def test_서브모듈_등록이_커밋된_루트를_원본으로_줘도_등록_항목을_뺀_나머지_추적_파일을_모두_복사한다(sandbox):
+    adopted = sandbox.root(name="adopted")
+    adopted.register(sandbox.knowledge_remote("billing"))
+
+    copy = sandbox.root(name="copy", source=adopted.work)
+
+    assert _copyable_files(sandbox, copy.work) == _copyable_files(sandbox, adopted.work)
 
 
 def test_서브모듈_등록은_임시_저장소에서만_일어나고_이_저장소에는_남지_않는다(sandbox):
