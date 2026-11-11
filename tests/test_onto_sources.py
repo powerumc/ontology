@@ -209,10 +209,13 @@ def test_정의되지_않은_키_보고가_쓸_수_있는_키에_derivedFrom을_
         [{"path": "docs/", "hash": OTHER_HASH}],
         [f"{DESIGN}@{OTHER_HASH}"],
         [[DESIGN, OTHER_HASH]],
+        [{"path": f"{ONTOLOGY_DIR}/component/target.md", "hash": OTHER_HASH}],
+        [{"path": f"{ONTOLOGY_DIR}/index.md", "hash": OTHER_HASH}],
+        [{"path": ONTOLOGY_DIR, "hash": OTHER_HASH}],
     ],
     ids=[
         "문자열", "숫자", "해시_없음", "경로_없음", "모르는_키", "짧은_해시", "대문자_해시", "숫자_해시", "빈_경로", "절대_경로", "상위_경로", "중간_상위_경로",
-        "점_경로", "겹친_슬래시", "디렉토리_모양", "문자열_항목", "목록_항목",
+        "점_경로", "겹친_슬래시", "디렉토리_모양", "문자열_항목", "목록_항목", "온톨로지_층의_페이지", "온톨로지_층의_인덱스", "온톨로지_층_디렉토리",
     ],
 )
 def test_derivedFrom의_모양이_틀리면_값의_종류_오류로_보고하고_build도_멈춘다(onto_cli, value):
@@ -225,6 +228,28 @@ def test_derivedFrom의_모양이_틀리면_값의_종류_오류로_보고하고
     assert "derivedFrom" in next(f[4] for f in findings if f[3] == "invalid-value")
     assert result.returncode == 1
     assert onto_cli.run(root, "build").returncode == 1
+
+
+def test_derivedFrom이_온톨로지_층_안의_파일을_가리키면_원본_문서가_아니라고_알린다(onto_cli):
+    """온톨로지 층은 원본 문서와 분리된 층이고 ingest 대상에서 항상 빠진다. 층의 파일을 근거로 삼는 기록은 만들 수 없다."""
+    target = page("component/target", "Component", title="대상", partOf="project")
+    bad = sourced_page("component/auth", (f"{ONTOLOGY_DIR}/component/target.md", OTHER_HASH))
+    root = onto_cli.root(billing(target, bad))
+
+    result, findings = validate(onto_cli, root)
+
+    assert [f[:4] for f in findings] == [(ERROR, "billing", file("component/auth"), "invalid-value")]
+    assert "derivedFrom" in findings[0][4] and "온톨로지 층" in findings[0][4] and f"{ONTOLOGY_DIR}/component/target.md" in findings[0][4]
+    assert result.returncode == 1
+
+
+def test_온톨로지_층과_이름만_비슷한_디렉토리의_문서는_원본_문서로_쓸_수_있다(onto_cli):
+    """`docs/ontology-notes/`는 `docs/ontology/` 안이 아니다."""
+    root = onto_cli.root(
+        billing(sourced_page("component/auth", ("docs/ontology-notes/a.md", OTHER_HASH)), files={"docs/ontology-notes/a.md": "메모\n"})
+    )
+
+    assert [f[3] for f in validate(onto_cli, root)[1]] == ["stale-page"]  # 해시가 달라 낡음이지만 값은 맞다
 
 
 def test_derivedFrom_값이_틀린_페이지의_다른_문제도_가려지지_않는다(onto_cli):
@@ -416,9 +441,10 @@ def test_넘긴_문서의_목록이_비어_있어도_문제가_없다(onto_cli, 
         (f"- path: docs/a.md\n  hash: \"{OTHER_HASH}\"\n  why: 메모\n", "invalid-value"),
         ("- path: docs/a.md\n", "invalid-value"),
         (f"- path: /abs.md\n  hash: \"{OTHER_HASH}\"\n", "invalid-value"),
+        (f"- path: {ONTOLOGY_DIR}/index.md\n  hash: \"{OTHER_HASH}\"\n", "invalid-value"),
         ("- path: [docs/a.md\n", "unreadable-file"),
     ],
-    ids=["목록이_아님", "문자열_항목", "모르는_키", "해시_없음", "절대_경로", "YAML_문법_오류"],
+    ids=["목록이_아님", "문자열_항목", "모르는_키", "해시_없음", "절대_경로", "온톨로지_층의_파일", "YAML_문법_오류"],
 )
 def test_넘긴_문서의_목록의_모양이_틀리면_그_파일을_알리며_오류로_보고한다(onto_cli, text, check):
     root = onto_cli.root(billing(files={SKIPPED_YAML: text}))
@@ -544,6 +570,57 @@ def test_git이_해시를_내지_못하면_파일_내용_그대로_계산하고_
     assert "git으로 내지 못해" in validated.stderr
     assert status.returncode == 0 and f"\tbilling\t{OTHER_DOC}\t{git_hash_of(sandbox, '다른 문서' + chr(10))}" in status.stdout
     assert status.stderr.count("git으로 내지 못해") == 1
+
+
+# 한계: 저장소의 blob에 이미 CRLF가 든 문서. git은 줄바꿈 자동 변환에서 인덱스에 이미 CRLF로 든 파일을 변환하지 않는다(`git add`와
+# `git status`가 인덱스를 읽어 그렇게 한다). `git hash-object`는 인덱스를 읽지 않아 CRLF를 LF로 바꿔 해시한다. 그래서 이런 문서의 해시는
+# `git rev-parse HEAD:<경로>`와 다를 수 있다. 문서(`onto/onto_tool/sources.py`, `status` 도움말, `tests/README.md`)가 이 한계를 적는다.
+
+CRLF_TEXT = "첫 줄\r\n둘째 줄\r\n"
+CRLF_AS_LF = "첫 줄\n둘째 줄\n"
+
+
+def crlf_origin(onto_cli, sandbox, *, later_attributes: str | None = None):
+    """CRLF 줄바꿈 그대로 커밋한 원본 문서(`docs/other.md`)가 있는 git 저장소. 변환 설정이 없는 곳에서 커밋해 저장소의 blob에 CRLF가 든다.
+
+    `later_attributes`를 주면 그 `.gitattributes`를 두 번째 커밋으로 더한다(문서는 그대로다).
+    """
+    root = onto_cli.root(billing(files={OTHER_DOC: CRLF_TEXT}))
+    origin = root / "projects" / "billing"
+    sandbox.git("init", "-q", cwd=origin)
+    sandbox.git("add", "-A", cwd=origin)
+    sandbox.git("commit", "-q", "-m", "초기", cwd=origin)
+    assert int(sandbox.git("cat-file", "-s", f"HEAD:{OTHER_DOC}", cwd=origin).stdout) == len(CRLF_TEXT.encode("utf-8"))  # 저장소의 blob에 정말 CRLF가 든다
+    if later_attributes is not None:
+        (origin / ".gitattributes").write_text(later_attributes, encoding="utf-8")
+        sandbox.git("add", ".gitattributes", cwd=origin)
+        sandbox.git("commit", "-q", "-m", "속성", cwd=origin)
+    return origin
+
+
+def test_저장소의_blob에_CRLF가_든_문서의_해시는_core_autocrlf가_다른_기기에서_서로_다를_수_있다(onto_cli, sandbox):
+    origin = crlf_origin(onto_cli, sandbox)
+    committed = sandbox.git("rev-parse", f"HEAD:{OTHER_DOC}", cwd=origin).stdout.strip()
+    as_lf = git_hash_of(sandbox, CRLF_AS_LF)
+    default = clone_root(onto_cli, sandbox, origin)
+    converting = clone_root(onto_cli, sandbox, origin, "core.autocrlf=true")
+
+    assert committed != as_lf
+    assert status_hashes(onto_cli, default) == {OTHER_DOC: committed}  # 변환 설정이 없으면 git rev-parse와 같다
+    assert status_hashes(onto_cli, converting) == {OTHER_DOC: as_lf}  # core.autocrlf=true는 CRLF를 LF로 바꿔 해시한다
+    for root in (default, converting):
+        assert sandbox.git("status", "--porcelain", cwd=root / "projects" / "billing").stdout == ""  # 두 기기 모두 git status는 깨끗하다
+
+
+def test_CRLF로_커밋한_문서에_text_auto를_나중에_더하면_모든_기기에서_git_rev_parse와_다른_해시가_나온다(onto_cli, sandbox):
+    origin = crlf_origin(onto_cli, sandbox, later_attributes="* text=auto\n")
+    committed = sandbox.git("rev-parse", f"HEAD:{OTHER_DOC}", cwd=origin).stdout.strip()
+    as_lf = git_hash_of(sandbox, CRLF_AS_LF)
+    default = clone_root(onto_cli, sandbox, origin)
+    converting = clone_root(onto_cli, sandbox, origin, "core.autocrlf=true")
+
+    assert committed != as_lf
+    assert status_hashes(onto_cli, default) == status_hashes(onto_cli, converting) == {OTHER_DOC: as_lf}
 
 
 # --- 경로: 대소문자와 유니코드 정규화, 심볼릭 링크 -----------------------------------------------

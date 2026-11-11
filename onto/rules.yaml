@@ -74,7 +74,7 @@ checks:
   outside-link: {enabled: true, severity: error}
   # 인덱스
   index-mismatch: {enabled: true, severity: error}
-  # 원본 문서의 기록: 작업 트리의 현재 내용과 페이지가 적은 해시를 비교한다. 해시는 git이 기록하는 blob 해시다.
+  # 원본 문서의 기록: 작업 트리의 현재 내용과 페이지가 적은 해시를 비교한다. 해시는 git이 기록할 blob 해시다(저장소의 blob에 이미 CRLF가 든 문서는 `git rev-parse`와 다를 수 있다. `onto status`가 낸 값을 쓴다).
   # 원본 문서는 팀이 소유하고 온톨로지 쪽은 고치지 않는다. 팀원이 문서를 고치거나 옮겼다고 푸시 관문이 막히지 않게 셋 다 경고로 둔다.
   # 막으려면 지식 저장소나 루트의 규칙에서 오류로 올린다.
   stale-page: {enabled: true, severity: warning}
