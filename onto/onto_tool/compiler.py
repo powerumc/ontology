@@ -98,17 +98,6 @@ class Compiled:
     problems: list[Problem] = field(default_factory=list)  # 읽을 수 없는 파일과 이유
     records: list[RepositoryRecord] = field(default_factory=list)  # 지식 저장소 후보마다 하나. 디렉토리 이름 순
 
-    def ensure_valid(self) -> None:
-        """읽을 수 없는 파일이 있으면 모두 모아 `OntoError`로 알린다.
-
-        일부만 컴파일한 그래프를 내놓지 않는 것은 부르는 명령(`build`, `query`)의 정책이다. 그래서 `problems`가 하나라도 있으면
-        규칙(검사 항목의 켬/끔과 심각도)과 무관하게 멈춘다. 모든 문제를 모아 심각도별로 보고하는 검사는 `problems`를 그대로 쓰고,
-        `ontology.yaml`의 문제(`invalid-ontology-yaml`, `invalid-class-declaration`)는 저장소가 규칙으로 조정할 수 없는
-        루트 전용 항목이라, 저장소의 규칙으로 `validate`는 통과하는데 `build`만 멈추는 일이 없다.
-        """
-        if self.problems:
-            raise OntoError(*(str(problem) for problem in self.problems))
-
 
 @dataclass
 class _RepositoryRead:

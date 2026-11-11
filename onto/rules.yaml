@@ -28,8 +28,10 @@ sources:
 # 검사 항목별 켬/끔(`enabled`)과 심각도(`severity`: `error` 또는 `warning`). 항목의 이름은 `just onto validate` 보고의 검사 항목 칸에
 # 나오는 이름이다. 오류는 종료 코드를 0이 아니게 하고 푸시 관문이 막는다. 경고는 참고할 것이다.
 # 항목마다 한 줄이고, 모든 검사 항목이 여기에 있어야 한다(빠지면 도구가 알린다).
-# `build`와 `query`는 읽을 수 없는 파일이 있으면 규칙과 무관하게 멈춘다(일부만 컴파일한 그래프를 내놓지 않는다). 읽을 수 없는 파일을
-# 보고하는 항목을 루트가 끄거나 경고로 낮추면 `validate`는 통과해도 `build`는 멈춘다.
+# `build`와 `query`는 읽을 수 없는 파일(`unreadable-file`, `invalid-value`, `invalid-identifier`의 `project` 페이지, `ontology.yaml`의
+# 문제)이 있으면 멈춘다(일부만 컴파일한 그래프를 내놓지 않는다). 다만 그 파일이 있는 지식 저장소의 규칙에서 그 문제를 보고하는
+# 항목이 꺼져 있으면 멈추지 않고 그 파일을 건너뛴다(건너뛴 파일은 표준 오류로 알린다). 그래서 지식 저장소가 항목을 꺼서 `validate`가
+# 통과하면 `build`도 멈추지 않는다. 켜져 있으면 심각도와 무관하게 멈추므로, 항목을 경고로 낮추면 `validate`는 통과해도 `build`는 멈춘다.
 checks:
   # 읽을 수 없는 파일과 값
   unreadable-file: {enabled: true, severity: error}

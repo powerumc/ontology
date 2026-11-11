@@ -33,8 +33,9 @@ def resolve_reference(repository: str, reference: str) -> str:
 
     같은 지식 저장소의 엔티티는 식별자 그대로(`component/api`), 다른 지식 저장소의 엔티티는
     `<저장소 이름>:<식별자>`(`billing:component/api`)로 쓴다. 식별자의 경로 조각은 언어 규칙의 `identifier-pattern`을 따르고,
-    그 형식은 `:`와 앞뒤 공백을 허용하지 못한다(`rules.py`가 그런 형식을 거부한다). 그래서 `:`는 저장소 이름과 식별자의
-    경계로만 나온다. 가리키는 엔티티가 있는지는 여기서 따지지 않는다.
+    `:`나 앞뒤 공백이 든 조각은 그 형식이 허용하더라도 참조로 가리킬 수 없다. 식별자 형식 검사(`checks/frontmatter.py`)가
+    그런 조각을 형식과 상관없이 `invalid-identifier`로 알리고, `rules.py`는 그것을 허용하는 형식을 미리 거부한다.
+    그래서 `:`는 저장소 이름과 식별자의 경계로만 나온다. 가리키는 엔티티가 있는지는 여기서 따지지 않는다.
     """
     name, separator, identifier = reference.partition(":")
     if separator:

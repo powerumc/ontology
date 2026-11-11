@@ -710,3 +710,163 @@ def test_루트_기본_규칙을_읽을_수_없으면_파일을_알리며_오류
 
     assert result.returncode == 1
     assert "rules.yaml" in result.stderr and "Traceback" not in result.stderr
+
+
+# --- S1-08 재리뷰 지적 -----------------------------------------------------------
+
+RAW_PAGE = {f"{ONTOLOGY_DIR}/component/raw.md": "frontmatter가 없는 본문\n"}
+
+
+def unreadable_pages_repo(**project):
+    """읽을 수 없는 페이지(값이 중첩된 제목, frontmatter 없음)와 읽을 수 있는 페이지가 든 지식 저장소."""
+    return repo(
+        "billing",
+        page("component/api", "Component", title="API", partOf="project"),
+        page("component/nested", "Component", title={"ko": "중첩된 제목"}, partOf="project"),
+        RAW_PAGE,
+        **project,
+    )
+
+
+MUTE_UNREADABLE = {"checks": {"unreadable-file": {"enabled": False}, "invalid-value": {"enabled": False}}}
+
+
+@pytest.mark.parametrize("command", ["build", "query"])
+def test_저장소가_읽기_문제_항목을_끄면_validate가_통과하고_build와_query도_그_파일을_건너뛰며_멈추지_않는다(onto_cli, command):
+    root = onto_cli.root({"billing": unreadable_pages_repo(rules=MUTE_UNREADABLE)})
+    args = ("SELECT ?t WHERE { ?e dcterms:title ?t } ORDER BY ?t",) if command == "query" else ()
+
+    validated = onto_cli.run(root, "validate")
+    result = onto_cli.run(root, command, *args)
+
+    assert (validated.returncode, validated.stdout) == (0, "")
+    assert result.returncode == 0, result.stderr
+    if command == "query":
+        assert result.stdout.splitlines() == ["t", "API"]  # 읽을 수 없는 페이지는 그래프에 없다
+    # 건너뛴 파일은 조용히 사라지지 않고 표준 오류로 알린다. 설명은 끈 검사 항목의 이름을 댄다.
+    skipped = [line for line in result.stderr.splitlines() if "건너뛰" in line]
+    assert any(file("component/nested") in line and "invalid-value" in line for line in skipped)
+    assert any(file("component/raw") in line and "unreadable-file" in line for line in skipped)
+
+
+def test_저장소가_끈_읽기_문제만_건너뛰고_켜져_있는_항목의_문제가_있는_파일은_멈춘다(onto_cli):
+    """`invalid-value`만 끄면 frontmatter가 없는 페이지(`unreadable-file`)는 그대로 멈춘다."""
+    rules = {"checks": {"invalid-value": {"enabled": False}}}
+    root = onto_cli.root({"billing": unreadable_pages_repo(rules=rules)})
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode == 1
+    assert file("component/raw") in result.stderr
+    assert file("component/nested") not in result.stderr  # 끈 항목의 문제는 멈추는 이유로 보고하지 않는다
+
+
+def test_한_저장소가_끈_항목은_다른_저장소의_읽기_문제를_건너뛰게_하지_않는다(onto_cli):
+    root = onto_cli.root(
+        {
+            "billing": unreadable_pages_repo(rules=MUTE_UNREADABLE),
+            "shop": repo("shop", page("component/nested", "Component", title={"ko": "중첩된 제목"}, partOf="project")),
+        }
+    )
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode == 1
+    assert file("component/nested", "shop") in result.stderr
+    assert file("component/nested") not in result.stderr
+
+
+def test_루트_기본_규칙이_끈_읽기_문제는_모든_저장소에서_건너뛴다(onto_cli):
+    onto_cli.set_root_check("invalid-value", enabled=False)
+    root = onto_cli.root({"billing": repo("billing", page("component/nested", "Component", title={"ko": "중첩된 제목"}, partOf="project"))})
+
+    assert onto_cli.run(root, "validate").returncode == 0
+    assert onto_cli.run(root, "build").returncode == 0
+
+
+def test_저장소가_invalid_identifier를_끄면_Project와_겹치는_project_페이지도_건너뛰고_build는_멈추지_않는다(onto_cli):
+    rules = {"checks": {"invalid-identifier": {"enabled": False}}}
+    root = onto_cli.root({"billing": repo("billing", page("project", "Component", title="가짜 프로젝트"), rules=rules)})
+
+    validated = onto_cli.run(root, "validate")
+    built = onto_cli.run(root, "build")
+
+    assert (validated.returncode, validated.stdout) == (0, "")
+    assert built.returncode == 0, built.stderr
+    assert "invalid-identifier" in built.stderr and file("project") in built.stderr
+
+
+@pytest.mark.parametrize(
+    "mute",
+    [{"enabled": False}, {"severity": "warning"}],
+    ids=["끄기", "경고로_낮추기"],
+)
+def test_읽기_문제_항목이_켜져_있으면_경고로_낮추어도_build는_멈춘다(onto_cli, mute):
+    """켜져 있는 항목의 문제는 심각도와 무관하게 멈춘다. 일부만 컴파일한 그래프를 내놓지 않는다. 끄면 그 항목의 문제를 건너뛴다."""
+    root = onto_cli.root(
+        {"billing": repo("billing", page("component/nested", "Component", title={"ko": "중첩된 제목"}, partOf="project"), rules={"checks": {"invalid-value": mute}})}
+    )
+
+    built = onto_cli.run(root, "build")
+
+    assert (built.returncode == 0) is (mute == {"enabled": False})
+
+
+def test_identifier_pattern을_파일_이름에_맞게_바꾼_저장소에서도_Plan_디렉토리의_오류는_가려지지_않는다(onto_cli):
+    """식별자 형식 항목이 디렉토리 오류를 대신 보고하는 것은 그 항목이 디렉토리 항목보다 약하지 않을 때뿐이다."""
+    page_in_plan_directory = page("Plan/lower", "Plan", title="계획", about="project")
+
+    def findings(**checks):
+        root = onto_cli.root({"billing": repo("billing", page_in_plan_directory, rules={"checks": checks})})
+        result, reported = validate(onto_cli, root)
+        return result.returncode, [(f[0], f[3]) for f in reported]
+
+    # 식별자 형식 항목만 경고로 낮추면 디렉토리 오류(오류)가 가려지지 않는다
+    assert findings(**{"invalid-identifier": {"severity": "warning"}}) == (1, [(WARNING, "invalid-identifier"), (ERROR, "misplaced-page")])
+    # 둘이 같거나 식별자 형식 항목이 더 강하면 하나로 줄여 알린다
+    assert findings() == (1, [(ERROR, "invalid-identifier")])
+    assert findings(**{"misplaced-page": {"severity": "warning"}}) == (1, [(ERROR, "invalid-identifier")])
+    both = {"invalid-identifier": {"severity": "warning"}, "misplaced-page": {"severity": "warning"}}
+    assert findings(**both) == (0, [(WARNING, "invalid-identifier")])
+
+
+@pytest.mark.parametrize(
+    ("pattern", "identifier"),
+    [
+        ("[b-z0-9-]+(:[b-z0-9-]+)?", "component/b:c"),
+        (" ?[b-z0-9-]+", "component/ b"),
+        ("[b-z0-9-]+ ?", "component/b "),
+    ],
+    ids=["콜론", "앞_공백", "뒤_공백"],
+)
+def test_식별자_형식이_견본_조각을_빠져나가도_콜론이나_앞뒤_공백이_든_경로_조각은_식별자_오류로_보고한다(onto_cli, pattern, identifier):
+    """참조는 `:`를 저장소 이름과의 경계로 읽고 앞뒤 공백을 뗀다. 그런 조각은 형식이 허용해도 참조로 가리킬 수 없다."""
+    rules = {"language": {"identifier-pattern": pattern}}
+    root = onto_cli.root({"billing": repo("billing", page(identifier, "Component", title="C", partOf="project"), rules=rules)})
+
+    result, findings = validate(onto_cli, root)
+
+    assert [f[:4] for f in findings] == [(ERROR, "billing", file(identifier), "invalid-identifier")]
+    assert result.returncode == 1
+    assert "참조" in findings[0][4]
+
+
+def test_Project_속성의_값의_종류가_틀리면_저장소가_invalid_value를_꺼도_ontology_yaml의_문제로_보고한다(onto_cli):
+    """`ontology.yaml`은 규칙을 담은 파일이다. 숫자 같은 값의 종류 문제도 중첩된 값처럼 저장소가 규칙으로 묻지 못한다."""
+    rules = {"checks": {"invalid-value": {"enabled": False}}}
+    root = onto_cli.root({"billing": repo("billing", title=5, aliases=[1, "pay"], rules=rules)})
+
+    result, findings = validate(onto_cli, root)
+
+    assert {f[:4] for f in findings} == {(ERROR, "billing", yaml_file(), "invalid-ontology-yaml")}
+    assert result.returncode == 1
+
+
+def test_루트_기본_규칙은_Project_속성의_값의_종류_보고를_바꿀_수_있다(onto_cli):
+    onto_cli.set_root_check("invalid-ontology-yaml", severity="warning")
+    root = onto_cli.root({"billing": repo("billing", title=5)})
+
+    result, findings = validate(onto_cli, root)
+
+    assert [f[:4] for f in findings] == [(WARNING, "billing", yaml_file(), "invalid-ontology-yaml")]
+    assert result.returncode == 0

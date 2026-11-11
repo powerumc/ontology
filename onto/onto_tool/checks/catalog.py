@@ -13,14 +13,14 @@ from .model import Check
 # --- 읽을 수 없는 파일: 컴파일이 찾는다 ---------------------------------------------
 UNREADABLE_FILE = Check(compiler.UNREADABLE_FILE, "페이지나 ontology.yaml을 읽을 수 없다(YAML 문법 오류, frontmatter 없음)")
 INVALID_VALUE = Check(
-    compiler.INVALID_VALUE, "속성의 값의 종류가 맞지 않는다(문자열이어야 하는 자리에 숫자나 중첩된 값, 없는 날짜 등)"
+    compiler.INVALID_VALUE, "페이지 속성의 값의 종류가 맞지 않는다(문자열이어야 하는 자리에 숫자나 중첩된 값, 없는 날짜 등)"
 )
 INVALID_CLASS_DECLARATION = Check(
     compiler.INVALID_CLASS_DECLARATION, "ontology.yaml의 classes에 선언한 하위 클래스가 틀렸다", root_only=True
 )
 INVALID_ONTOLOGY_YAML = Check(
     compiler.INVALID_ONTOLOGY_YAML,
-    "ontology.yaml 최상위에 정의되지 않은 키가 있거나 Project가 되는 속성(title, description, aliases)의 값의 종류가 맞지 않는다",
+    "ontology.yaml 최상위에 정의되지 않은 키가 있거나 Project가 되는 속성(title, description, aliases)의 값의 종류가 맞지 않는다(읽을 수 없는 중첩된 값, 숫자 등)",
     root_only=True,
 )
 INVALID_IDENTIFIER = Check(

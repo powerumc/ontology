@@ -12,12 +12,14 @@ from ..errors import OntoError
 from ..inference import infer
 from ..workspace import Workspace
 from ._output import warn
+from ._rules import ensure_valid
 
 NAME = "query"
 HELP = (
     "SPARQL 질의를 실행한다. 하위 클래스, 역관계, 추이 관계가 추론된 그래프를 질의한다. "
     "SELECT 결과의 엔티티는 루트 저장소 기준 파일 경로로 나온다. "
-    "CONSTRUCT와 DESCRIBE는 Turtle로 나오고, 엔티티의 IRI가 가리키는 파일이 주석으로 붙는다"
+    "CONSTRUCT와 DESCRIBE는 Turtle로 나오고, 엔티티의 IRI가 가리키는 파일이 주석으로 붙는다. "
+    "읽을 수 없는 파일이 있으면 멈춘다. 다만 그 지식 저장소의 규칙에서 그 문제를 보고하는 검사 항목이 꺼져 있으면 그 파일을 건너뛴다"
 )
 
 
@@ -26,9 +28,10 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
-    compiled = compile_workspace(Workspace(Path.cwd()))
+    workspace = Workspace(Path.cwd())
+    compiled = compile_workspace(workspace)
     warn(compiled.warnings)
-    compiled.ensure_valid()
+    ensure_valid(workspace, compiled)
     graph = infer(compiled.graph)
     try:
         result = graph.query(args.sparql)

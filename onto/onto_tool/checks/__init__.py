@@ -9,13 +9,24 @@ from collections.abc import Collection
 from pathlib import Path
 
 from .. import rules
-from ..compiler import Compiled
+from ..compiler import Compiled, Problem
 from ..rules import RuleSet, Rules
 from . import duplicates, frontmatter, layout, orphans, overrides, problems, references, repositories, structure
 from .catalog import BY_NAME, CHECKS
 from .model import Check, Finding, Severity, repository_of
 
-__all__ = ["BY_NAME", "CHECKS", "Check", "Finding", "Severity", "load_root_rules", "rule_set", "validate"]
+__all__ = [
+    "BY_NAME",
+    "CHECKS",
+    "Check",
+    "Finding",
+    "Severity",
+    "applied_rules",
+    "load_root_rules",
+    "rule_set",
+    "split_problems",
+    "validate",
+]
 
 # 검사를 돌리는 모듈. 모듈마다 `find(compiled, rule_set)`가 문제를 찾는다.
 _MODULES = (problems, repositories, overrides, frontmatter, layout, references, orphans, duplicates, structure)
@@ -34,13 +45,33 @@ def rule_set(root: Rules, overrides_by_repository: dict[str, object]) -> RuleSet
     return rules.build_rule_set(root, overrides_by_repository, known_checks=BY_NAME, root_only_checks=ROOT_ONLY_CHECKS)
 
 
+def applied_rules(compiled: Compiled, root_rules: Rules) -> RuleSet:
+    """지식 저장소마다 적용할 규칙. 저장소의 `ontology.yaml`이 덮어쓰지 않은 값은 `root_rules`다. 틀린 덮어쓰기는 `problems`에 든다."""
+    return rule_set(root_rules, {record.directory: record.rules for record in compiled.records if record.rules is not None})
+
+
+def split_problems(compiled: Compiled, applied: RuleSet) -> tuple[list[Problem], list[Problem]]:
+    """컴파일이 읽지 못한 파일의 문제를 `(켜진 검사 항목의 것, 꺼진 검사 항목의 것)`으로 나눈다.
+
+    켬/끔은 그 문제가 있는 지식 저장소의 규칙을 따른다(심각도는 따지지 않는다). `build`와 `query`가 쓴다. 켜진 항목의 문제가 있으면
+    일부만 컴파일한 그래프를 내놓지 않으려고 멈추고, 꺼진 항목의 문제가 난 파일은 건너뛴다. 컴파일은 읽을 수 없는 파일을 이미
+    그래프에서 뺐으므로 건너뛴다는 것은 멈추지 않는다는 뜻이다. 그래서 저장소가 `validate`에서 끈 항목의 문제로 `build`만 멈추는 일이 없다.
+    """
+    enabled: list[Problem] = []
+    disabled: list[Problem] = []
+    for problem in compiled.problems:
+        rule = applied.of(repository_of(problem.file)).checks[problem.check]
+        (enabled if rule.enabled else disabled).append(problem)
+    return enabled, disabled
+
+
 def validate(compiled: Compiled, root_rules: Rules) -> list[Finding]:
     """`compiled`를 모든 검사 항목으로 검사해 보고할 문제를 돌려준다.
 
     문제의 켬/끔과 심각도는 그 문제가 있는 지식 저장소의 규칙을 따른다. 저장소의 `ontology.yaml`이 덮어쓰지 않은 값은
     `root_rules`다. 꺼진 항목의 문제는 보고하지 않는다. 문제는 지식 저장소, 페이지, 검사 항목, 설명 순으로 정렬한다.
     """
-    applied = rule_set(root_rules, {record.directory: record.rules for record in compiled.records if record.rules is not None})
+    applied = applied_rules(compiled, root_rules)
     findings: set[Finding] = set()
     for module in _MODULES:
         for issue in module.find(compiled, applied):
