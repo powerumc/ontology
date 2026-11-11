@@ -17,8 +17,15 @@ def _git_at(sandbox, repo: Path, *args: str) -> str:
     ).stdout
 
 
-def _tracked_files(sandbox, repo: Path) -> set[str]:
-    return {p for p in _git_at(sandbox, repo, "ls-files", "-z").split("\0") if p}
+def _copyable_files(sandbox, repo: Path) -> set[str]:
+    """`repo`의 추적 파일 가운데 루트 저장소를 만들 때 복사되는 것. 서브모듈 등록(gitlink와 `.gitmodules`)은 뺀다."""
+    entries = (e for e in _git_at(sandbox, repo, "ls-files", "--stage", "-z").split("\0") if e)
+    files = set()
+    for entry in entries:
+        meta, rel = entry.split("\t", 1)
+        if meta.split()[0] != "160000" and rel != ".gitmodules":
+            files.add(rel)
+    return files
 
 
 def _registration_state(sandbox, repo: Path) -> dict:
@@ -81,14 +88,36 @@ def test_테스트_환경에는_이_저장소의_가상환경이_새지_않는�
         assert (Path(sys.prefix) / "bin").resolve() not in path_entries
 
 
+def test_테스트의_ssh는_접속하지_않고_사용자의_ssh_설정을_읽지_않는다(sandbox):
+    """공개 원본 판별은 `ssh -G`로 호스트 별칭을 푼다. 개발자의 `~/.ssh/config`가 테스트 결과를 바꾸면 안 된다."""
+    sandbox.ssh_alias("my-alias", "git.example.invalid")
+
+    alias = sandbox.run(["ssh", "-G", "--", "my-alias"], cwd=sandbox.base)
+    plain = sandbox.run(["ssh", "-G", "github.com"], cwd=sandbox.base)
+    connect = sandbox.run(["ssh", "-T", "git@github.com"], cwd=sandbox.base, check=False)
+
+    assert "hostname git.example.invalid" in alias.stdout.splitlines()
+    assert "hostname github.com" in plain.stdout.splitlines()  # 별칭이 없으면 그 이름 그대로다
+    assert connect.returncode != 0  # 접속하지 않는다
+
+
 # --- 임시 디렉토리 안에서만 -------------------------------------------------
 
 
 def test_루트_저장소는_이_저장소의_추적_파일을_복사해_만든다(sandbox):
     work = sandbox.root().work
 
-    assert _tracked_files(sandbox, work) == _tracked_files(sandbox, SOURCE_REPO)
+    assert _copyable_files(sandbox, work) == _copyable_files(sandbox, SOURCE_REPO)
     assert (work / "Justfile").read_bytes() == (SOURCE_REPO / "Justfile").read_bytes()
+
+
+def test_서브모듈_등록이_커밋된_루트를_원본으로_줘도_등록_항목을_뺀_나머지_추적_파일을_모두_복사한다(sandbox):
+    adopted = sandbox.root(name="adopted")
+    adopted.register(sandbox.knowledge_remote("billing"))
+
+    copy = sandbox.root(name="copy", source=adopted.work)
+
+    assert _copyable_files(sandbox, copy.work) == _copyable_files(sandbox, adopted.work)
 
 
 def test_추적_파일_복사는_하위_디렉토리만_접두어를_떼고_복사하고_심볼릭_링크와_지워진_파일을_다룬다(sandbox):
@@ -204,3 +233,10 @@ def test_저장소가_없는_디렉토리에서_위로_찾아_올라가_바깥_�
     result = inner.git("rev-parse", "--show-toplevel", cwd=plain, check=False)
 
     assert result.returncode != 0
+
+
+def test_온톨로지_도구_사본은_병렬_실행의_워커마다_따로_있다(onto_tool_dir):
+    """도구 사본과 `.build/`는 세션이 공유한다. xdist 워커가 같은 사본을 쓰면 서로의 산출물을 지운다."""
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+
+    assert any(part.startswith(f"onto-tool-{worker}") for part in onto_tool_dir.parts)

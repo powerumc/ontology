@@ -43,6 +43,32 @@ _GITCONFIG = """\
 	allow = always
 """
 
+# 테스트용 `ssh`. 접속하지 않고, `ssh -G <호스트>`에는 `sandbox.ssh_alias`로 적어 둔 별칭 표로 `hostname`을 알려 준다.
+# 사용자의 `~/.ssh/config`를 읽지 않으므로 테스트가 개발자의 ssh 설정에 따라 달라지지 않는다.
+_SSH_STUB = """\
+#!/bin/sh
+here=$(dirname "$0")
+if [ "${1:-}" != "-G" ]; then
+    echo "테스트에서는 ssh로 접속하지 않는다" >&2
+    exit 255
+fi
+shift
+if [ "${1:-}" = "--" ]; then
+    shift
+fi
+host=$1
+real=$host
+if [ -f "$here/aliases" ]; then
+    while read -r alias target; do
+        if [ "$alias" = "$host" ]; then
+            real=$target
+        fi
+    done <"$here/aliases"
+fi
+echo "host $host"
+echo "hostname $real"
+"""
+
 # `uv run`이 실행 중인 환경을 알리려고 남기는 변수. 샌드박스 안의 명령에는 필요 없다.
 _RUNNER_STATE_VARS = ("VIRTUAL_ENV", "UV", "UV_RUN_RECURSION_DEPTH")
 
@@ -72,7 +98,12 @@ class Sandbox:
             for k, v in os.environ.items()
             if not k.startswith(("GIT_", "JUST_")) and k not in _RUNNER_STATE_VARS
         }
-        env["PATH"] = _path_without_virtualenv(env.get("PATH", ""))
+        self._ssh_dir = config_dir / "bin"
+        self._ssh_dir.mkdir()
+        ssh = self._ssh_dir / "ssh"
+        ssh.write_text(_SSH_STUB, encoding="utf-8")
+        ssh.chmod(0o755)
+        env["PATH"] = os.pathsep.join([str(self._ssh_dir), _path_without_virtualenv(env.get("PATH", ""))])
         env.update(
             GIT_CONFIG_GLOBAL=str(gitconfig),  # ~/.gitconfig 와 XDG 전역 설정을 대신한다
             GIT_CONFIG_NOSYSTEM="1",
@@ -118,6 +149,34 @@ class Sandbox:
         """`repo`가 체크아웃한 브랜치 이름. detached HEAD이면 `None`."""
         result = self.git("symbolic-ref", "--quiet", "--short", "HEAD", cwd=repo, check=False)
         return result.stdout.strip() if result.returncode == 0 else None
+
+    def ssh_alias(self, alias: str, hostname: str) -> None:
+        """테스트용 `ssh -G <alias>`가 `hostname`을 알려 주게 한다. ssh 설정의 `Host`·`HostName`에 해당한다."""
+        with (self._ssh_dir / "aliases").open("a", encoding="utf-8") as f:
+            f.write(f"{alias} {hostname}\n")
+
+    def snapshot(self, repo: Path) -> dict[str, object]:
+        """저장소가 바뀐 흔적을 모은다. 앞뒤의 스냅샷이 같으면 그 사이에 아무것도 바뀌지 않은 것이다.
+
+        HEAD, 인덱스, 작업 트리 상태(추적하지 않는 파일 포함), `.gitmodules`, 로컬 서브모듈 설정,
+        `.git/modules` 안의 서브모듈 저장소, `projects/`의 항목을 본다. 서브모듈 안의 상태는 보지 않는다.
+        """
+        git_dir = Path(self.git("rev-parse", "--absolute-git-dir", cwd=repo).stdout.strip())
+        gitmodules = repo / ".gitmodules"
+        modules_dir = git_dir / "modules"
+        return {
+            "head": self.head(repo),
+            "index": self.git("ls-files", "--stage", cwd=repo).stdout,
+            "status": self.git("status", "--porcelain", "--untracked-files=all", cwd=repo, check=False).stdout,
+            "gitmodules": gitmodules.read_text(encoding="utf-8") if gitmodules.exists() else None,
+            "config": self.git("config", "--local", "--get-regexp", r"^submodule\.", cwd=repo, check=False).stdout,
+            "modules": sorted(  # 서브모듈 저장소마다 HEAD와 objects가 함께 있다
+                str(p.parent.relative_to(git_dir))
+                for p in modules_dir.rglob("HEAD")
+                if (p.parent / "objects").is_dir()
+            ),
+            "projects": sorted(p.name for p in (repo / "projects").iterdir()) if (repo / "projects").exists() else None,
+        }
 
     def just(
         self,
@@ -242,6 +301,10 @@ class KnowledgeRemote:
         sandbox.git("add", "-A", cwd=self.seed)
         sandbox.git("commit", "-m", "init", cwd=self.seed)
         sandbox.git("push", "origin", "main", cwd=self.seed)
+
+    def set_default_branch(self, branch: str) -> None:
+        """원격의 기본 브랜치(HEAD가 가리키는 브랜치)를 바꾼다. 그 브랜치는 이미 있어야 한다."""
+        self._sandbox.git("symbolic-ref", "HEAD", f"refs/heads/{branch}", cwd=self.url)
 
     def commit(self, *, branch: str = "main") -> str:
         """`branch`에 커밋 하나를 쌓아 원격에 푸시하고 그 해시를 돌려준다.

@@ -8,9 +8,10 @@ dependencies = []
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
-addopts = "-ra"
+addopts = "-ra -n auto"

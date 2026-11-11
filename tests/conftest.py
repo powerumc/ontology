@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -14,8 +15,13 @@ def sandbox(tmp_path: Path) -> Sandbox:
 
 @pytest.fixture(scope="session")
 def onto_tool_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """온톨로지 도구의 사본과 가상환경. 테스트 세션마다 한 번 만든다."""
-    return install_tool(Sandbox(tmp_path_factory.mktemp("onto-tool")))
+    """온톨로지 도구의 사본과 가상환경. 테스트 세션마다 한 번 만든다.
+
+    pytest-xdist로 병렬 실행하면 워커마다 세션이 따로이므로 사본과 산출물(`.build/`)도 워커마다 따로다.
+    워커 안에서는 테스트가 차례로 돌아 겹치지 않는다. 디렉토리 이름에 워커를 적어 그것이 보이게 한다.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+    return install_tool(Sandbox(tmp_path_factory.mktemp(f"onto-tool-{worker}")))
 
 
 @pytest.fixture

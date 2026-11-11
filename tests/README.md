@@ -3,10 +3,18 @@
 ## 실행
 
 ```sh
-uv run pytest                      # 전체. 의존성을 처음 내려받을 때만 네트워크가 필요하다
+uv run pytest                      # 전체. 기본으로 pytest-xdist가 코어 수만큼 병렬로 돌린다. 의존성을 처음 내려받을 때만 네트워크가 필요하다
+uv run pytest -n 0                 # 직렬. 실패를 하나씩 따라가거나 디버거를 붙일 때
+uv run pytest -n 0 -k 추적_브랜치   # 적은 수의 테스트는 직렬이 더 빠르다(워커를 띄우는 시간이 든다)
 uv run pytest tests/test_setup.py  # 파일 하나
-uv run pytest -k 추적_브랜치        # 이름으로 고르기
 ```
+
+테스트마다 임시 디렉토리에 루트 저장소와 원격을 새로 꾸려 한 테스트가 1~2초 걸린다. 직렬은 몇 분, 병렬은 1분 안팎이다. `addopts`의 `-n auto`가 기본이므로 직렬은 `-n 0`으로 돌린다. 병렬이든 직렬이든 같은 결과여야 한다.
+
+### 병렬 실행에서 지켜야 할 것
+
+- 테스트는 `tmp_path` 안에서만 일하고 서로 상태를 나누지 않는다. 이 저장소의 작업 사본은 읽기만 한다.
+- 세션 범위 픽스처는 pytest-xdist에서 **워커마다** 한 번씩 만들어진다. `onto_tool_dir`(온톨로지 도구의 사본, 가상환경, 산출물 `.build/`)가 그렇다. 워커 안에서는 테스트가 차례로 돌아 서로 겹치지 않는다. 새 세션 범위 픽스처가 디스크에 쓰면 워커마다 따로 쓰게 하고(`tmp_path_factory`), 고정 경로에 쓰지 않는다.
 
 ## 새 파일은 `git add` 한 뒤에 테스트에 보인다
 
@@ -17,10 +25,15 @@ uv run pytest -k 추적_브랜치        # 이름으로 고르기
 `sandbox` 픽스처가 테스트마다 새 임시 디렉토리와 격리된 git 환경을 준다.
 
 - `sandbox.root()`: 루트 저장소와 bare 원격. `.register(원격, name=, branch=)`, `.point_at(이름, 커밋)`, `.clone()`
-- `sandbox.knowledge_remote(이름)`: 가짜 지식 저장소와 bare 원격. `.commit(branch=)`
+- `sandbox.knowledge_remote(이름)`: 가짜 지식 저장소와 bare 원격. `.commit(branch=)`, `.set_default_branch(브랜치)`
 - `sandbox.just(...)`, `sandbox.git(...)`: 명령 실행. `just(without=("uv",))`는 PATH에서 도구를 뺀다
 - `sandbox.head(저장소)`, `sandbox.branch(저장소)`
+- `sandbox.snapshot(저장소)`: HEAD, 인덱스, 작업 트리 상태, `.gitmodules`, 서브모듈 설정, `.git/modules`를 모은 값. 명령을 부르기 전후로 비교해 "아무것도 바꾸지 않는다"를 확인한다
 - `copy_tracked_files(sandbox, 원본, 대상, under=…)`: 원본 저장소의 추적 파일을 복사한다. `under`를 주면 그 아래만 접두어를 떼고 복사한다(`onto/` → `.onto/`)
+
+테스트용 `ssh`가 PATH 맨 앞에 있다. 접속하지 않고 `ssh -G <호스트>`에만 답한다. 개발자의 `~/.ssh/config`를 읽지 않으므로, ssh 호스트 별칭이 필요한 테스트는 `sandbox.ssh_alias("github-personal", "github.com")`로 별칭을 적는다.
+
+`ssh`·`https` 주소가 필요한 테스트는 `git config --global url.<로컬 원격>.insteadOf <주소>`로 그 주소를 로컬 원격에 잇는다. 전역 설정은 임시 파일이라 테스트마다 따로다.
 
 지키는 약속: 네트워크를 쓰지 않는다(로컬 파일 전송만 허용). 전역 git 설정을 읽지도 바꾸지도 않는다. 임시 디렉토리 밖에서는 명령을 실행하지 않고, 이 저장소의 `Justfile`을 직접 가리켜 실행하지 않는다(등록 명령이 이 작업 사본에 서브모듈을 만든다). 이 저장소의 가상환경이 샌드박스로 새지 않는다.
 

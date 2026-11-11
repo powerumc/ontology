@@ -1,3 +1,473 @@
 # repo 모듈: 지식 저장소의 등록과 제거.
 # 모듈의 명령은 모듈 파일이 있는 디렉토리가 아니라 루트 저장소에서 실행한다.
 set working-directory := '..'
+
+# 공개 원본의 주소. 접속 방식과 `.git`을 뺀 `호스트/소유자/저장소`를 소문자로 적는다.
+# 루트 저장소의 `origin`이 이 저장소이면 `add`가 거부한다(docs/adr/0007).
+public_origin := "github.com/powerumc/ontology"
+
+# 인자 없이 `just repo`만 부르면 명령 목록을 보여 준다. add는 인자가 필요해 기본 명령이 될 수 없다.
+[private]
+default:
+    @"{{just_executable()}}" --justfile "{{source_file()}}" --list
+
+# add: 지식 저장소를 projects/<이름>/에 서브모듈로 등록하고 추적 브랜치를 기록한다.
+# 이름을 생략하면 URL의 저장소 이름을, 브랜치를 생략하면 원격의 기본 브랜치를 쓴다.
+# 등록은 루트 저장소에 스테이징까지만 한다. 커밋은 사용자가 한다.
+
+# 지식 저장소를 projects/<이름>/에 서브모듈로 붙인다: just repo add <url> [이름] [브랜치]
+[no-exit-message]
+[positional-arguments]
+add url name='' branch='':
+    #!/usr/bin/env sh
+    set -eu
+
+    die() {
+        echo "오류: $*" >&2
+        exit 1
+    }
+
+    # 저장소 주소를 `호스트/소유자/저장소` 꼴로 줄인다. ssh와 https, `.git` 유무, 포트와 계정, 대소문자, 겹친 슬래시,
+    # www·ssh 호스트가 달라도 같은 값이 된다. ssh 주소의 호스트는 `ssh -G`(접속하지 않는다)로 ssh 설정의 별칭을 푼다.
+    normalize() {
+        u=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+        remote=1
+        via_ssh=0
+        case $u in
+            *://*)  # scheme://[계정@]호스트[:포트]/경로
+                scheme=${u%%://*}
+                rest=${u#*://}
+                authority=${rest%%/*}
+                host=${authority##*@}
+                host=${host%%:*}
+                case $scheme in
+                    ssh | git+ssh | ssh+git) via_ssh=1 ;;
+                esac
+                u=$host${rest#"$authority"}
+                ;;
+            /* | ./* | ../*) remote=0 ;;  # 로컬 경로
+            *:*)  # scp 꼴: [계정@]호스트:경로
+                host=${u%%:*}
+                host=${host##*@}
+                via_ssh=1
+                u=$host/${u#*:}
+                ;;
+        esac
+        if [ "$remote" = 1 ]; then
+            host=${u%%/*}
+            rest=${u#"$host"}
+            if [ "$via_ssh" = 1 ] && command -v ssh >/dev/null 2>&1; then
+                real=$(ssh -G -- "$host" 2>/dev/null </dev/null | awk '$1 == "hostname" { print tolower($2); exit }')
+                if [ -n "$real" ]; then
+                    host=$real
+                fi
+            fi
+            case $host in
+                www.* | ssh.*) host=${host#*.} ;;
+            esac
+            u=$host$rest
+        fi
+        u=$(printf '%s' "$u" | tr -s '/')
+        u=${u%/}
+        u=${u%.git}
+        printf '%s\n' "${u%/}"
+    }
+
+    # .gitmodules(두 번째 인자로 다른 파일을 줄 수 있다)에서 경로가 $1인 항목의 서브모듈 이름을 찾는다. 없으면 아무것도 출력하지 않는다.
+    gitmodules_name_of() {
+        file=${2:-.gitmodules}
+        [ -f "$file" ] || return 0
+        git config -f "$file" --name-only --get-regexp '^submodule\..*\.path$' |
+            while IFS= read -r key; do
+                if [ "$(git config -f "$file" --get "$key")" = "$1" ]; then
+                    sub=${key#submodule.}
+                    printf '%s\n' "${sub%.path}"
+                    break
+                fi
+            done
+    }
+
+    url=$1
+    name=$2
+    branch=$3
+
+    # --- 공개 원본에는 등록하지 않는다. 받아 올 주소와 푸시할 주소를 모두 본다 ---
+    public=$(normalize "{{public_origin}}")
+    origin_urls=$(git remote get-url --all origin 2>/dev/null || true)
+    push_urls=$(git remote get-url --push --all origin 2>/dev/null || true)
+    while IFS= read -r origin_url; do
+        [ -n "$origin_url" ] || continue
+        if [ "$(normalize "$origin_url")" = "$public" ]; then
+            die "이 저장소의 origin이 공개 원본($origin_url)입니다. 공개 원본에는 지식 저장소를 등록하지 않습니다. 이 저장소를 받아 origin을 자기 원격으로 바꾼 뒤 등록하세요. (docs/adr/0007)"
+        fi
+    done <<EOF
+    $origin_urls
+    $push_urls
+    EOF
+
+    case $url in
+        -*) die "URL이 올바르지 않습니다: $url" ;;
+        . | .. | ./* | ../*)
+            die "상대 URL은 쓸 수 없습니다: $url. git submodule add는 상대 URL을 origin 기준으로 풀지만 이 명령의 사전 확인은 현재 디렉토리 기준으로 풀어 서로 어긋납니다. 절대 주소나 절대 경로를 주세요."
+            ;;
+    esac
+
+    # --- 이름: 생략하면 URL의 마지막 조각에서 `.git`을 뗀 것 ---
+    if [ -z "$name" ]; then
+        name=${url%/}
+        name=${name%.git}
+        name=${name%/}
+        name=${name##*[/:]}
+        [ -n "$name" ] || die "URL에서 저장소 이름을 알 수 없습니다. 이름을 지정하세요: just repo add <url> <이름>"
+    fi
+    # projects/ 바로 아래의 디렉토리 이름이어야 한다. 경로 조각이나 옵션처럼 읽히는 이름은 받지 않는다.
+    case $name in
+        . | .. | -* | */*) die "이름이 올바르지 않습니다: '$name'. projects/ 바로 아래의 디렉토리 이름이어야 합니다." ;;
+    esac
+    path=projects/$name
+
+    # --- 같은 이름이 이미 있으면 아무것도 바꾸지 않고 거부한다. 원격에 접속하기 전에 본다 ---
+    if [ -f .gitmodules ]; then
+        git config -f .gitmodules --list >/dev/null || die ".gitmodules를 읽지 못했습니다"
+    fi
+    if [ -n "$(git -c core.quotePath=false --literal-pathspecs ls-files -- "$path")" ] ||
+        [ -n "$(gitmodules_name_of "$path")" ]; then
+        die "$path 가 이미 등록되어 있습니다."
+    fi
+    if [ -e "$path" ] || [ -L "$path" ]; then
+        die "$path 가 이미 있습니다. 같은 이름의 디렉토리나 파일이 있어 등록하지 않았습니다."
+    fi
+    modules_dir=$(git rev-parse --git-path "modules/$path")
+    if [ -e "$modules_dir" ]; then
+        die "이전에 등록했던 서브모듈 저장소가 $modules_dir 에 이미 남아 있습니다. 필요 없으면 지우고 다시 등록하세요."
+    fi
+
+    # --- 원격 확인: 접속할 수 있는지, 추적 브랜치가 있는지 먼저 본다 ---
+    # 없는 브랜치로 `git submodule add -b`를 하면 projects/<이름>/와 .git/modules가 반쯤 남는다.
+    if [ -z "$branch" ]; then
+        refs=$(git ls-remote --symref -- "$url" HEAD) || die "원격에 접속하지 못했습니다: $url"
+        branch=$(printf '%s\n' "$refs" | awk '$1 == "ref:" { sub("^refs/heads/", "", $2); print $2; exit }')
+        [ -n "$branch" ] || die "원격의 기본 브랜치를 알 수 없습니다. 브랜치를 지정하세요: just repo add <url> <이름> <브랜치>"
+    fi
+    heads=$(git ls-remote --heads -- "$url" "refs/heads/$branch") || die "원격에 접속하지 못했습니다: $url"
+    if ! printf '%s\n' "$heads" | awk -v ref="refs/heads/$branch" '$2 == ref { found = 1 } END { exit !found }'; then
+        die "원격에 $branch 브랜치가 없습니다: $url"
+    fi
+
+    # 복제가 실패하면 git이 서브모듈 디렉토리는 치우지만, 만들어 둔 빈 projects/는 남긴다.
+    had_projects=0
+    if [ -d projects ]; then
+        had_projects=1
+    fi
+    # 커밋된 등록을 지운 뒤에는 .gitmodules가 작업 트리에 없고 HEAD에만 있다. 그러면 git이 쓰기를 거부하므로 빈 파일을 둔다.
+    created_gitmodules=0
+    if [ ! -e .gitmodules ]; then
+        : >.gitmodules
+        created_gitmodules=1
+    fi
+    if ! git submodule add -b "$branch" -- "$url" "$path"; then
+        if [ "$created_gitmodules" = 1 ]; then
+            rm -f .gitmodules
+        fi
+        if [ "$had_projects" = 0 ]; then
+            rmdir projects 2>/dev/null || true
+        fi
+        die "$path 에 등록하지 못했습니다."
+    fi
+    # 등록 직후의 기능 복사(`onto sync <이름>`)는 #12에서 여기에 붙인다.
+    echo "등록했습니다: $path (추적 브랜치: $branch). 루트 저장소에 스테이징만 했습니다. 커밋은 직접 하세요."
+
+# remove: 지식 저장소를 서브모듈의 흔적까지 완전히 제거한다. 작업 트리, 등록 정보, .git/modules의 저장소가 모두 사라진다.
+# 미커밋 변경, 원격에 없는 커밋(어느 로컬 브랜치든, 태그에만 있는 것과 detached HEAD의 것 포함), 스태시, 연결된 작업 트리가 있으면
+# 이유와 함께 거부한다. 작업 트리를 먼저 치웠어도 .git/modules의 저장소를 검사한다. --force를 주면 버리고 제거한다.
+# 무시되는 파일(.gitignore가 제외한 것)은 거부 사유가 아니지만 함께 지워진다고 알린다.
+# 제거는 루트 저장소에 스테이징까지만 한다. 커밋은 사용자가 한다.
+
+# 지식 저장소를 완전히 제거한다. 버려질 작업이 있으면 거부한다: just repo remove <이름> [--force]
+[no-exit-message]
+[positional-arguments]
+remove *args:
+    #!/usr/bin/env sh
+    set -eu
+
+    die() {
+        echo "오류: $*" >&2
+        exit 1
+    }
+
+    usage="사용법: just repo remove <이름> [--force]"
+    force=0
+    name=
+    for arg in "$@"; do
+        case $arg in
+            --force | -f) force=1 ;;
+            -*) die "알 수 없는 옵션입니다: $arg. $usage" ;;
+            *)
+                [ -z "$name" ] || die "이름은 하나만 줄 수 있습니다. $usage"
+                name=$arg
+                ;;
+        esac
+    done
+    [ -n "$name" ] || die "제거할 이름을 주세요. $usage"
+    path=projects/$name
+
+    # .gitmodules(두 번째 인자로 다른 파일을 줄 수 있다)에서 경로가 $1인 항목의 서브모듈 이름을 찾는다. 없으면 아무것도 출력하지 않는다.
+    gitmodules_name_of() {
+        file=${2:-.gitmodules}
+        [ -f "$file" ] || return 0
+        git config -f "$file" --name-only --get-regexp '^submodule\..*\.path$' |
+            while IFS= read -r key; do
+                if [ "$(git config -f "$file" --get "$key")" = "$1" ]; then
+                    sub=${key#submodule.}
+                    printf '%s\n' "${sub%.path}"
+                    break
+                fi
+            done
+    }
+
+    # --- 등록된 지식 저장소인지: 루트가 기록한 커밋(gitlink)이나 .gitmodules 항목이 있어야 한다 ---
+    # 등록되지 않은 디렉토리는 이름이 같아도 지우지 않는다.
+    if [ -f .gitmodules ]; then
+        git config -f .gitmodules --list >/dev/null || die ".gitmodules를 읽지 못했습니다"
+    fi
+    gm_name=$(gitmodules_name_of "$path")
+    has_gitlink=0
+    if git -c core.quotePath=false --literal-pathspecs ls-files --stage -- "$path" |
+        awk -F '\t' -v path="$path" '$1 ~ /^160000 / && $2 == path { found = 1 } END { exit !found }'; then
+        has_gitlink=1
+    fi
+    if [ -z "$gm_name" ] && [ "$has_gitlink" = 0 ]; then
+        die "등록된 지식 저장소가 아닙니다: $name"
+    fi
+    sub_name=${gm_name:-$path}
+
+    # --- 서브모듈 저장소(git 디렉토리)를 찾는다 ---
+    # 작업 트리의 .git이 가리키는 곳과, 이름으로 짐작한 .git/modules/<이름> 둘 다 본다.
+    # 작업 트리를 먼저 치웠어도(git submodule deinit, rm -rf) 미푸시 커밋과 스태시는 그 저장소에만 남아 있다.
+    modules_root=$(git rev-parse --git-path modules)
+    if [ -d "$modules_root" ]; then
+        modules_root=$(cd "$modules_root" && pwd -P)
+    fi
+    unreadable=0
+    wt_gitdir=
+    if [ -e "$path/.git" ]; then
+        # `-C`로 들어간 곳이 서브모듈 저장소가 아니면(--show-prefix가 비어 있지 않으면) 루트 저장소를 읽게 된다.
+        prefix=$(git -C "$path" rev-parse --show-prefix 2>/dev/null) || prefix=unreadable
+        if [ -n "$prefix" ]; then
+            unreadable=1
+        else
+            wt_gitdir=$(git -C "$path" rev-parse --absolute-git-dir) || unreadable=1
+        fi
+    fi
+    mod_gitdir=
+    if [ -d "$(git rev-parse --git-path "modules/$sub_name")" ]; then
+        mod_gitdir=$(cd "$(git rev-parse --git-path "modules/$sub_name")" && pwd -P)
+    fi
+    if [ "$mod_gitdir" = "$wt_gitdir" ]; then
+        mod_gitdir=
+    fi
+    # .git/modules 안의 이름. .gitmodules에 항목이 없을 때 설정(.git/config)을 지울 이름을 여기서 알아낸다.
+    derived_name=
+    case $wt_gitdir in
+        "$modules_root"/?*) derived_name=${wt_gitdir#"$modules_root"/} ;;
+    esac
+
+    # --- 버려질 작업이 있는지 ---
+    # git 디렉토리 $1에 남은 작업을 말로 적는다. 아무것도 없으면 아무것도 출력하지 않는다. 읽지 못하면 실패한다.
+    # core.worktree가 가리키는 작업 트리가 없으면 git이 움직이지 못하므로, 있는 디렉토리를 작업 트리로 준다.
+    # 원격 추적 브랜치(refs/remotes)에 없는 커밋을 센다. 지금 원격에 있는지는 접속해 보지 않는다.
+    nl=$(printf '\nx')
+    nl=${nl%x}
+    inspected=
+    gg() {
+        git --git-dir="$inspected" --work-tree=. "$@"
+    }
+    describe_gitdir() {
+        inspected=$1
+        branches=$(gg for-each-ref --format='%(refname)' refs/heads) || return 1
+        pending=
+        for ref in $branches; do
+            total=$(gg rev-list --count "$ref" --not --remotes) || return 1
+            if [ "$total" -gt 0 ]; then
+                pending="$pending $ref"
+            fi
+        done
+        detached=$(gg rev-list --count HEAD --not --branches --remotes 2>/dev/null) || detached=0
+        tagged=$(gg rev-list --count --tags --not --branches --remotes) || return 1
+        if [ -n "$pending" ] || [ "$detached" -gt 0 ] || [ "$tagged" -gt 0 ]; then
+            echo "  원격에 없는 커밋:"
+            for ref in $pending; do
+                total=$(gg rev-list --count "$ref" --not --remotes)
+                echo "    ${ref#refs/heads/}: ${total}개"
+                gg log -n 10 "$ref" --not --remotes --format='      %h %s'
+                if [ "$total" -gt 10 ]; then
+                    echo "      … 외 $((total - 10))개"
+                fi
+            done
+            if [ "$detached" -gt 0 ]; then
+                echo "    (detached HEAD): ${detached}개"
+                gg log -n 10 HEAD --not --branches --remotes --format='      %h %s'
+                if [ "$detached" -gt 10 ]; then
+                    echo "      … 외 $((detached - 10))개"
+                fi
+            fi
+            if [ "$tagged" -gt 0 ]; then
+                echo "    태그에만 있는 커밋: ${tagged}개"
+                gg log -n 10 --tags --not --branches --remotes --format='      %h %s'
+                if [ "$tagged" -gt 10 ]; then
+                    echo "      … 외 $((tagged - 10))개"
+                fi
+            fi
+        fi
+        if gg rev-parse --verify --quiet refs/stash >/dev/null; then
+            echo "  스태시 ($(gg reflog show --format=%gd refs/stash | wc -l | tr -d ' ')개)"
+        fi
+        # git worktree add로 만든 작업 트리. 제거하면 그 작업 트리의 .git이 깨진다.
+        linked=
+        for entry in "$inspected"/worktrees/*; do
+            if [ -f "$entry/gitdir" ]; then
+                linked="$linked$(sed 's|/\.git$||' "$entry/gitdir")$nl"
+            fi
+        done
+        if [ -n "$linked" ]; then
+            echo "  연결된 작업 트리:"
+            printf '%s' "$linked" | sed 's/^/    /'
+        fi
+    }
+
+    gitdir_report=
+    for gd in "$wt_gitdir" "$mod_gitdir"; do
+        if [ -z "$gd" ]; then
+            continue
+        fi
+        found=$(describe_gitdir "$gd") || unreadable=1
+        if [ -n "$found" ]; then
+            gitdir_report="$gitdir_report$found$nl"
+        fi
+    done
+
+    dirty=
+    ignored=
+    stray=0
+    if [ -n "$wt_gitdir" ]; then
+        dirty=$(git -C "$path" -c core.quotePath=false status --porcelain --untracked-files=all) || unreadable=1
+        # 무시되는 파일은 거부 사유가 아니다. 루트 관리 파일(.onto/, 스킬 사본)은 알릴 것도 없다.
+        ignored=$(git -C "$path" -c core.quotePath=false ls-files --others --ignored --exclude-standard --directory |
+            grep -v -e '^\.onto/' -e '^\.claude/skills/onto-' || true)
+    elif [ -d "$path" ] && [ -n "$(ls -A "$path")" ] && [ "$unreadable" = 0 ]; then
+        stray=1  # 서브모듈이 초기화되지 않았는데 사용자의 파일이 들어 있다
+    fi
+
+    have_work=0
+    if [ -n "$dirty" ] || [ -n "$gitdir_report" ] || [ "$unreadable" = 1 ] || [ "$stray" = 1 ]; then
+        have_work=1
+    fi
+
+    # 버려질 것의 목록. 파일은 스무 개, 커밋은 브랜치마다 열 개까지만 보인다.
+    report() {
+        if [ "$unreadable" = 1 ]; then
+            echo "  서브모듈 저장소의 상태를 읽지 못했습니다. 버려지는 것이 있는지 알 수 없습니다."
+        fi
+        if [ "$stray" = 1 ]; then
+            echo "  서브모듈이 아직 초기화되지 않았는데 $path 에 파일이 있습니다."
+        fi
+        if [ -n "$dirty" ]; then
+            total=$(printf '%s\n' "$dirty" | wc -l | tr -d ' ')
+            echo "  미커밋 변경 (${total}개):"
+            printf '%s\n' "$dirty" | head -n 20 | sed 's/^/    /'
+            if [ "$total" -gt 20 ]; then
+                echo "    … 외 $((total - 20))개"
+            fi
+        fi
+        if [ -n "$gitdir_report" ]; then
+            printf '%s' "$gitdir_report"
+        fi
+    }
+    report_ignored() {
+        if [ -n "$ignored" ]; then
+            total=$(printf '%s\n' "$ignored" | wc -l | tr -d ' ')
+            echo "  무시되는 파일 (${total}개, .gitignore가 제외해 git에 없으므로 제거하면 되살릴 수 없습니다):"
+            printf '%s\n' "$ignored" | head -n 20 | sed 's/^/    /'
+            if [ "$total" -gt 20 ]; then
+                echo "    … 외 $((total - 20))개"
+            fi
+        fi
+    }
+
+    if [ "$have_work" = 1 ]; then
+        if [ "$force" = 0 ]; then
+            case $name in
+                *[[:space:]]*) shown="'$name'" ;;
+                *) shown=$name ;;
+            esac
+            echo "오류: $path 에 버려질 작업이 있어 제거하지 않았습니다. 아무것도 바꾸지 않았습니다." >&2
+            report >&2
+            report_ignored >&2
+            echo "이 작업을 버려도 되면 강제 옵션을 주세요: just repo remove $shown --force" >&2
+            exit 1
+        fi
+        echo "강제 옵션: 다음 작업을 버리고 $path 를 제거합니다."
+        report
+        report_ignored
+    elif [ -n "$ignored" ]; then
+        echo "참고: $path 를 제거하면 다음 파일도 함께 지워집니다."
+        report_ignored
+    fi
+
+    # --- 제거: 작업 트리, 루트의 등록 정보, .git/modules의 서브모듈 저장소 ---
+    # `git rm`과 `git submodule deinit`은 .gitmodules의 상태에 따라 거부하는 경우가 있어, 조각을 하나씩 직접 지운다.
+    path_physical=
+    if [ -d "$path" ]; then
+        path_physical=$(cd "$path" && pwd -P)
+    fi
+    if [ "$has_gitlink" = 1 ]; then
+        git update-index --force-remove -- "$path"
+    fi
+    # .gitmodules: 작업 트리의 파일에서 항목을 지운다. 인덱스에는 인덱스 쪽 내용에서 항목을 지운 것만 올려,
+    # 사용자가 손으로 고쳐 두고 스테이징하지 않은 다른 항목의 수정이 함께 스테이징되지 않게 한다.
+    if [ -n "$gm_name" ]; then
+        git config -f .gitmodules --remove-section "submodule.$gm_name"
+    fi
+    if git ls-files --error-unmatch -- .gitmodules >/dev/null 2>&1; then
+        staged=$(git rev-parse --git-path "repo-remove-gitmodules.$$")
+        git show :.gitmodules >"$staged"
+        staged_name=$(gitmodules_name_of "$path" "$staged")
+        if [ -n "$staged_name" ]; then
+            git config -f "$staged" --remove-section "submodule.$staged_name"
+        fi
+        if [ -z "$(git config -f "$staged" --list)" ]; then
+            git update-index --force-remove -- .gitmodules
+        else
+            git update-index --cacheinfo "100644,$(git hash-object -w "$staged"),.gitmodules"
+        fi
+        rm -f "$staged"
+    fi
+    # 마지막 항목을 지웠다면 빈 .gitmodules와 빈 projects/도 남기지 않는다.
+    if [ -f .gitmodules ] && [ -z "$(git config -f .gitmodules --list)" ]; then
+        rm -f .gitmodules
+    fi
+    rm -rf -- "$path"
+    rmdir projects 2>/dev/null || true
+    # 설정(.git/config)과 .git/modules의 저장소. .git/modules 밖에 있는 저장소는 남의 것일 수 있어 지우지 않는다.
+    for config_name in "$sub_name" "$derived_name"; do
+        if [ -n "$config_name" ]; then
+            git config --remove-section "submodule.$config_name" 2>/dev/null || true
+        fi
+    done
+    for gd in "$wt_gitdir" "$mod_gitdir"; do
+        case $gd in
+            '') ;;
+            "$modules_root"/?*)
+                rm -rf -- "$gd"
+                parent=$(dirname "$gd")
+                while [ "$parent" != "$modules_root" ] && rmdir "$parent" 2>/dev/null; do
+                    parent=$(dirname "$parent")
+                done
+                ;;
+            "$path_physical"/*) ;;  # 작업 트리 안의 .git 디렉토리. 작업 트리와 함께 지워졌다.
+            *) echo "주의: git 저장소 $gd 는 .git/modules 밖에 있어 지우지 않았습니다." >&2 ;;
+        esac
+    done
+    rmdir "$modules_root" 2>/dev/null || true
+
+    echo "제거했습니다: $path. 루트 저장소에 스테이징만 했습니다. 커밋은 직접 하세요."

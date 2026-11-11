@@ -206,6 +206,16 @@ def test_인자_없이_just만_부르면_명령_목록을_보여_주고_setup을
     assert not (clone / "projects" / "billing" / "README.md").exists()  # 서브모듈을 초기화하지 않았다
 
 
+def test_명령_목록은_setup이_무엇을_하는_명령인지_한_줄로_보여_준다(sandbox):
+    """just는 레시피 바로 위의 주석 한 줄만 설명으로 쓴다. 처음 쓰는 사람이 이 목록으로 setup을 알아본다."""
+    clone = sandbox.root().clone()
+
+    result = sandbox.just(cwd=clone)
+
+    setup_line = next(line for line in result.stdout.splitlines() if line.split()[:1] == ["setup"])
+    assert "새로 클론한 루트 저장소를 작업할 수 있는 상태로 만든다" in setup_line
+
+
 def test_gitmodules를_읽지_못하면_성공으로_넘기지_않고_0이_아닌_종료_코드로_끝난다(sandbox):
     """동시에 저장소를 붙이다 `.gitmodules`에 충돌 표시가 남은 경우."""
     root = sandbox.root()
