@@ -7,10 +7,11 @@
 from collections.abc import Iterator
 
 from ..compiler import Compiled
+from ..rules import RuleSet
 from .catalog import BY_NAME
 from .model import Issue
 
 
-def find(compiled: Compiled) -> Iterator[Issue]:
+def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     for problem in compiled.problems:
         yield Issue(BY_NAME[problem.check], problem.file, problem.message)

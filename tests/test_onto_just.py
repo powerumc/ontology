@@ -4,6 +4,7 @@
 임시 디렉토리로 복사한 것이고, 테스트마다 도구의 가상환경을 새로 만든다.
 """
 
+import json
 from pathlib import Path
 
 from support.onto_cli import ONTOLOGY_DIR, copy_onto, page, parse_table, repo, snapshot
@@ -279,3 +280,30 @@ def test_just_onto_validate는_문제가_없으면_아무것도_보고하지_않
     assert result.stdout == ""
     assert not (root / GRAPH).parent.exists()
     assert sandbox.git("status", "--porcelain", cwd=root).stdout == ""
+
+
+def test_just_onto_rules는_루트_기본_규칙과_저장소가_덮어쓴_규칙을_보여_주고_파일을_만들지_않는다(sandbox):
+    override = {"checks": {"orphan-page": {"enabled": False}}}
+    root = root_with_billing(sandbox, page("component/gateway", "Component", title="게이트웨이", partOf="project"), title="결제", rules=override)
+
+    default = sandbox.just("onto", "rules", cwd=root)
+    billing = sandbox.just("onto", "rules", "billing", cwd=root)
+
+    assert default.returncode == 0, default.stderr
+    assert billing.returncode == 0, billing.stderr
+    assert json.loads(default.stdout)["checks"]["orphan-page"] == {"enabled": True, "severity": "warning"}
+    assert json.loads(billing.stdout)["checks"]["orphan-page"] == {"enabled": False, "severity": "warning"}
+    assert sandbox.git("status", "--porcelain", cwd=root).stdout == ""
+
+
+def test_복사된_onto는_함께_복사된_루트_기본_규칙을_기본값으로_쓴다(sandbox):
+    """지식 저장소에서는 루트의 `onto/rules.yaml`이 `.onto/rules.yaml`로 복사되어 그 저장소의 기본값이 된다."""
+    knowledge_repo = sandbox.new_dir("knowledge", "billing")
+    copy_onto(sandbox, knowledge_repo / ".onto")
+    rules_file = knowledge_repo / ".onto" / "rules.yaml"
+    rules_file.write_text(rules_file.read_text(encoding="utf-8").replace("ignore-case: true", "ignore-case: false"), encoding="utf-8")
+
+    result = sandbox.just("rules", cwd=knowledge_repo, justfile=knowledge_repo / ".onto" / "Justfile")
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["duplicates"]["ignore-case"] is False

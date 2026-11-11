@@ -59,7 +59,11 @@ def test_예(onto_cli):
 
 `validate`의 보고는 문제 하나에 한 줄이고, 탭으로 나눈 다섯 칸이다: 심각도(`오류`/`경고`), 지식 저장소, 페이지(루트 저장소 기준 파일 경로), 검사 항목(이름), 설명. 파일 안의 `validate(onto_cli, root)`가 종료 코드와 이 다섯 칸의 목록을 주고, `found`는 설명을 뺀 앞 네 칸만 준다. 문제가 없는 견본(`clean_repos()`)에서는 출력이 비어야 한다.
 
-검사 항목마다 통과하는 견본과 걸리는 견본이 한 쌍씩 있다. 검사 항목의 이름과 기본 심각도는 `onto/onto_tool/checks/catalog.py`에 있고, 구조 제약(필수 속성, 값의 종류, 허용되는 클래스, 관계의 도메인과 범위)은 `onto/vocab/shapes.ttl`에 있다. 새 검사 항목을 더하면 카탈로그와 이 파일에 쌍을 더한다.
+검사 항목마다 통과하는 견본과 걸리는 견본이 한 쌍씩 있다. 검사 항목의 이름은 `onto/onto_tool/checks/catalog.py`에, 기본 심각도와 켬/끔은 루트 기본 규칙 `onto/rules.yaml`에 있고, 구조 제약(필수 속성, 값의 종류, 허용되는 클래스, 관계의 도메인과 범위)은 `onto/vocab/shapes.ttl`에 있다. 새 검사 항목을 더하면 카탈로그, `onto/rules.yaml`의 `checks`, 이 파일에 쌍을 더한다(규칙 파일에 빠지면 도구가 멈춘다).
+
+### 규칙(`test_onto_rules.py`)
+
+루트 기본 규칙(`onto/rules.yaml`)은 도구 사본 안의 파일이고 테스트 세션이 공유한다. `onto_cli.set_root_check(이름, enabled=…, severity=…)`와 `onto_cli.replace_in_root_rules(옛, 새)`가 그 파일을 고치고, 테스트가 끝나면 `onto_cli`가 원래대로 되돌린다. 지식 저장소의 덮어쓰기는 `repo("billing", …, rules={"checks": {"orphan-page": {"enabled": False}}})`처럼 `ontology.yaml`의 `rules`로 적는다. `rules` 명령(`onto_cli.run(root, "rules", "billing")`)이 적용되는 규칙을 JSON으로 보여 주므로, 검사에 쓰이지 않는 값(`sources`, `push-gate`, `language`의 일부)의 병합도 여기서 확인한다.
 
 ### 인덱스(`test_onto_index.py`)
 

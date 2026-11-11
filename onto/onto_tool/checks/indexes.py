@@ -11,13 +11,14 @@
 from collections.abc import Iterator
 
 from ..compiler import Compiled
+from ..rules import RuleSet
 from .catalog import INDEX_MISMATCH
 from .model import Issue
 
 _SHOWN = 3  # 설명에 보여 주는 어긋난 줄의 수(한쪽당)
 
 
-def find(compiled: Compiled) -> Iterator[Issue]:
+def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     # `index`가 `checks.classes`를 쓰므로 위에서 불러오면 두 패키지가 서로를 먼저 불러 순환한다.
     from .. import index
 

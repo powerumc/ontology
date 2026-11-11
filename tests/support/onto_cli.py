@@ -11,6 +11,7 @@ git 저장소일 필요가 없다. 도구는 현재 디렉토리를 루트 저�
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -20,6 +21,8 @@ from support.sandbox import SOURCE_REPO, Sandbox, copy_tracked_files
 # `just onto`가 부르는 것과 같은 명령줄. 모듈 이름으로 실행하므로 현재 디렉토리와 무관하다.
 # `-P`는 현재 디렉토리를 `sys.path` 맨 앞에 넣지 않는다. 지식 저장소 최상위의 `yaml.py` 같은 파일이 의존성을 가리지 않게 한다.
 TOOL_COMMAND = ("python", "-P", "-X", "utf8", "-m", "onto_tool")
+# 루트 기본 규칙. 도구 디렉토리 안에 있다(지식 저장소에서는 `.onto/rules.yaml`).
+RULES_FILE = "rules.yaml"
 
 
 def copy_onto(sandbox: Sandbox, dest: Path) -> Path:
@@ -48,6 +51,14 @@ class OntoCli:
         self._roots = 0
         # 도구 사본은 테스트 세션이 공유한다. 앞 테스트가 남긴 산출물이 보이지 않게 비운다.
         shutil.rmtree(self.build_dir, ignore_errors=True)
+        # 루트 기본 규칙도 공유한다. 테스트가 고친 것은 `restore_root_rules`가 되돌린다.
+        self._rules_file = tool_dir / RULES_FILE
+        self._original_rules = self._rules_file.read_text(encoding="utf-8") if self._rules_file.is_file() else None
+
+    @property
+    def env(self) -> dict[str, str]:
+        """도구를 실행하는 격리된 환경. `run(env=…)`에 넘길 값을 이 위에 덧붙여 만든다(`env`는 환경 전체를 대신한다)."""
+        return dict(self._sandbox.env)
 
     @property
     def build_dir(self) -> Path:
@@ -57,6 +68,41 @@ class OntoCli:
     @property
     def graph_file(self) -> Path:
         return self.build_dir / "graph.ttl"
+
+    # --- 루트 기본 규칙 -------------------------------------------------------------
+
+    def root_rules(self) -> str:
+        """루트 기본 규칙 파일(`rules.yaml`)의 내용."""
+        return self._rules_file.read_text(encoding="utf-8")
+
+    def write_root_rules(self, text: str) -> None:
+        """루트 기본 규칙 파일을 통째로 바꾼다. 테스트가 끝나면 되돌려진다."""
+        self._rules_file.write_text(text, encoding="utf-8")
+
+    def set_root_check(self, name: str, *, enabled: bool | None = None, severity: str | None = None) -> None:
+        """루트 기본 규칙에서 검사 항목 `name`의 켬/끔이나 심각도(`error`, `warning`)를 바꾼다. 항목은 파일에 한 줄로 적혀 있다."""
+        text = self.root_rules()
+        line = re.compile(rf"^(  {re.escape(name)}: \{{enabled: )(true|false)(, severity: )(error|warning)(\}})$", re.MULTILINE)
+        assert line.search(text), f"루트 기본 규칙에 `{name}` 항목의 줄이 없다"
+        flag = None if enabled is None else str(enabled).lower()
+        self.write_root_rules(line.sub(lambda m: f"{m[1]}{flag or m[2]}{m[3]}{severity or m[4]}{m[5]}", text, count=1))
+
+    def replace_in_root_rules(self, old: str, new: str) -> None:
+        """루트 기본 규칙의 글자 `old`를 `new`로 바꾼다. 파일에 `old`가 없으면 테스트가 실패한다."""
+        text = self.root_rules()
+        assert old in text, f"루트 기본 규칙에 `{old}`가 없다"
+        self.write_root_rules(text.replace(old, new, 1))
+
+    def replace_root_rules_with_directory(self) -> None:
+        """루트 기본 규칙 파일 자리를 디렉토리로 바꿔 읽을 수 없게 한다. 테스트가 끝나면 되돌려진다."""
+        self._rules_file.unlink()
+        self._rules_file.mkdir()
+
+    def restore_root_rules(self) -> None:
+        if self._rules_file.is_dir():
+            self._rules_file.rmdir()
+        if self._original_rules is not None:
+            self.write_root_rules(self._original_rules)
 
     def root(self, repos: dict[str, dict[str, str]] | None = None) -> Path:
         """견본 루트 디렉토리를 만든다. `repos`는 `{저장소명: {지식 저장소 안의 파일 경로: 내용}}`이다.

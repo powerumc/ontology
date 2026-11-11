@@ -14,16 +14,20 @@ from rdflib.namespace import RDF, SH, XSD
 
 from .. import vocab
 from ..compiler import Compiled
+from ..rules import RuleSet
 from .catalog import BY_NAME, MISSING_PROPERTY, RELATION_DOMAIN, RELATION_RANGE
 from .classes import ClassIndex
 from .labels import class_label, entity_label
 from .model import Issue
 
+# 범위가 주어의 클래스에도 달린 관계(`supersedes`: 같은 클래스끼리)의 도형. `vocab/shapes.ttl`의 `shape:supersedes-range`다.
+SUPERSEDES_RANGE = URIRef("https://onto.invalid/shape#supersedes-range")
+
 # `sh:datatype`로 요구하는 값을 사람이 읽는 말로
 _EXPECTED_VALUE = {str(XSD.string): "문자열", str(XSD.date): "날짜(예: 2026-03-01)"}
 
 
-def find(compiled: Compiled) -> Iterator[Issue]:
+def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     # pyshacl은 불러오는 데 시간이 든다. build와 query는 쓰지 않으므로 검사할 때 불러온다.
     from pyshacl import validate
 
@@ -47,7 +51,14 @@ def find(compiled: Compiled) -> Iterator[Issue]:
                 continue
             # 클래스를 알 수 없는 엔티티(클래스가 없거나 허용되지 않는다)가 든 관계는 클래스를 따지지 않는다. 그 엔티티의
             # 클래스 문제가 먼저 보고되고, 고친 뒤에야 관계의 오류가 새로 드러나는 일이 없게 한다.
-            involved = [focus, value] if check == RELATION_RANGE.name and isinstance(value, URIRef) else [focus]
+            # 따지는 엔티티는 판정에 클래스가 쓰이는 쪽뿐이다: 도메인은 주어(페이지), 범위는 가리키는 쪽이다. 주어의 클래스가 범위에
+            # 쓰이는 것은 `supersedes`(같은 클래스끼리) 하나다.
+            if check == RELATION_DOMAIN.name:
+                involved = [focus]
+            elif isinstance(value, URIRef):
+                involved = [focus, value] if report.value(result, SH.sourceShape) == SUPERSEDES_RANGE else [value]
+            else:
+                involved = []
             if not all(classes.has_allowed_class(node) for node in involved):
                 continue
         yield Issue(BY_NAME[check], file, _message(compiled.graph, shapes, report, result, check, keys))

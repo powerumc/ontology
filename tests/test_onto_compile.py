@@ -554,7 +554,7 @@ def test_페이지의_정의되지_않은_키는_그래프에_들어가지_않�
 
 def test_ontology_yaml의_다른_키는_Project의_사실이_되지_않고_제목이_없어도_이름으로_채우지_않는다(onto_cli):
     """`ontology.yaml`의 `title`·`description`·`aliases`는 선택이다. 공유 범위나 규칙 같은 키는 엔티티를 서술하지 않는다."""
-    with_other_keys = onto_cli.root(billing(title="결제", share="private", rules={"sources": ["docs/**/*.md"]}))
+    with_other_keys = onto_cli.root(billing(title="결제", scope="private", rules={"sources": {"include": ["docs/**/*.md"]}}))
     without_title = onto_cli.root(billing())
 
     predicates = onto_cli.query(

@@ -9,6 +9,7 @@ from pathlib import Path
 
 TOOL_DIR = Path(__file__).resolve().parents[1]
 VOCAB_DIR = TOOL_DIR / "vocab"
+RULES_FILE = TOOL_DIR / "rules.yaml"  # 루트 기본 규칙. 지식 저장소에서는 복사된 `.onto/rules.yaml`이 그 저장소의 기본값이다
 BUILD_DIR = TOOL_DIR / ".build"
 GRAPH_FILE = BUILD_DIR / "graph.ttl"
 # 모든 지식 저장소를 모은 전체 인덱스. 빌드 산출물이라 커밋하지 않는다. 지식 저장소 하나의 인덱스는 그 저장소의 온톨로지 층에 있다.

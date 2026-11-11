@@ -1216,3 +1216,50 @@ def test_온톨로지_층이_없는_서브모듈을_가리키는_교차_참조�
 
     assert [f[3] for f in findings] == ["broken-reference"]
     assert "온톨로지 층이 없다" in findings[0][4]
+
+
+# --- S1-07 재리뷰 지적 -----------------------------------------------------------
+
+
+def test_클래스가_둘인_페이지의_디렉토리_오류_설명은_실행마다_같고_디렉토리_순서로_적는다(onto_cli):
+    """문자열 해시는 프로세스마다 달라지므로, 집합을 도는 순서로 적으면 같은 견본의 출력이 실행마다 달라진다."""
+    root = onto_cli.root(with_pages(page("component/both", ["Plan", "Component"], title="둘 다", partOf="project", about="project")))
+
+    outputs = {
+        seed: onto_cli.run(root, "validate", env={**onto_cli.env, "PYTHONHASHSEED": str(seed)}).stdout for seed in range(1, 7)
+    }
+
+    assert len(set(outputs.values())) == 1, outputs
+    message = next(f[4] for f in validate(onto_cli, root)[1] if f[3] == "misplaced-page")
+    assert message.index("`Component`(`component/`)") < message.index("`Plan`(`plan/`)")
+
+
+def test_관계의_범위는_주어의_클래스를_알_수_없어도_가리키는_쪽의_클래스만으로_따진다(onto_cli):
+    """주어의 클래스 문제를 고친 뒤에야 범위 오류가 새로 드러나지 않는다. 범위는 주어의 클래스와 무관하다."""
+    root = onto_cli.root(
+        with_pages(page("component/widget", "Widget", title="위젯", partOf="plan/target"), page("plan/target", "Plan", title="대상", about="project"))
+    )
+
+    assert sorted(f[3] for f in validate(onto_cli, root)[1]) == ["disallowed-class", "relation-range"]
+
+
+def test_supersedes의_범위는_주어의_클래스를_알_수_없으면_따지지_않는다(onto_cli):
+    """supersedes만 주어의 클래스를 보고 범위를 정한다. 주어의 클래스를 알 수 없으면 그 문제가 먼저 보고된다."""
+    root = onto_cli.root(
+        with_pages(page("component/widget", "Widget", title="위젯", supersedes="component/old"), page("component/old", "Component", title="옛 것", partOf="project"))
+    )
+
+    assert [f[3] for f in validate(onto_cli, root)[1]] == ["disallowed-class"]
+
+
+@pytest.mark.parametrize("directory", ["Plan", "PLAN"])
+def test_대문자_디렉토리의_페이지는_같은_원인을_식별자_형식_하나로만_보고한다(onto_cli, directory):
+    root = onto_cli.root(with_pages(page(f"{directory}/lower", "Plan", title="계획", about="project")))
+
+    assert [f[3] for f in validate(onto_cli, root)[1]] == ["invalid-identifier"]
+
+
+def test_대문자가_아닌_이유로_디렉토리가_다르면_식별자_형식과_별개로_디렉토리_오류도_보고한다(onto_cli):
+    root = onto_cli.root(with_pages(page("Report/lower", "Plan", title="계획", about="project")))
+
+    assert sorted(f[3] for f in validate(onto_cli, root)[1]) == ["invalid-identifier", "misplaced-page"]
