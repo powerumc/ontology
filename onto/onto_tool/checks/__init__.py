@@ -4,7 +4,7 @@
 `validate`가 문제마다 규칙(`rules.yaml`, 지식 저장소가 덮어쓰면 그 값)이 정한 켬/끔과 심각도를 붙여 보고할 목록을 만든다.
 어떤 파일도 고치지 않는다.
 
-지식 저장소 안에서 돌리면(`workspace.Scope.REPOSITORY`) 그 저장소만 검사한다. 여러 지식 저장소에 걸친 검사 항목(`Check.across_repositories`: 교차 참조,
+지식 저장소 안에서 돌리면(`workspace.Within.REPOSITORY`) 그 저장소만 검사한다. 여러 지식 저장소에 걸친 검사 항목(`Check.across_repositories`: 교차 참조,
 공유 범위, 저장소 간 중복)은 건너뛴다. 교차 참조의 대상은 다른 저장소에 있어 이 저장소만으로는 알 수 없기 때문이다. 루트 저장소가 전체를 합쳐 검사한다.
 """
 
@@ -14,7 +14,7 @@ from pathlib import Path
 from .. import rules
 from ..compiler import Compiled, Problem
 from ..rules import RuleSet, Rules
-from ..workspace import Scope
+from ..workspace import Within
 from . import (
     duplicates,
     freshness,
@@ -113,7 +113,7 @@ def validate(compiled: Compiled, root_rules: Rules) -> list[Finding]:
     findings: set[Finding] = set()
     for module in _MODULES:
         for issue in module.find(compiled, applied):
-            if compiled.scope is Scope.REPOSITORY and issue.check.across_repositories:
+            if compiled.within is Within.REPOSITORY and issue.check.across_repositories:
                 continue
             repository = compiled.repository_of(issue.file)
             rule = applied.of(repository).checks[issue.check.name]

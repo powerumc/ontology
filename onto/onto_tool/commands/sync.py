@@ -6,7 +6,7 @@ import sys
 from ..errors import OntoError
 from ..paths import TOOL_DIR
 from ..sync import MANAGED_TREES, ROOT_TREE, Result, collect_sources, sync_repository, untracked_sources
-from ..workspace import Scope, Workspace
+from ..workspace import Within, Workspace
 from ._output import warn
 from ._workspace import open_workspace
 
@@ -65,7 +65,7 @@ def run(args: argparse.Namespace) -> int:
 
 def _require_root(workspace: Workspace) -> None:
     """루트 저장소의 `onto/`에서 도는지 본다. 지식 저장소 안(`just -f .onto/Justfile`)에서는 거부한다. 루트 저장소가 복사의 원본이다."""
-    if workspace.scope is Scope.REPOSITORY:
+    if workspace.within is Within.REPOSITORY:
         raise OntoError(
             "`sync`는 루트 저장소에서만 쓸 수 있다. 지식 저장소의 `.onto/`는 루트 저장소가 복사해 준 사본이다. "
             "루트 저장소에서 `just onto sync [이름]`을 실행한다"

@@ -6,7 +6,7 @@
 
 지식 저장소 안의 명령이 보고하는 경로는 그 저장소 기준(`docs/ontology/…`)이고, 루트 저장소의 `just onto …`는 루트 기준
 (`projects/<저장소>/docs/ontology/…`)이다. 도구가 지식 저장소 안의 범위를 어떻게 다루는지의 세부(검사 항목, 규칙, 읽을 수 없는 파일)는
-`test_onto_repository_scope.py`가 본다. 여기서는 Justfile을 거쳐 범위가 바르게 정해지는지를 본다.
+`test_onto_within_repository.py`가 본다. 여기서는 Justfile을 거쳐 도구가 어디 안에서 도는지가 바르게 정해지는지를 본다.
 """
 
 import re
@@ -236,3 +236,76 @@ def test_복사된_Justfile로_실행해도_지식_저장소의_Justfile은_만�
     bare = sandbox.just(cwd=shop)  # `-f` 없이 부르면 팀의 Justfile이 쓰인다
     assert bare.returncode == 0 and bare.stdout == "팀의 Justfile\n"
     assert sandbox.git("ls-files", "Justfile", cwd=shop).stdout.strip() == "Justfile"
+
+
+# --- 어디 안에서 도는지는 Justfile이 있는 곳으로 가린다 ----------------------------------------
+
+
+def test_루트_저장소에서_onto_Justfile을_직접_가리켜도_모든_지식_저장소를_합쳐_다룬다(sandbox):
+    """`just onto …`(모듈)와 `just -f onto/Justfile …`(직접)은 같은 파일이라 같은 결과다. 루트 저장소 자체를 지식 저장소 하나로 다루지 않는다."""
+    root, billing, _ = knowledge_repos(sandbox)
+    (billing / ONTOLOGY_DIR / "plan" / "ghost.md").write_text("---\nclass: Plan\ntitle: 유령\nowner: kim\n---\n", encoding="utf-8")
+    sparql = "SELECT ?e ?t WHERE { ?e a onto:Plan ; dcterms:title ?t } ORDER BY ?t"
+
+    for command in (("validate",), ("query", sparql), ("status",)):
+        via_module = sandbox.just("onto", *command, cwd=root)
+        direct = sandbox.just("-f", "onto/Justfile", *command, cwd=root)
+
+        assert (direct.returncode, direct.stdout, direct.stderr) == (via_module.returncode, via_module.stdout, via_module.stderr), command
+
+    direct_validate = sandbox.just("-f", "onto/Justfile", "validate", cwd=root)
+    assert direct_validate.returncode == 1
+    assert f"projects/billing/{ONTOLOGY_DIR}/plan/ghost.md" in direct_validate.stdout  # 루트 기준 경로로 지식 저장소를 검사한다
+    assert "이 저장소만 검사했다" not in direct_validate.stderr
+    build = sandbox.just("-f", "onto/Justfile", "build", cwd=root)
+    assert "지식 저장소 2개" in build.stdout, build.stderr or build.stdout
+    assert (root / "onto" / ".build" / "index.md").is_file()
+
+
+def test_지식_저장소의_팀_Justfile이_복사된_Justfile을_모듈로_불러도_그_저장소만_다룬다(sandbox):
+    """`mod onto '.onto/Justfile'`로 불러 `just onto …`를 쓰는 팀이 있어도 저장소를 하나도 찾지 못한 채 0으로 끝나지 않는다."""
+    root = sandbox.root()
+    billing_files = {
+        **repo("billing", page(BILLING_PLAN, "Plan", title=BILLING_PLAN_TITLE), title="결제"),
+        "Justfile": "mod onto '.onto/Justfile'\n",
+    }
+    billing = attach(sandbox, root, "billing", billing_files)
+    attach(sandbox, root, "shop", repo("shop", page(SHOP_PLAN, "Plan", title=SHOP_PLAN_TITLE), title="상점"))
+
+    build = sandbox.just("onto", "build", cwd=billing)
+    validate = sandbox.just("onto", "validate", cwd=billing)
+    query = sandbox.just("onto", "query", "SELECT ?e ?t WHERE { ?e a onto:Plan ; dcterms:title ?t }", cwd=billing)
+    sync = sandbox.just("onto", "sync", cwd=billing)
+
+    assert build.returncode == 0, build.stderr
+    assert "지식 저장소 1개" in build.stdout and BILLING_PLAN_TITLE in (billing / ".onto" / ".build" / "graph.ttl").read_text(encoding="utf-8")
+    assert (validate.returncode, validate.stdout) == (0, "")
+    assert "이 저장소만 검사했다" in validate.stderr
+    assert parse_table(query.stdout) == [["e", "t"], [f"{ONTOLOGY_DIR}/{BILLING_PLAN}.md", BILLING_PLAN_TITLE]]
+    assert sync.returncode == 1 and "루트 저장소에서만 쓸 수 있다" in sync.stderr
+
+
+def tool_command(tool_dir, *args: str) -> list:
+    """`just`를 거치지 않고 도구를 직접 실행하는 명령줄. 범위를 `Justfile`이 아니라 손으로 넘긴다."""
+    return ["uv", "run", "--locked", "--quiet", "--project", tool_dir, "python", "-P", "-X", "utf8", "-m", "onto_tool", *args]
+
+
+def test_지식_저장소의_도구를_루트_범위로_부르면_바른_명령을_알리며_거부한다(sandbox):
+    _, billing, _ = knowledge_repos(sandbox)
+
+    for flags in (("--within", "root"), ()):  # 범위를 안 주면 루트가 기본이다
+        result = sandbox.run(tool_command(billing / ".onto", *flags, "validate"), cwd=billing, check=False)
+
+        assert result.returncode == 1, flags
+        assert result.stdout == ""  # 저장소를 하나도 찾지 못한 채 통과하지 않는다
+        assert "just -f .onto/Justfile validate" in result.stderr, flags
+
+
+def test_루트_저장소의_도구를_지식_저장소_범위로_부르면_바른_명령을_알리며_거부한다(sandbox):
+    root, _, _ = knowledge_repos(sandbox)
+
+    result = sandbox.run(tool_command(root / "onto", "--within", "repository", "build"), cwd=root, check=False)
+
+    assert result.returncode == 1
+    assert "just onto build" in result.stderr
+    assert not (root / "onto" / ".build" / "graph.ttl").exists()  # 루트 저장소를 지식 저장소 하나로 다뤄 빈 그래프를 쓰지 않는다

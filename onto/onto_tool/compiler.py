@@ -3,7 +3,7 @@
 페이지의 frontmatter를 JSON-LD context(`vocab/context.jsonld`)로 RDF에 대응시킨다.
 같은 입력에서는 같은 그래프가 나온다. 파일을 이름 순으로 읽고, 트리플을 정렬해 싣는다.
 
-루트 저장소에서는 여러 지식 저장소가 하나의 그래프로 합쳐진다. 지식 저장소 안에서는 그 저장소 하나만 컴파일하고(`workspace.Scope`),
+루트 저장소에서는 여러 지식 저장소가 하나의 그래프로 합쳐진다. 지식 저장소 안에서는 그 저장소 하나만 컴파일하고(`workspace.Within`),
 보고하는 파일 경로도 그 저장소 기준이다. 루트 저장소나 다른 지식 저장소는 읽지 않는다.
 관계의 값은 같은 저장소의 식별자이거나, 다른 저장소의 엔티티를 가리키는 교차 참조(`<저장소 이름>:<식별자>`)이고,
 가리키는 엔티티가 있는지는 따지지 않는다. 모든 엔티티에는 온 지식 저장소의 이름을
@@ -40,7 +40,7 @@ from .pages import (
     scalar_values,
 )
 from .sources import SourceEntry, document_hashes, parse_entries, read_skipped
-from .workspace import ONTOLOGY_DIR, ONTOLOGY_YAML, PROJECTS_DIR, SKIPPED_YAML, Repository, Scope, Workspace
+from .workspace import ONTOLOGY_DIR, ONTOLOGY_YAML, PROJECTS_DIR, SKIPPED_YAML, Repository, Within, Workspace
 
 PROJECT_IDENTIFIER = "project"
 # 지식 저장소가 선언하는 클래스의 이름. 공통 어휘의 클래스 이름처럼 영어로 쓰고 대문자로 시작한다.
@@ -153,7 +153,7 @@ class Compiled:
     # `files`에 섞지 않는다: `files`의 키는 페이지가 있는 엔티티(`onto:repository`를 가진 것)이고 검사가 그렇게 읽는다.
     source_files: dict[str, str] = field(default_factory=dict)
     notices: list[str] = field(default_factory=list)  # 알릴 것(원본 문서의 해시를 git으로 내지 못했다). 검사 항목이 따로 보고하지 않는다
-    scope: Scope = Scope.ROOT  # 어느 범위에서 컴파일했는지
+    within: Within = Within.ROOT  # 어디 안에서 컴파일했는지(루트 저장소 또는 지식 저장소 안). 공유 범위와 무관하다
 
     def repository_of(self, file: str) -> str:
         """`file`(작업 공간 기준 경로)이 속한 지식 저장소의 이름(서브모듈 디렉토리 이름). 어느 저장소의 것도 아니면 빈 글자다.
@@ -161,7 +161,7 @@ class Compiled:
         루트 저장소에서는 `projects/<지식 저장소>/…`의 가운데 조각이다. 지식 저장소 안에서는 경로가 저장소 기준이라 접두어가 없고,
         모든 파일이 그 저장소의 것이다.
         """
-        if self.scope is Scope.REPOSITORY:
+        if self.within is Within.REPOSITORY:
             return self.records[0].directory
         parts = file.split("/")
         return parts[1] if len(parts) > 1 and parts[0] == PROJECTS_DIR else ""
@@ -223,7 +223,7 @@ def compile_workspace(workspace: Workspace) -> Compiled:
 
     problems += duplicates
     raw.parse(data=json.dumps({"@context": context, "@graph": nodes}), format="json-ld", base=UNRESOLVED_BASE)
-    return Compiled(canonical(raw), files, names, warnings, problems, records, source_files, notices, workspace.scope)
+    return Compiled(canonical(raw), files, names, warnings, problems, records, source_files, notices, workspace.within)
 
 
 def _duplicate_names(records: list[RepositoryRecord]) -> list[Problem]:

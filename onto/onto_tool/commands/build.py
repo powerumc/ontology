@@ -13,7 +13,7 @@ from ..compiler import compile_workspace
 from ..errors import OntoError
 from ..inference import infer
 from ..paths import ALL_INDEX_FILE, BUILD_DIR, GRAPH_FILE
-from ..workspace import Scope
+from ..workspace import Within
 from ._output import warn
 from ._rules import ensure_valid
 from ._workspace import open_workspace
@@ -62,7 +62,7 @@ def run(args: argparse.Namespace) -> int:
     for content in contents:
         path = workspace.root / content.index_file
         print(f"인덱스: {content.index_file} ({_write(path, index.render(content))})")
-    if workspace.scope is Scope.REPOSITORY:
+    if workspace.within is Within.REPOSITORY:
         return 0  # 저장소 하나의 인덱스는 위에서 만들었다. 전체 인덱스는 루트 저장소가 여러 저장소를 모을 때 쓴다
     # 전체 인덱스 파일(.build/ 안)에서 페이지 파일로 가는 상대 경로
     all_text = index.render_all(contents, lambda file: Path(os.path.relpath(workspace.root / file, BUILD_DIR)).as_posix())

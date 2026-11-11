@@ -5,9 +5,10 @@
 여기의 항목을 가리켜 문제를 보고한다. 이름은 규칙 파일이 항목을 가리키는 키가 되고 보고에도 나온다.
 루트 전용 항목(지식 저장소의 규칙이 끄거나 심각도를 바꿀 수 없는 것)은 `root_only=True`로 적는다. 공유 범위 검사, 규칙을 담은
 `ontology.yaml` 자체의 문제를 보고하는 항목, 지식 저장소 사이의 `name` 겹침이 그렇다.
-여러 지식 저장소에 걸친 항목(교차 참조, 공유 범위, 저장소 간 중복)은 `across_repositories=True`로 적는다. 지식 저장소 안에서 돌릴 때는
-그 저장소만 다루므로 이 항목들을 건너뛰고(`checks.validate`) 건너뛰었다고 알린다. 루트 전용인 것과는 별개다. 루트 전용이지만 한 저장소의
-문제를 보고하는 항목(`invalid-ontology-yaml`, `invalid-class-declaration`)은 지식 저장소 안에서도 돈다.
+여러 지식 저장소에 걸친 항목(교차 참조, 공유 범위, 저장소 간 중복, 다른 저장소에서 들어오는 참조에 따라 결과가 달라지는 고아 페이지)은
+`across_repositories=True`로 적는다. 지식 저장소 안에서 돌릴 때는 그 저장소만 다루므로 이 항목들을 건너뛰고(`checks.validate`) 건너뛰었다고 알린다.
+루트 전용인 것과는 별개다. 루트 전용이지만 한 저장소만 보고 판단할 수 있는 항목(`invalid-ontology-yaml`, `invalid-class-declaration`,
+`invalid-scope`, `path-reference`, `outside-link`)은 지식 저장소 안에서도 돈다. 새 항목이 어느 쪽인지는 그 항목이 다른 저장소의 사실에 기대는지로 정한다.
 """
 
 from .. import compiler
@@ -47,7 +48,11 @@ BROKEN_REFERENCE = Check("broken-reference", "관계가 가리키는 엔티티�
 UNREGISTERED_REPOSITORY = Check(
     "unregistered-repository", "교차 참조가 등록되지 않은 지식 저장소를 가리킨다", across_repositories=True
 )
-ORPHAN_PAGE = Check("orphan-page", "다른 엔티티와의 관계가 들어오는 것도 나가는 것도 없는 페이지다(derivedFrom은 세지 않는다)")
+ORPHAN_PAGE = Check(
+    "orphan-page",
+    "다른 엔티티와의 관계가 들어오는 것도 나가는 것도 없는 페이지다(derivedFrom은 세지 않는다). 들어오는 관계에는 다른 지식 저장소에서 오는 교차 참조도 든다",
+    across_repositories=True,
+)
 
 # --- 중복 ---------------------------------------------------------------------------
 DUPLICATE_ENTITY = Check("duplicate-entity", "같은 지식 저장소 안에 같은 클래스에서 이름(제목, 별칭)이 같은 엔티티가 있다")
@@ -86,6 +91,7 @@ SCOPE_VIOLATION = Check(
     "scope-violation",
     "교차 참조가 공유 범위가 더 좁은 지식 저장소(public에서 team이나 private으로, team에서 private으로)나 다른 팀(team:<팀 이름>이 다른 team)의 저장소를 가리킨다",
     root_only=True,
+    across_repositories=True,
 )
 
 PATH_REFERENCE = Check(
