@@ -13,9 +13,9 @@ ENTITY_BASE = "https://onto.invalid/entity/"
 # 지식 저장소가 선언한 하위 클래스의 IRI는 `<CLASS_BASE><저장소 이름>/<클래스 이름>`이다. 저장소마다 네임스페이스가 따로라
 # 다른 저장소가 같은 이름의 클래스를 선언해도 겹치지 않고, 엔티티의 IRI와 공통 어휘의 네임스페이스와도 겹치지 않는다.
 CLASS_BASE = "https://onto.invalid/class/"
-# context에 없는 용어(예: 공통 어휘에 없는 `class` 값)는 JSON-LD가 상대 IRI로 풀어 base를 붙인다.
-# base를 주지 않으면 rdflib이 실행 위치의 `file://` 주소를 쓰므로, 기기마다 다른 IRI가 그래프에 들어간다.
-# 엔티티의 IRI와 겹치지 않는 고정값을 주어, 풀리지 않은 용어가 그래프에서 알아볼 수 있게 남게 한다.
+# 풀리지 않는 용어(예: 공통 어휘에도 선언에도 없는 `class` 값)는 `unresolved_iri`가 이 base 아래의 IRI로 바꾼다.
+# JSON-LD를 파싱할 때도 이 base를 준다. 주지 않으면 rdflib이 실행 위치의 `file://` 주소를 쓰므로, 상대 IRI로 풀리는 값이
+# 기기마다 다른 IRI로 그래프에 들어간다. 엔티티의 IRI와 겹치지 않는 고정값이라, 풀리지 않은 용어가 그래프에서 알아볼 수 있게 남는다.
 UNRESOLVED_BASE = "https://onto.invalid/unresolved/"
 
 

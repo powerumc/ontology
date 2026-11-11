@@ -323,15 +323,40 @@ def test_페이지가_없는_클래스의_하위_클래스는_선언할_수_없�
 # --- 페이지의 class 값 -------------------------------------------------------
 
 OTHER_REPOSITORY_CLASS = "https://onto.invalid/class/shop/Secret"
+COMPONENT = "https://onto.invalid/vocab#Component"
 
 
 @pytest.mark.parametrize(
-    "value",
-    [OTHER_REPOSITORY_CLASS, INVOICE, "https://onto.invalid/vocab#Component", "onto:Component"],
-    ids=["다른_저장소의_클래스_IRI", "자기_저장소의_클래스_IRI", "공통_어휘의_클래스_IRI", "접두사_형식"],
+    ("value", "would_resolve_to"),
+    [
+        (OTHER_REPOSITORY_CLASS, OTHER_REPOSITORY_CLASS),
+        (INVOICE, INVOICE),
+        (COMPONENT, COMPONENT),
+        ("onto:Component", COMPONENT),
+        # `:`가 없는 상대 IRI도 JSON-LD가 base 밖으로 풀 수 있다. 어느 것도 클래스를 가리키지 않아야 한다.
+        ("/class/shop/Secret", OTHER_REPOSITORY_CLASS),
+        ("//onto.invalid/class/shop/Secret", OTHER_REPOSITORY_CLASS),
+        ("../class/shop/Secret", OTHER_REPOSITORY_CLASS),
+        ("/vocab#Component", COMPONENT),
+        ("../vocab#Component", COMPONENT),
+    ],
+    ids=[
+        "다른_저장소의_클래스_IRI",
+        "자기_저장소의_클래스_IRI",
+        "공통_어휘의_클래스_IRI",
+        "접두사_형식",
+        "루트에서_시작하는_상대_경로",
+        "스킴_없는_상대_IRI",
+        "상위로_나가는_상대_경로",
+        "루트에서_시작하는_어휘_경로",
+        "상위로_나가는_어휘_경로",
+    ],
 )
-def test_클래스는_이름으로만_쓴다_IRI로_쓴_값은_어느_클래스도_가리키지_않는다(onto_cli, value):
-    """다른 저장소가 선언한 클래스의 전체 IRI를 `class:`에 써서 이름만으로는 못 끌어 쓰는 제한을 우회할 수 없다."""
+def test_클래스는_이름으로만_쓴다_IRI로_쓴_값은_어느_클래스도_가리키지_않는다(onto_cli, value, would_resolve_to):
+    """다른 저장소가 선언한 클래스의 IRI를 `class:`에 써서 이름만으로는 못 끌어 쓰는 제한을 우회할 수 없다.
+
+    IRI로 풀릴 수 있는 값(전체 IRI, 접두사, 상대 경로)은 모두 풀리지 않은 클래스로 남는다.
+    """
     root = onto_cli.root(
         {
             "billing": repo(
@@ -348,8 +373,24 @@ def test_클래스는_이름으로만_쓴다_IRI로_쓴_값은_어느_클래스�
 
     assert result.returncode == 0, result.stderr
     assert onto_cli.query(root, 'SELECT ?e WHERE { ?e a onto:Component ; dcterms:title "몰래 쓴 클래스" }') == []
-    assert onto_cli.query(root, f'SELECT ?e WHERE {{ ?e a <{value}> ; dcterms:title "몰래 쓴 클래스" }}') == []
+    assert onto_cli.query(root, f'SELECT ?e WHERE {{ ?e a <{would_resolve_to}> ; dcterms:title "몰래 쓴 클래스" }}') == []
     assert typed and all(c.startswith("https://onto.invalid/unresolved/") for (c,) in typed)  # 풀리지 않은 클래스로 남아 알아볼 수 있다
+
+
+@pytest.mark.parametrize("value", [5, True, 1.5], ids=["정수", "논리값", "실수"])
+def test_문자열이_아닌_class_값도_어느_클래스도_가리키지_않는다(onto_cli, value):
+    """클래스 자리에 리터럴이 들어가 그래프가 어긋나지 않는다. 풀리지 않은 클래스로 남는다."""
+    root = onto_cli.root(
+        {"billing": repo("billing", page("component/sneaky", None, title="몰래 쓴 클래스", **{"class": value}))}
+    )
+
+    result = onto_cli.run(root, "build")
+    typed = onto_cli.query(root, 'SELECT (STR(?c) AS ?class) WHERE { ?e dcterms:title "몰래 쓴 클래스" ; a ?c }')
+    literal_typed = onto_cli.query(root, "SELECT ?e WHERE { ?e a ?c . FILTER(isLiteral(?c)) }")
+
+    assert result.returncode == 0, result.stderr
+    assert typed and all(c.startswith("https://onto.invalid/unresolved/") for (c,) in typed)
+    assert literal_typed == []
 
 
 # --- 클래스 선언의 출처 ------------------------------------------------------

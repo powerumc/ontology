@@ -11,6 +11,7 @@
 
 import json
 import re
+from collections.abc import Collection
 from dataclasses import dataclass, field
 
 from rdflib import Graph, URIRef
@@ -109,7 +110,7 @@ def _read_repository(
     read.problems += declarations.problems
 
     def add(identifier: str, meta: dict[str, object], file: str) -> None:
-        node = _node(name, identifier, meta, declared)
+        node = _node(name, identifier, meta, declared, common_classes.keys())
         read.nodes.append(node)
         read.files[node["@id"]] = file
 
@@ -134,7 +135,9 @@ def _read_repository(
     return read
 
 
-def _node(repository: str, identifier: str, meta: dict[str, object], declared_classes: set[str]) -> dict:
+def _node(
+    repository: str, identifier: str, meta: dict[str, object], declared_classes: set[str], common_class_names: Collection[str]
+) -> dict:
     """엔티티 하나의 JSON-LD 객체. `keys.PAGE_KEYS`에 있는 키만 옮기고, 키의 뜻은 context가 정한다.
 
     다른 키는 버린다. JSON-LD에 그대로 넘기면 `foo:bar` 같은 키가 술어가 되고, `@`로 시작하는 키는 예약어로 읽힌다.
@@ -143,26 +146,28 @@ def _node(repository: str, identifier: str, meta: dict[str, object], declared_cl
     node: dict = {"@id": entity_iri(repository, identifier), "onto:repository": repository}
     for key, value in meta.items():
         if key == "class":
-            node[key] = _classes(repository, value, declared_classes)
+            node[key] = _classes(repository, value, declared_classes, common_class_names)
         elif key in PAGE_KEYS:
             node[key] = _references(repository, key, value) if key in RELATION_KEYS else value
     return node
 
 
-def _classes(repository: str, value: object, declared_classes: set[str]) -> object:
-    """`class`의 값 가운데 이 지식 저장소가 선언한 클래스의 이름을 그 클래스의 IRI로 바꾼다. 다른 이름은 context가 푼다.
+def _classes(repository: str, value: object, declared_classes: set[str], common_class_names: Collection[str]) -> object:
+    """`class`의 값 가운데 이 지식 저장소가 선언한 클래스의 이름을 그 클래스의 IRI로 바꾼다. 공통 어휘의 클래스 이름은 context가 푼다.
 
-    클래스는 이름으로만 쓴다. `:`가 든 값(`https://…`, `onto:Component`)은 JSON-LD가 IRI로 읽어 어느 클래스든 가리킬 수 있어,
-    다른 저장소가 선언한 클래스를 이름만으로는 못 끌어 쓰는 제한을 우회한다. 그런 값은 어느 클래스도 가리키지 않는
-    풀리지 않은 클래스로 남긴다. 알 수 없는 클래스를 오류로 알리는 것은 스크립트 검사의 몫이다.
+    클래스는 이름으로만 쓴다. 이 저장소가 선언한 이름도 공통 어휘의 클래스 이름도 아닌 값은 JSON-LD에 넘기지 않고
+    어느 클래스도 가리키지 않는 풀리지 않은 클래스로 남긴다. 넘기면 JSON-LD가 IRI로 읽어 어느 클래스든 가리킬 수 있어
+    (`https://…`, `onto:Component`, 그리고 base 밖으로 나가는 `/class/shop/Secret`, `../vocab#Component`),
+    다른 저장소가 선언한 클래스를 이름만으로는 못 끌어 쓰는 제한을 우회한다. 알 수 없는 클래스를 오류로 알리는 것은 스크립트 검사의 몫이다.
     """
 
     def resolve(name: object) -> object:
         if isinstance(name, str) and name in declared_classes:
             return class_iri(repository, name)
-        if isinstance(name, str) and ":" in name:
-            return unresolved_iri(name)
-        return name
+        if isinstance(name, str) and name in common_class_names:
+            return name
+        # 문자열이 아닌 값(`class: 5`, `class: yes`)도 같다. 그대로 넘기면 리터럴이 클래스 자리에 들어간다.
+        return unresolved_iri(str(name))
 
     names = value if isinstance(value, list) else [value]
     resolved = [resolve(name) for name in names]
