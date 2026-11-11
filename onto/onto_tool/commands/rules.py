@@ -7,7 +7,7 @@ from pathlib import Path
 from ..checks import rule_set
 from ..errors import OntoError
 from ..keys import RULES_KEY
-from ..ontology_yaml import OntologyYamlError, read_ontology_yaml
+from ..ontology_yaml import OntologyYamlError, read_ontology_yaml, undefined_keys_message
 from ..workspace import ONTOLOGY_YAML, Workspace
 from ._rules import root_rules
 
@@ -37,6 +37,8 @@ def run(args: argparse.Namespace) -> int:
             raise OntoError(f"{where}: 온톨로지 층이 없다") from exc
         except OntologyYamlError as exc:
             raise OntoError(f"{where}: {exc}") from exc
+        if undefined := undefined_keys_message(data):  # `rule:` 같은 오타가 조용히 기본값으로 읽히지 않게 한다
+            raise OntoError(f"{where}: {undefined}")
         applied = rule_set(rules, {args.repository: data[RULES_KEY]} if data.get(RULES_KEY) is not None else {})
         if applied.problems:
             raise OntoError(*(f"{where}: {reason}" for reason in applied.problems[args.repository]))

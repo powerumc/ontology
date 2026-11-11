@@ -21,16 +21,8 @@ from . import vocab
 from .errors import OntoError
 from .graphs import canonical
 from .iri import UNRESOLVED_BASE, class_iri, entity_iri, resolve_reference, unresolved_iri
-from .keys import (
-    CLASS_DECLARATION_KEYS,
-    CLASSES_KEY,
-    ONTOLOGY_YAML_KEYS,
-    PAGE_KEYS,
-    PROJECT_KEYS,
-    RELATION_KEYS,
-    RULES_KEY,
-)
-from .ontology_yaml import OntologyYamlError, read_ontology_yaml
+from .keys import CLASS_DECLARATION_KEYS, CLASSES_KEY, PAGE_KEYS, PROJECT_KEYS, RELATION_KEYS, RULES_KEY
+from .ontology_yaml import OntologyYamlError, read_ontology_yaml, undefined_keys_message
 from .pages import (
     FrontmatterError,
     ValueKindError,
@@ -56,7 +48,10 @@ UNREADABLE_FILE = "unreadable-file"  # YAML 문법 오류, frontmatter 없음, U
 INVALID_VALUE = "invalid-value"  # 읽을 수는 있지만 값의 종류가 맞지 않음
 INVALID_CLASS_DECLARATION = "invalid-class-declaration"  # `ontology.yaml`의 `classes`가 틀림
 INVALID_IDENTIFIER = "invalid-identifier"  # 페이지로 쓸 수 없는 식별자
-UNDEFINED_KEY = "undefined-key"  # `ontology.yaml`에 정의되지 않은 키(페이지의 정의되지 않은 키는 스크립트 검사가 페이지에서 찾는다)
+# `ontology.yaml` 자체의 문제: 최상위의 정의되지 않은 키, `Project`가 되는 속성(`title`, `description`, `aliases`)의 값의 종류.
+# 규칙을 담은 파일이라 이 항목은 루트 전용이다. 저장소의 `rules`가 자기 파일의 오타를 끄거나 낮추지 못하게 한다.
+# 페이지의 같은 문제(`undefined-key`, `invalid-value`)는 저장소가 규칙으로 조정할 수 있는 별개의 항목이다.
+INVALID_ONTOLOGY_YAML = "invalid-ontology-yaml"
 
 
 @dataclass(frozen=True)
@@ -106,8 +101,10 @@ class Compiled:
     def ensure_valid(self) -> None:
         """읽을 수 없는 파일이 있으면 모두 모아 `OntoError`로 알린다.
 
-        일부만 컴파일한 그래프를 내놓지 않는 것은 부르는 명령(`build`, `query`)의 정책이다.
-        모든 문제를 모아 심각도별로 보고하는 검사는 `problems`를 그대로 쓴다.
+        일부만 컴파일한 그래프를 내놓지 않는 것은 부르는 명령(`build`, `query`)의 정책이다. 그래서 `problems`가 하나라도 있으면
+        규칙(검사 항목의 켬/끔과 심각도)과 무관하게 멈춘다. 모든 문제를 모아 심각도별로 보고하는 검사는 `problems`를 그대로 쓰고,
+        `ontology.yaml`의 문제(`invalid-ontology-yaml`, `invalid-class-declaration`)는 저장소가 규칙으로 조정할 수 없는
+        루트 전용 항목이라, 저장소의 규칙으로 `validate`는 통과하는데 `build`만 멈추는 일이 없다.
         """
         if self.problems:
             raise OntoError(*(str(problem) for problem in self.problems))
@@ -175,12 +172,8 @@ def _read_repository(
         return read
     name = read.record.name = str(data["name"])
     read.record.rules = data.get(RULES_KEY)
-    unknown = sorted(str(key) for key in data if key not in ONTOLOGY_YAML_KEYS)
-    if unknown:
-        allowed = ", ".join(f"`{key}`" for key in sorted(ONTOLOGY_YAML_KEYS))
-        read.problems.append(
-            Problem(yaml_file, f"정의되지 않은 키 {', '.join(f'`{key}`' for key in unknown)}가 있다(쓸 수 있는 키: {allowed})", UNDEFINED_KEY)
-        )
+    if undefined := undefined_keys_message(data):
+        read.problems.append(Problem(yaml_file, undefined, INVALID_ONTOLOGY_YAML))
 
     declarations, declared = _declare_classes(name, data.get(CLASSES_KEY), context, common_classes, yaml_file)
     read.nodes += declarations.nodes
@@ -195,7 +188,7 @@ def _read_repository(
         project = scalar_values({key: data[key] for key in PROJECT_KEYS if key in data})
         add(PROJECT_IDENTIFIER, {"class": "Project", **project}, yaml_file)
     except FrontmatterError as exc:
-        read.problems.append(Problem(yaml_file, str(exc), _kind(exc)))
+        read.problems.append(Problem(yaml_file, str(exc), INVALID_ONTOLOGY_YAML))
 
     read.record.misnamed_pages = [workspace.relative(path) for path in find_misnamed_pages(repository.ontology_dir)]
     for identifier, path in find_pages(repository.ontology_dir):

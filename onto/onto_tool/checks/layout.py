@@ -15,7 +15,7 @@ from ..compiler import Compiled
 from ..iri import entity_iri
 from ..keys import PAGE_CLASS_DIRECTORIES
 from ..rules import RuleSet
-from .catalog import MISNAMED_PAGE, MISPLACED_PAGE
+from .catalog import INVALID_IDENTIFIER, MISNAMED_PAGE, MISPLACED_PAGE
 from .classes import ClassIndex
 from .labels import class_label
 from .model import Issue
@@ -26,7 +26,9 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     directory_of = {URIRef(namespace + name): directory for name, directory in PAGE_CLASS_DIRECTORIES.items()}
     classes = ClassIndex(compiled.graph)
     for record in compiled.records:
-        identifier_form = re.compile(rules.of(record.directory).language.identifier_pattern)
+        repository_rules = rules.of(record.directory)
+        identifier_form = re.compile(repository_rules.language.identifier_pattern)
+        identifier_reported = repository_rules.checks[INVALID_IDENTIFIER.name].enabled
         for file in record.misnamed_pages:
             yield Issue(MISNAMED_PAGE, file, "페이지처럼 보이지만 확장자가 `.md`가 아니라 페이지로 읽히지 않았다")
         if record.name is None:
@@ -44,9 +46,10 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
             actual = page.identifier.partition("/")[0] if "/" in page.identifier else None
             if not expected or expected == {actual}:
                 continue
-            # 대소문자만 다른 디렉토리(`Plan/`)가 식별자 형식에도 어긋나면 식별자 형식 항목이 이미 보고한다. 디렉토리 이름 하나를
-            # 고치면 둘 다 사라지므로 겹쳐 알리지 않는다. 저장소의 규칙이 그 이름을 식별자로 허용하면 이 항목만 남는다.
-            if actual is not None and {actual.lower()} == expected and not identifier_form.fullmatch(actual):
+            # 대소문자만 다른 디렉토리(`Plan/`)가 식별자 형식에도 어긋나고 그 항목이 켜져 있으면 식별자 형식 항목이 이미 보고한다.
+            # 디렉토리 이름 하나를 고치면 둘 다 사라지므로 겹쳐 알리지 않는다. 저장소의 규칙이 그 이름을 식별자로 허용하거나
+            # 식별자 형식 항목을 껐으면 이 항목만 남는다.
+            if identifier_reported and actual is not None and {actual.lower()} == expected and not identifier_form.fullmatch(actual):
                 continue
             where = f"`{actual}/` 아래" if actual else "온톨로지 층 최상위"
             if len(expected) > 1:

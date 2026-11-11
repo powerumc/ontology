@@ -3,7 +3,8 @@
 검사를 더할 때 고치는 곳이다. 켬/끔과 심각도는 여기가 아니라 규칙 파일(`rules.yaml`)이 정하므로, 검사를 더하면 `rules.yaml`의
 `checks`에도 같은 이름의 항목을 더한다(빠지면 도구가 알린다). 항목을 실제로 돌리는 코드는 같은 패키지의 다른 모듈에 있고,
 여기의 항목을 가리켜 문제를 보고한다. 이름은 규칙 파일이 항목을 가리키는 키가 되고 보고에도 나온다.
-루트 전용 항목(지식 저장소의 규칙이 끄거나 심각도를 바꿀 수 없는 것, 공유 범위 검사)은 `root_only=True`로 적는다.
+루트 전용 항목(지식 저장소의 규칙이 끄거나 심각도를 바꿀 수 없는 것)은 `root_only=True`로 적는다. 공유 범위 검사와, 규칙을 담은
+`ontology.yaml` 자체의 문제를 보고하는 항목이 그렇다.
 """
 
 from .. import compiler
@@ -14,7 +15,14 @@ UNREADABLE_FILE = Check(compiler.UNREADABLE_FILE, "페이지나 ontology.yaml을
 INVALID_VALUE = Check(
     compiler.INVALID_VALUE, "속성의 값의 종류가 맞지 않는다(문자열이어야 하는 자리에 숫자나 중첩된 값, 없는 날짜 등)"
 )
-INVALID_CLASS_DECLARATION = Check(compiler.INVALID_CLASS_DECLARATION, "ontology.yaml의 classes에 선언한 하위 클래스가 틀렸다")
+INVALID_CLASS_DECLARATION = Check(
+    compiler.INVALID_CLASS_DECLARATION, "ontology.yaml의 classes에 선언한 하위 클래스가 틀렸다", root_only=True
+)
+INVALID_ONTOLOGY_YAML = Check(
+    compiler.INVALID_ONTOLOGY_YAML,
+    "ontology.yaml 최상위에 정의되지 않은 키가 있거나 Project가 되는 속성(title, description, aliases)의 값의 종류가 맞지 않는다",
+    root_only=True,
+)
 INVALID_IDENTIFIER = Check(
     compiler.INVALID_IDENTIFIER, "식별자 형식에 어긋난 페이지 경로(경로 조각이 언어 규칙의 identifier-pattern에 맞지 않는다. 기본은 영어 소문자, 숫자, 하이픈)"
 )
@@ -30,7 +38,7 @@ RELATION_DOMAIN = Check("relation-domain", "관계를 쓸 수 없는 클래스�
 RELATION_RANGE = Check("relation-range", "관계가 가리킬 수 없는 클래스의 엔티티를 가리켰다")
 
 # --- 페이지의 키와 참조 ------------------------------------------------------------
-UNDEFINED_KEY = Check(compiler.UNDEFINED_KEY, "페이지의 frontmatter나 ontology.yaml에 정의되지 않은 키가 있다")
+UNDEFINED_KEY = Check("undefined-key", "페이지에 정의되지 않은 frontmatter 키가 있다")
 REVERSE_RELATION = Check("reverse-relation", "역방향 관계(hasPart, implementedBy, governedBy, supersededBy)를 페이지에 직접 썼다")
 BROKEN_REFERENCE = Check("broken-reference", "관계가 가리키는 엔티티가 없다(같은 지식 저장소와 교차 참조)")
 UNREGISTERED_REPOSITORY = Check("unregistered-repository", "교차 참조가 등록되지 않은 지식 저장소를 가리킨다")
@@ -53,6 +61,7 @@ CHECKS = (
     UNREADABLE_FILE,
     INVALID_VALUE,
     INVALID_CLASS_DECLARATION,
+    INVALID_ONTOLOGY_YAML,
     INVALID_IDENTIFIER,
     MISPLACED_PAGE,
     MISNAMED_PAGE,

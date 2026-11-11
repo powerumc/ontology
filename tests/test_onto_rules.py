@@ -147,7 +147,7 @@ def test_ingest_대상의_기본값은_docs_아래_md_파일이고_온톨로지_
 def test_8의_기본_심각도가_루트_기본_규칙의_값으로_옮겨져_있고_모든_항목이_켜져_있다(onto_cli):
     checks = rules_of(onto_cli, onto_cli.root({}))["checks"]
 
-    assert {name: rule["severity"] for name, rule in checks.items()} == {**DEFAULT_SEVERITIES, "invalid-rules": "error"}
+    assert {name: rule["severity"] for name, rule in checks.items()} == {**DEFAULT_SEVERITIES, "invalid-ontology-yaml": "error", "invalid-rules": "error"}
     assert all(rule["enabled"] is True for rule in checks.values())
 
 
@@ -332,7 +332,7 @@ def test_ontology_yaml에_모르는_키가_있으면_파일과_키_이름을_알
 
     result, findings = validate(onto_cli, root)
 
-    assert [f[:4] for f in findings] == [(ERROR, "billing", yaml_file(), "undefined-key")]
+    assert [f[:4] for f in findings] == [(ERROR, "billing", yaml_file(), "invalid-ontology-yaml")]
     assert "`titel`" in findings[0][4]
     assert result.returncode == 1
 
@@ -518,3 +518,195 @@ def test_중복_처리를_지식_저장소가_덮어쓰면_그_저장소의_엔�
         (ERROR, "shop", file("component/a", "shop"), "duplicate-entity"),
         (ERROR, "shop", file("component/b", "shop"), "duplicate-entity"),
     ]
+
+
+# --- S1-08 리뷰 지적 -----------------------------------------------------------
+
+
+def stray_page():
+    return page("component/api", "Component", title="API", partOf="project", owner="kim")
+
+
+MUTE_UNDEFINED_KEY = {"checks": {"undefined-key": {"enabled": False}}}
+
+
+@pytest.mark.parametrize(
+    "mute",
+    [{"checks": {"undefined-key": {"enabled": False}}}, {"checks": {"undefined-key": {"severity": "warning"}}}],
+    ids=["끄기", "경고로_낮추기"],
+)
+def test_저장소가_undefined_key를_꺼도_ontology_yaml의_모르는_키는_오류로_보고하고_build도_같은_이유로_멈춘다(onto_cli, mute):
+    """`ontology.yaml`은 규칙을 담은 파일이다. 그 파일의 오타를 저장소가 자기 규칙으로 묻지 못한다. 페이지의 팀 고유 키는 묻을 수 있다."""
+    root = onto_cli.root({"billing": repo("billing", stray_page(), scpoe="team", rules=mute)})
+
+    result, findings = validate(onto_cli, root)
+    build = onto_cli.run(root, "build")
+
+    ontology_yaml_findings = [f for f in findings if f[2] == yaml_file()]
+    assert [f[:4] for f in ontology_yaml_findings] == [(ERROR, "billing", yaml_file(), "invalid-ontology-yaml")]
+    assert "`scpoe`" in ontology_yaml_findings[0][4]
+    assert result.returncode == 1
+    assert build.returncode == 1 and "`scpoe`" in build.stderr  # validate가 오류로 보는 문제로 build도 멈춘다
+
+
+def test_저장소가_undefined_key를_끄면_페이지의_모르는_키만_보고되지_않는다(onto_cli):
+    root = onto_cli.root({"billing": repo("billing", stray_page(), rules=MUTE_UNDEFINED_KEY)})
+
+    assert validate(onto_cli, root)[1] == []
+
+
+def test_ontology_yaml의_문제를_보고하는_검사_항목은_루트_전용이라_저장소가_덮어쓰지_못한다(onto_cli):
+    """루트 전용 검사 항목을 지식 저장소가 덮어쓰려 하면 오류다. 덮어쓰기는 통째로 버려지고 루트 기본 규칙으로 검사한다."""
+    for name in ("invalid-ontology-yaml", "invalid-class-declaration"):
+        override = {"checks": {name: {"enabled": False}, "orphan-page": {"enabled": False}}}
+        root = onto_cli.root({"billing": repo("billing", page("term/idle", "Term", title="한가한 용어"), rules=override)})
+
+        result, findings = validate(onto_cli, root)
+
+        assert [f[:4] for f in findings] == [
+            (ERROR, "billing", yaml_file(), "invalid-rules"),
+            (WARNING, "billing", file("term/idle"), "orphan-page"),  # 같이 적은 덮어쓰기도 적용되지 않는다
+        ], name
+        assert f"`rules.checks.{name}`" in findings[0][4] and "루트 전용" in findings[0][4]
+        assert result.returncode == 1
+
+
+def test_저장소가_invalid_value를_꺼도_읽을_수_없는_Project_속성은_ontology_yaml의_문제로_보고된다(onto_cli):
+    """중첩된 값은 읽을 수 없어 build가 멈춘다. 같은 문제를 validate도 오류로 본다."""
+    rules = {"checks": {"invalid-value": {"enabled": False}}}
+    root = onto_cli.root({"billing": repo("billing", title={"ko": "결제"}, rules=rules)})
+
+    result, findings = validate(onto_cli, root)
+
+    assert [f[:4] for f in findings] == [(ERROR, "billing", yaml_file(), "invalid-ontology-yaml")]
+    assert result.returncode == 1 and onto_cli.run(root, "build").returncode == 1
+
+
+def test_저장소가_invalid_value를_끄면_페이지의_값의_종류_오류는_보고되지_않는다(onto_cli):
+    rules = {"checks": {"invalid-value": {"enabled": False}}}
+    root = onto_cli.root({"billing": repo("billing", page("component/api", "Component", title=["a", {"b": 1}], partOf="project"), rules=rules)})
+
+    assert "invalid-value" not in [f[3] for f in validate(onto_cli, root)[1]]
+
+
+def test_루트_기본_규칙은_ontology_yaml의_문제_항목을_바꿀_수_있다(onto_cli):
+    """루트가 정한 값은 모든 저장소에 적용된다. 읽을 수 없는 파일을 일부만 컴파일한 그래프로 내놓지 않으므로 build와 query는 규칙과 무관하게 멈춘다."""
+    root = onto_cli.root({"billing": repo("billing", scpoe="team")})
+    onto_cli.set_root_check("invalid-ontology-yaml", severity="warning")
+
+    result, findings = validate(onto_cli, root)
+
+    assert [f[:4] for f in findings] == [(WARNING, "billing", yaml_file(), "invalid-ontology-yaml")]
+    assert result.returncode == 0
+    assert onto_cli.run(root, "build").returncode == 1
+
+
+@pytest.mark.parametrize("typo", [{"rule": {"sources": {"include": ["design/**/*.md"]}}}, {"scpoe": "team"}], ids=["rules_오타", "scope_오타"])
+def test_규칙_명령은_ontology_yaml_최상위의_오타를_조용히_넘기지_않고_오류로_끝난다(onto_cli, typo):
+    root = onto_cli.root({"billing": repo("billing", **typo)})
+
+    result = onto_cli.run(root, "rules", "billing")
+
+    (key,) = typo
+    assert result.returncode == 1 and result.stdout == ""
+    assert yaml_file() in result.stderr and f"`{key}`" in result.stderr
+
+
+def test_식별자_형식을_끈_저장소의_대문자_디렉토리_페이지도_디렉토리_오류는_보고된다(onto_cli):
+    """`Plan/`을 식별자 형식 항목이 대신 보고하는 것은 그 항목이 켜져 있을 때뿐이다."""
+    rules = {"checks": {"invalid-identifier": {"enabled": False}}}
+    muted = onto_cli.root({"billing": repo("billing", page("Plan/lower", "Plan", title="계획", about="project"), rules=rules)})
+    default = onto_cli.root({"billing": repo("billing", page("Plan/lower", "Plan", title="계획", about="project"))})
+
+    assert [f[3] for f in validate(onto_cli, muted)[1]] == ["misplaced-page"]
+    assert [f[3] for f in validate(onto_cli, default)[1]] == ["invalid-identifier"]
+
+
+@pytest.mark.parametrize("pattern", [".+", "[a-z0-9:-]+", "[a-z0-9 -]+", "\\S+"], ids=["아무_글자", "콜론", "공백", "공백이_아닌_글자"])
+def test_참조_문법을_깨는_식별자_형식은_규칙_오류로_거부한다(onto_cli, pattern):
+    """`:`는 교차 참조의 경계이고 참조는 앞뒤 공백을 뗀다. 이를 허용하는 형식에서는 식별자가 참조로 가리킬 수 없는 페이지가 생긴다."""
+    root = onto_cli.root({"billing": repo("billing", rules={"language": {"identifier-pattern": pattern}})})
+
+    result, findings = validate(onto_cli, root)
+
+    assert [f[:4] for f in findings] == [(ERROR, "billing", yaml_file(), "invalid-rules")]
+    assert "`rules.language.identifier-pattern`" in findings[0][4] and ":" in findings[0][4]
+    assert result.returncode == 1
+
+
+def test_루트_기본_규칙의_식별자_형식도_참조_문법을_깨면_오류로_끝난다(onto_cli):
+    onto_cli.replace_in_root_rules('identifier-pattern: "[a-z0-9-]+"', 'identifier-pattern: "[a-z0-9:-]+"')
+
+    result = onto_cli.run(onto_cli.root({}), "rules")
+
+    assert result.returncode == 1 and "`language.identifier-pattern`" in result.stderr
+
+
+@pytest.mark.parametrize("pattern", ["[a-z0-9_-]+", "[A-Za-z0-9-]+", "[a-z]+"])
+def test_참조_문법을_깨지_않는_식별자_형식은_받아들인다(onto_cli, pattern):
+    root = onto_cli.root({"billing": repo("billing", rules={"language": {"identifier-pattern": pattern}})})
+
+    assert validate(onto_cli, root)[1] == []
+
+
+@pytest.mark.parametrize(
+    ("language", "key"),
+    [
+        ({"body": "sorce"}, "rules.language.body"),
+        ({"body": "Korean"}, "rules.language.body"),
+        ({"aliases": ["korean", "englsh"]}, "rules.language.aliases"),
+        ({"aliases": ["source"]}, "rules.language.aliases"),
+        ({"aliases": ["ko", ""]}, "rules.language.aliases"),
+    ],
+    ids=["body_오타", "body_언어_이름", "별칭_언어_이름", "별칭에_source", "별칭에_빈_값"],
+)
+def test_언어_규칙의_값이_source나_언어_코드가_아니면_규칙_오류로_보고한다(onto_cli, language, key):
+    root = onto_cli.root({"billing": repo("billing", rules={"language": language})})
+
+    findings = validate(onto_cli, root)[1]
+
+    assert [f[:4] for f in findings] == [(ERROR, "billing", yaml_file(), "invalid-rules")]
+    assert f"`{key}`" in findings[0][4]
+
+
+@pytest.mark.parametrize("body", ["source", "ko", "en", "pt-BR", "zh-Hans", "fil"])
+def test_언어_규칙은_source와_언어_코드를_받아들인다(onto_cli, body):
+    root = onto_cli.root({"billing": repo("billing", rules={"language": {"body": body, "aliases": ["ko", "en", "ja"]}})})
+
+    assert validate(onto_cli, root)[1] == []
+
+
+def test_루트_기본_규칙의_언어_값_오타도_오류로_끝난다(onto_cli):
+    onto_cli.replace_in_root_rules("body: source", "body: sorce")
+
+    result = onto_cli.run(onto_cli.root({}), "validate")
+
+    assert result.returncode == 1 and "`language.body`" in result.stderr
+
+
+def test_루트_기본_규칙에_없는_날짜가_있으면_파일_이름과_함께_오류로_끝나고_트레이스백이_없다(onto_cli):
+    onto_cli.write_root_rules(onto_cli.root_rules() + "\nmemo: 2026-02-30\n")
+
+    result = onto_cli.run(onto_cli.root({}), "rules")
+
+    assert result.returncode == 1
+    assert "rules.yaml" in result.stderr and "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("text", ["", "# 주석뿐\n"], ids=["빈_파일", "주석뿐"])
+def test_빈_루트_기본_규칙은_빈_키_이름_없이_파일을_알리며_오류로_끝난다(onto_cli, text):
+    onto_cli.write_root_rules(text)
+
+    result = onto_cli.run(onto_cli.root({}), "rules")
+
+    assert result.returncode == 1
+    assert "rules.yaml" in result.stderr and "``" not in result.stderr and "Traceback" not in result.stderr
+
+
+def test_루트_기본_규칙을_읽을_수_없으면_파일을_알리며_오류로_끝나고_트레이스백이_없다(onto_cli):
+    onto_cli.replace_root_rules_with_directory()
+
+    result = onto_cli.run(onto_cli.root({}), "validate")
+
+    assert result.returncode == 1
+    assert "rules.yaml" in result.stderr and "Traceback" not in result.stderr

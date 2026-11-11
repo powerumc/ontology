@@ -93,7 +93,14 @@ class OntoCli:
         assert old in text, f"루트 기본 규칙에 `{old}`가 없다"
         self.write_root_rules(text.replace(old, new, 1))
 
+    def replace_root_rules_with_directory(self) -> None:
+        """루트 기본 규칙 파일 자리를 디렉토리로 바꿔 읽을 수 없게 한다. 테스트가 끝나면 되돌려진다."""
+        self._rules_file.unlink()
+        self._rules_file.mkdir()
+
     def restore_root_rules(self) -> None:
+        if self._rules_file.is_dir():
+            self._rules_file.rmdir()
         if self._original_rules is not None:
             self.write_root_rules(self._original_rules)
 

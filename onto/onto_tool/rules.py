@@ -149,13 +149,25 @@ def _compare(value: object) -> list[str]:
     return names
 
 
+# 식별자의 경로 조각이 이 중 하나와 맞는 형식은 받지 않는다. 참조(`<저장소 이름>:<식별자>`)가 그 식별자를 가리키지 못한다.
+# `:`는 저장소 이름과의 경계로 읽히고, 참조는 앞뒤 공백을 뗀다.
+_UNREFERENCEABLE_SEGMENTS = ("a:b", ":", "a:", ":a", " a", "a ")
+# 언어 코드: `ko`, `en`, `pt-BR`, `zh-Hans`
+_LANGUAGE_CODE = re.compile(r"[a-z]{2,3}(-[A-Za-z0-9]+)*")
+
+
 def _pattern(value: object) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError("정규 표현식 문자열이어야 한다")
     try:
-        re.compile(value)
+        form = re.compile(value)
     except re.error as exc:
         raise ValueError(f"정규 표현식이 아니다: {exc}") from exc
+    if any(form.fullmatch(segment) for segment in _UNREFERENCEABLE_SEGMENTS):
+        raise ValueError(
+            f"형식 `{value}`는 `:`나 앞뒤 공백이 든 경로 조각을 허용한다. `:`는 교차 참조(`<저장소 이름>:<식별자>`)의 경계이고 "
+            "참조는 앞뒤 공백을 떼므로, 그런 식별자의 페이지는 참조로 가리킬 수 없다"
+        )
     return value
 
 
@@ -165,8 +177,18 @@ def _text(value: object) -> str:
     return value.strip()
 
 
+def _body_language(value: object) -> str:
+    """`source`(원본 문서의 언어를 따른다)이거나 언어 코드."""
+    if not isinstance(value, str) or not (value.strip() == "source" or _LANGUAGE_CODE.fullmatch(value.strip())):
+        raise ValueError("`source`나 언어 코드(예: `ko`, `en`, `pt-BR`)여야 한다")
+    return value.strip()
+
+
 def _languages(value: object) -> list[str]:
-    return _strings(value, "언어 코드 문자열")
+    codes = _strings(value, "언어 코드 문자열")
+    if bad := [code for code in codes if not _LANGUAGE_CODE.fullmatch(code)]:
+        raise ValueError(f"언어 코드(예: `ko`, `en`, `pt-BR`)의 목록이어야 한다. 아닌 값: {', '.join(f'`{code}`' for code in bad)}")
+    return codes
 
 
 _Schema = dict[str, "_Schema | Callable[[object], object]"]
@@ -179,7 +201,7 @@ def _schema(known_checks: Collection[str]) -> _Schema:
         "checks": {name: {"enabled": _boolean, "severity": _severity} for name in known_checks},
         "push-gate": {"enabled": _boolean},
         "duplicates": {"compare": _compare, "ignore-case": _boolean, "ignore-whitespace": _boolean},
-        "language": {"identifier-pattern": _pattern, "body": _text, "aliases": _languages},
+        "language": {"identifier-pattern": _pattern, "body": _body_language, "aliases": _languages},
     }
 
 
@@ -196,7 +218,8 @@ class _Reader:
         self.problems: list[str] = []
 
     def problem(self, path: tuple[str, ...], reason: str) -> None:
-        self.problems.append(f"`{'.'.join((*self.prefix, *path))}`: {reason}")
+        label = ".".join((*self.prefix, *path))
+        self.problems.append(f"`{label}`: {reason}" if label else reason)  # 파일 전체의 문제는 키 이름이 없다
 
     def read(self, data: object, schema: _Schema, path: tuple[str, ...] = ()) -> dict[str, Any]:
         if not isinstance(data, dict):
@@ -240,10 +263,14 @@ def load_root_rules(path: Path, *, known_checks: Collection[str]) -> Rules:
         data = yaml.safe_load(path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError as exc:
         raise RulesError("루트 기본 규칙 파일이 없다") from exc
+    except OSError as exc:  # 디렉토리이거나 권한이 없다
+        raise RulesError(f"읽을 수 없다: {exc.strerror or exc}") from exc
     except UnicodeDecodeError as exc:
         raise RulesError("UTF-8 문서가 아니다") from exc
     except yaml.YAMLError as exc:
         raise RulesError(f"YAML 문법 오류: {str(exc).strip().splitlines()[0]}") from exc
+    except ValueError as exc:  # `2026-02-30`처럼 날짜 모양이지만 없는 날짜는 YAMLError가 아니라 ValueError로 나온다
+        raise RulesError(f"값을 읽을 수 없다: {exc}") from exc
     reader = _Reader((), (), complete=True)
     values = reader.read(data, _schema(known_checks))
     if reader.problems:
