@@ -45,6 +45,7 @@ def billing_files(body: str, *, deep: str = "") -> dict[str, str]:
     files = repo("billing", *pages)
     files["docs/design.md"] = "# 설계\n"
     files["docs/my notes.md"] = "# 메모\n"
+    files["docs/설계/결정 기록.md"] = "# 결정 기록\n"
     return files
 
 
@@ -167,6 +168,8 @@ EXISTING_RELATIVE_LINKS = {
     "점_조각": "[x](./api.md)",
     "원본_문서": "[x](../../design.md)",
     "공백이_든_파일의_퍼센트_인코딩": "[x](../../my%20notes.md)",
+    "한글_경로의_퍼센트_인코딩": "[x](../../%EC%84%A4%EA%B3%84/%EA%B2%B0%EC%A0%95%20%EA%B8%B0%EB%A1%9D.md)",
+    "인코딩하지_않은_한글_경로": "[x](<../../설계/결정 기록.md>)",
     "꺾쇠_안의_공백": "[x](<../../my notes.md>)",
     "저장소_루트": "[x](../../../)",
     "디렉토리": "[x](../term/)",
@@ -217,6 +220,47 @@ def test_저장소_안의_상대_링크가_가리키는_파일이_없으면_깨�
     assert [finding[:4] for finding in findings] == [(ERROR, "billing", GATEWAY, "broken-reference")]
     assert destination in findings[0][4]  # 설명이 어느 링크인지 알려 준다
     assert result.returncode == 1
+
+
+# 참조 정의(`[이름]: 대상`)는 대상 뒤가 비었거나 제목(`"…"`, `'…'`, `(…)`)뿐일 때만 정의다. 각주 정의(`[^1]: …`)와 `[주의]: 이 값은 …` 같은 문장은
+# 링크가 아니다(CommonMark). 첫 낱말을 링크 대상으로 읽으면 렌더링되는 각주 하나에 오류가 나 푸시 관문이 막힌다.
+NOT_DEFINITIONS = {
+    "각주_정의": "결제 흐름은 원본 설계를 따른다[^1].\n\n[^1]: 설계 문서 3장\n",
+    "이름이_붙은_각주_정의": "원본을 따른다[^note].\n\n[^note]: 원본 문서를 보면 된다\n",
+    "각주가_경로로_시작한다": "원본[^2].\n\n[^2]: ../../none.md 의 3장\n",
+    "대괄호_뒤_콜론_문장": "[주의]: 이 값은 바뀔 수 있다\n",
+    "경로로_시작하는_문장": "[참고]: ../term/none.md 에 있다\n",
+    "절대_경로로_시작하는_문장": "[참고]: /etc/hosts 를 본다\n",
+    "교차_참조_모양으로_시작하는_문장": "[메모]: nowhere:term/x 는 아직 없다\n",
+    "제목_뒤에_글이_더_있다": '[메모]: none.md "제목" 그리고 더\n',
+}
+
+
+@pytest.mark.parametrize("body", NOT_DEFINITIONS.values(), ids=NOT_DEFINITIONS.keys())
+def test_각주_정의와_대괄호_뒤_콜론으로_시작하는_문장은_링크가_아니라서_대상을_따지지_않는다(onto_cli, body):
+    result, findings = validate(onto_cli, onto_cli.root(samples(body)))
+
+    assert findings == []
+    assert result.returncode == 0
+
+
+DEFINITIONS_WITH_TITLE = {
+    "큰따옴표_제목": '[r]: ../term/none.md "제목"\n',
+    "작은따옴표_제목": "[r]: ../term/none.md '제목'\n",
+    "괄호_제목": "[r]: ../term/none.md (제목)\n",
+    "꺾쇠와_제목": '[r]: <../term/none.md> "제목"\n',
+    "뒤에_공백": "[r]: ../term/none.md   \n",
+    "들여쓴_정의": "   [r]: ../term/none.md\n",
+    "교차_참조": '[r]: shop:component/missing "제목"\n',
+}
+
+
+@pytest.mark.parametrize("body", DEFINITIONS_WITH_TITLE.values(), ids=DEFINITIONS_WITH_TITLE.keys())
+def test_대상_뒤가_비었거나_제목뿐인_참조_정의는_링크로_보고_대상이_없으면_깨진_참조로_잡는다(onto_cli, body):
+    findings = validate(onto_cli, onto_cli.root(samples(f"[x][r]\n\n{body}")))[1]
+
+    assert [finding[:4] for finding in findings] == [(ERROR, "billing", GATEWAY, "broken-reference")]
+    assert "none.md" in findings[0][4] or "shop:component/missing" in findings[0][4]
 
 
 def test_저장소_밖을_가리키는_링크는_깨진_참조가_아니라_저장소_밖_링크로만_보고한다(onto_cli):
