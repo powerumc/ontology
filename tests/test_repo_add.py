@@ -489,3 +489,107 @@ def test_최신화가_확인_필요만_알려도_건너뛴_것이_있다고_하�
     assert "최신화가 문제를 보고했습니다" in result.stderr and "건너뛴 것과" not in result.stderr
     assert "`건너뜀`" in result.stderr and "`확인 필요`" in result.stderr  # 두 분류를 모두 가리킨다
     assert "just onto sync billing" in result.stderr
+
+
+# --- 저장소가 이미 선언한 name과 등록 이름이 다르면 등록 전에 거부한다 -------------------------------------
+# `name`은 서브모듈 디렉토리 이름과 같아야 하고 교차 참조가 그 이름으로 저장소를 가리킨다. 다른 이름으로 붙이면 등록은 되지만 스크립트 검사가
+# `repository-name-mismatch` 오류로 잡아 푸시 관문이 막는다. 붙이기 전에 알려 아무것도 남기지 않는다.
+
+DECLARED_NAME_FORMS = {
+    "평범한_값": 'name: billing\nscope: private\n',
+    "따옴표_값과_주석": 'name: "billing"  # 이 저장소의 이름\nscope: private\n',
+    "따옴표_키": '"name": "billing"\n',
+    "흐름_목록": "{name: billing, scope: private}\n",
+}
+
+
+def _declaring(name, text=None):
+    return {"README.md": f"# {name}\n", "docs/ontology/ontology.yaml": text or f"name: {name}\nscope: private\n"}
+
+
+@pytest.mark.parametrize("text", DECLARED_NAME_FORMS.values(), ids=DECLARED_NAME_FORMS.keys())
+def test_선언한_name과_다른_이름을_지정하면_등록_전에_거부하고_선언한_이름을_알린다(sandbox, text):
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing", files=_declaring("billing", text))
+
+    result = _rejected_leaving_everything_unchanged(sandbox, root, billing.url, "pay")
+
+    assert "`billing`" in result.stderr and "`pay`" in result.stderr  # 선언한 이름과 등록하려던 이름
+    assert "ontology.yaml" in result.stderr
+    assert f"just repo add {billing.url} billing" in result.stderr  # 바른 이름으로 다시 하는 명령
+    assert not (root.work / "projects" / "pay").exists()
+    assert not (root.work / ".gitmodules").exists() and not (root.work / ".git" / "modules").exists()
+
+
+def test_이름을_생략해도_URL에서_정한_이름이_선언한_name과_다르면_거부한다(sandbox):
+    root = sandbox.root()
+    remote = sandbox.knowledge_remote("billing-docs", files=_declaring("billing"))
+
+    result = _rejected_leaving_everything_unchanged(sandbox, root, remote.url)
+
+    assert "`billing`" in result.stderr and "`billing-docs`" in result.stderr
+    assert f"just repo add {remote.url} billing" in result.stderr
+
+
+def test_거부할_때_알리는_명령은_지정한_브랜치를_그대로_가져간다(sandbox):
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing", files=_declaring("billing"))
+    billing.commit(branch="dev")
+
+    result = _rejected_leaving_everything_unchanged(sandbox, root, billing.url, "pay", "dev")
+
+    assert f"just repo add {billing.url} billing dev" in result.stderr
+
+
+def test_선언한_name과_같은_이름이면_등록한다(sandbox):
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing", files=_declaring("billing"))
+
+    result = _add(sandbox, root, billing.url)
+
+    assert result.returncode == 0, result.stderr
+    assert (root.work / "projects" / "billing" / "docs" / "ontology" / "ontology.yaml").is_file()
+
+
+def test_선언한_name은_지정한_추적_브랜치의_것을_본다(sandbox):
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing", files=_declaring("billing"))
+    billing.commit(branch="dev", files={"docs/ontology/ontology.yaml": "name: pay\nscope: private\n"})
+
+    rejected = _rejected_leaving_everything_unchanged(sandbox, root, billing.url, "billing", "dev")
+    accepted = _add(sandbox, root, billing.url, "pay", "dev")
+
+    assert "`pay`" in rejected.stderr and "`billing`" in rejected.stderr
+    assert accepted.returncode == 0, accepted.stderr
+    assert _recorded_branch(sandbox, root, "pay") == "dev"
+
+
+UNDECLARED = {
+    "온톨로지_층이_없다": {"README.md": "# docs\n"},
+    "name이_없다": _declaring("x", "scope: private\n"),
+    "읽을_수_없는_yaml": _declaring("x", "name: [열리지 않은 목록\n"),
+    "name이_문자열이_아니다": _declaring("x", "name: 5\n"),
+}
+
+
+@pytest.mark.parametrize("files", UNDECLARED.values(), ids=UNDECLARED.keys())
+def test_name을_선언하지_않았거나_읽을_수_없는_저장소는_어떤_이름으로도_붙일_수_있다(sandbox, files):
+    """읽을 수 없는 `ontology.yaml`은 등록한 뒤 최신화가 건너뛰고 알린다. 이름이 다르다는 이유로 거부하지는 않는다."""
+    root = sandbox.root()
+    remote = sandbox.knowledge_remote("billing", files=files)
+
+    result = _add(sandbox, root, remote.url, "pay")
+
+    assert "선언했는데" not in result.stderr
+    assert (root.work / "projects" / "pay").is_dir()
+    assert _staged(sandbox, root) == {".gitmodules", "projects/pay"}
+
+
+def test_선언한_name이_디렉토리_이름으로_쓸_수_없으면_그_이유와_저장소의_name을_고치라고_알린다(sandbox):
+    root = sandbox.root()
+    remote = sandbox.knowledge_remote("billing", files=_declaring("billing", "name: .hidden/billing\n"))
+
+    result = _rejected_leaving_everything_unchanged(sandbox, root, remote.url, "pay")
+
+    assert "`.hidden/billing`" in result.stderr and "디렉토리 이름으로 쓸 수 없" in result.stderr
+    assert "just repo add" not in result.stderr  # 알려 줄 바른 명령이 없다
