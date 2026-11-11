@@ -126,6 +126,12 @@ add url name='' branch='':
     esac
     path=projects/$name
 
+    # --- 병합 충돌 상태이면 아무것도 바꾸지 않고 거부한다 ---
+    # 충돌 표시를 지웠어도 `git add`하기 전에는 인덱스에 스테이지 1~3이 남아, git이 .gitmodules를 쓰거나 읽다가 멈춘다.
+    if [ -n "$(git --literal-pathspecs ls-files --unmerged -- .gitmodules "$path")" ]; then
+        die ".gitmodules나 $path 가 병합 충돌 상태입니다. 충돌을 먼저 해결하세요(해결한 파일을 git add). 아무것도 바꾸지 않았습니다."
+    fi
+
     # --- 같은 이름이 이미 있으면 아무것도 바꾸지 않고 거부한다. 원격에 접속하기 전에 본다 ---
     if [ -f .gitmodules ]; then
         git config -f .gitmodules --list >/dev/null || die ".gitmodules를 읽지 못했습니다"
@@ -180,6 +186,7 @@ add url name='' branch='':
 # remove: 지식 저장소를 서브모듈의 흔적까지 완전히 제거한다. 작업 트리, 등록 정보, .git/modules의 저장소가 모두 사라진다.
 # 미커밋 변경, 원격에 없는 커밋(어느 로컬 브랜치든, 태그에만 있는 것과 detached HEAD의 것 포함), 스태시, 연결된 작업 트리가 있으면
 # 이유와 함께 거부한다. 작업 트리를 먼저 치웠어도 .git/modules의 저장소를 검사한다. --force를 주면 버리고 제거한다.
+# 태그에만 이어진 커밋은 원격에도 있는 태그를 뺀다(그런 커밋이 있을 때만 `git ls-remote`로 접속한다. 접속하지 못하면 거부한다).
 # 무시되는 파일(.gitignore가 제외한 것)은 거부 사유가 아니지만 함께 지워진다고 알린다.
 # 제거는 루트 저장소에 스테이징까지만 한다. 커밋은 사용자가 한다.
 
@@ -210,6 +217,12 @@ remove *args:
     done
     [ -n "$name" ] || die "제거할 이름을 주세요. $usage"
     path=projects/$name
+
+    # 병합 충돌 상태이면 아무것도 바꾸지 않고 거부한다. 충돌 표시를 지웠어도 `git add`하기 전에는 인덱스에 스테이지 1~3이 남아,
+    # 제거가 인덱스의 .gitmodules를 읽는 데서 멈추고 그 전에 바꾼 것(gitlink, 작업 트리의 .gitmodules)이 어중간하게 남는다.
+    if [ -n "$(git --literal-pathspecs ls-files --unmerged -- .gitmodules "$path")" ]; then
+        die ".gitmodules나 $path 가 병합 충돌 상태입니다. 충돌을 먼저 해결하세요(해결한 파일을 git add). 아무것도 바꾸지 않았습니다."
+    fi
 
     # .gitmodules(두 번째 인자로 다른 파일을 줄 수 있다)에서 경로가 $1인 항목의 서브모듈 이름을 찾는다. 없으면 아무것도 출력하지 않는다.
     gitmodules_name_of() {
@@ -275,9 +288,10 @@ remove *args:
     # --- 버려질 작업이 있는지 ---
     # git 디렉토리 $1에 남은 작업을 말로 적는다. 아무것도 없으면 아무것도 출력하지 않는다. 읽지 못하면 실패한다.
     # core.worktree가 가리키는 작업 트리가 없으면 git이 움직이지 못하므로, 있는 디렉토리를 작업 트리로 준다.
-    # 원격 추적 브랜치(refs/remotes)에 없는 커밋을 센다. 지금 원격에 있는지는 접속해 보지 않는다.
+    # 원격 추적 브랜치(refs/remotes)에 없는 커밋을 센다. 지금 원격에 있는지는 접속해 보지 않는다. 태그에만 이어진 커밋만 예외다(아래).
     nl=$(printf '\nx')
     nl=${nl%x}
+    tab=$(printf '\t')
     inspected=
     gg() {
         git --git-dir="$inspected" --work-tree=. "$@"
@@ -293,7 +307,31 @@ remove *args:
             fi
         done
         detached=$(gg rev-list --count HEAD --not --branches --remotes 2>/dev/null) || detached=0
+        # 태그에만 이어진 커밋. 클론은 원격의 태그를 모두 가져오므로, 원격에도 있는 태그(같은 이름, 같은 객체)의 커밋은 버려지는 작업이 아니다.
+        # 그런 커밋이 있을 때만 원격에 접속해(ls-remote) 원격에 없는 태그를 가린다. 접속하지 못하면 모든 태그를 그대로 세고 그렇다고 알린다.
         tagged=$(gg rev-list --count --tags --not --branches --remotes) || return 1
+        tag_refs=
+        tags_unverified=0
+        if [ "$tagged" -gt 0 ]; then
+            local_tags=$(gg for-each-ref --format="%(objectname)$tab%(refname)" refs/tags) || return 1
+            if remote_tags=$(gg ls-remote --tags origin 2>/dev/null </dev/null); then
+                while IFS= read -r entry; do
+                    [ -n "$entry" ] || continue
+                    if ! printf '%s\n' "$remote_tags" | grep -Fxq -- "$entry"; then
+                        tag_refs="$tag_refs ${entry#*"$tab"}"
+                    fi
+                done <<EOF
+    $local_tags
+    EOF
+            else
+                tags_unverified=1
+                tag_refs=$(gg for-each-ref --format='%(refname)' refs/tags | tr '\n' ' ') || return 1
+            fi
+            tagged=0
+            if [ -n "$tag_refs" ]; then
+                tagged=$(gg rev-list --count $tag_refs --not --branches --remotes) || return 1
+            fi
+        fi
         if [ -n "$pending" ] || [ "$detached" -gt 0 ] || [ "$tagged" -gt 0 ]; then
             echo "  원격에 없는 커밋:"
             for ref in $pending; do
@@ -313,9 +351,12 @@ remove *args:
             fi
             if [ "$tagged" -gt 0 ]; then
                 echo "    태그에만 있는 커밋: ${tagged}개"
-                gg log -n 10 --tags --not --branches --remotes --format='      %h %s'
+                gg log -n 10 $tag_refs --not --branches --remotes --format='      %h %s'
                 if [ "$tagged" -gt 10 ]; then
                     echo "      … 외 $((tagged - 10))개"
+                fi
+                if [ "$tags_unverified" = 1 ]; then
+                    echo "      (원격에 접속하지 못해 이 태그들이 원격에도 있는지 확인하지 못했다)"
                 fi
             fi
         fi

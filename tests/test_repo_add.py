@@ -369,3 +369,18 @@ def test_상대_URL은_받지_않고_거부한다(sandbox, url):
     result = _rejected_leaving_everything_unchanged(sandbox, root, url)
 
     assert "상대" in result.stderr
+
+
+def test_gitmodules가_병합_충돌_상태이면_이유를_알리고_거부하며_아무것도_바꾸지_않는다(sandbox):
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    root.leave_gitmodules_unmerged(sandbox.knowledge_remote("docs"))
+    assert sandbox.git("ls-files", "-u", "--", ".gitmodules", cwd=root.work).stdout  # 충돌 상태다
+    before = sandbox.snapshot(root.work)
+
+    result = _add(sandbox, root, sandbox.knowledge_remote("invoice").url)
+
+    assert result.returncode != 0
+    assert "충돌" in result.stderr
+    assert sandbox.snapshot(root.work) == before
+    assert not (root.work / "projects" / "invoice").exists()

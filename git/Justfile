@@ -1,3 +1,279 @@
 # git 모듈: 모든 지식 저장소와 루트 저장소에 걸친 일괄 git 작업(최신 받기, 푸시, 상태).
 # 모듈의 명령은 모듈 파일이 있는 디렉토리가 아니라 루트 저장소에서 실행한다.
 set working-directory := '..'
+
+# 인자 없이 `just git`만 부르면 명령 목록을 보여 준다. 첫 명령인 `pull`이 기본으로 실행되어 저장소가 바뀌지 않게 한다.
+[private]
+default:
+    @"{{just_executable()}}" --justfile "{{source_file()}}" --list
+
+# 저장소를 순회하고 상태를 판정하는 공통 부분은 lib.sh에 있다. 레시피가 읽어 쓴다. push도 같은 함수를 쓴다.
+
+# pull: 루트 저장소와 모든 지식 저장소를 fast-forward로만 최신으로 올린다. 어떤 저장소도 커밋하거나 스테이징하지 않는다.
+# 루트 저장소를 먼저 받는다(그래야 새로 등록된 지식 저장소가 목록에 든다). 그 뒤 지식 저장소를 하나씩 받는다.
+# 모든 저장소는 fetch한다. 그다음 올릴 수 있는 곳만 올린다.
+# - 지식 저장소는 추적 브랜치(.gitmodules에 기록된 것)에 있을 때만 올린다. 다른 브랜치에 있으면 fetch만 한다.
+# - 루트 저장소는 현재 브랜치를 origin의 같은 이름 브랜치로 올린다.
+# - fast-forward가 안 되는 곳(로컬 커밋이 갈라짐, 받아 올 변경과 겹치는 미커밋 변경)은 건드리지 않고 건너뛴 뒤 이유를 보고한다.
+# 한 저장소가 건너뛰어지거나 실패해도 나머지를 계속 처리하고, 끝에 저장소별 결과를 요약한다.
+# 건너뜀은 정상 결과라 종료 코드는 0이다. fetch 같은 실패가 있으면 끝까지 처리한 뒤 1로 끝난다.
+
+# 루트 저장소와 모든 지식 저장소를 fast-forward로 최신으로 받는다.
+[no-exit-message]
+pull:
+    #!/usr/bin/env sh
+    # 한 저장소의 문제로 나머지가 멈추지 않도록 -e는 쓰지 않는다. 실패할 수 있는 명령은 그때마다 직접 처리한다.
+    set -u
+    . "{{source_directory()}}/lib.sh"
+
+    updated=
+    unchanged=
+    skipped=
+    failed=
+    advanced=
+    need_setup=0
+
+    # record <updated|unchanged|skipped|failed> <표시 이름> [상세]
+    record() {
+        line=$2
+        if [ -n "${3:-}" ]; then
+            line="$line — $3"
+        fi
+        case $1 in
+            updated) updated="$updated$line$NL" ;;
+            unchanged) unchanged="$unchanged$line$NL" ;;
+            skipped) skipped="$skipped$line$NL" ;;
+            failed) failed="$failed$line$NL" ;;
+        esac
+    }
+
+    first_line() {
+        printf '%s\n' "$1" | sed -n '/./{p;q;}'
+    }
+
+    # pull_one <경로> <표시 이름> <서브모듈 이름>
+    # 서브모듈 이름이 비어 있으면(루트 저장소) 현재 브랜치를 origin의 같은 이름 브랜치로 올린다.
+    # 지식 저장소는 추적 브랜치에 있을 때만 올린다. 추적 브랜치는 fetch 뒤에 정한다(.gitmodules에 기록이 없으면
+    # 원격의 기본 브랜치인 origin/HEAD가 추적 브랜치인데, fetch가 이를 되살린다). 결과는 record로 남기고 항상 0으로 돌아온다.
+    pull_one() {
+        po_path=$1
+        po_label=$2
+        po_name=$3
+
+        if ! repo_initialized "$po_path"; then
+            need_setup=1
+            record skipped "$po_label" "초기화되지 않았다. just setup으로 초기화하세요"
+            return 0
+        fi
+        if ! git -C "$po_path" remote get-url origin >/dev/null 2>&1; then
+            record skipped "$po_label" "origin 원격이 없다"
+            return 0
+        fi
+        # 서브모듈의 서브모듈까지 따라가 받지 않는다(루트의 fetch가 지식 저장소를 건드리지 않게).
+        if ! po_err=$(git -C "$po_path" fetch --quiet --recurse-submodules=no origin 2>&1); then
+            record failed "$po_label" "fetch에 실패했다: $(first_line "$po_err")"
+            return 0
+        fi
+
+        po_track=
+        if [ -n "$po_name" ]; then
+            po_track=$(tracking_branch "$po_name" "$po_path")
+        fi
+        po_branch=$(repo_branch "$po_path")
+        if [ -z "$po_branch" ]; then
+            record skipped "$po_label" "detached HEAD($(git -C "$po_path" rev-parse --short HEAD 2>/dev/null))라 fetch만 했다"
+            return 0
+        fi
+        if [ -n "$po_name" ] && [ -z "$po_track" ]; then
+            record skipped "$po_label" "추적 브랜치를 알 수 없어 fetch만 했다. .gitmodules에 branch가 없고 원격의 기본 브랜치도 알 수 없다"
+            return 0
+        fi
+        if [ -n "$po_track" ] && [ "$po_branch" != "$po_track" ]; then
+            record skipped "$po_label" "추적 브랜치($po_track)가 아니라 $po_branch 브랜치에 있어 fetch만 했다"
+            return 0
+        fi
+        po_target=${po_track:-$po_branch}
+        po_remote_ref=refs/remotes/origin/$po_target
+        if ! po_remote=$(git -C "$po_path" rev-parse --verify --quiet "$po_remote_ref"); then
+            record skipped "$po_label" "원격에 $po_target 브랜치가 없다"
+            return 0
+        fi
+        if ! po_head=$(git -C "$po_path" rev-parse --verify --quiet HEAD); then
+            record skipped "$po_label" "커밋이 아직 없다"
+            return 0
+        fi
+
+        if [ "$po_head" = "$po_remote" ]; then
+            record unchanged "$po_label"
+            return 0
+        fi
+        if git -C "$po_path" merge-base --is-ancestor "$po_remote" "$po_head"; then
+            # 원격이 로컬의 이력 안에 있다: 받을 것이 없다. 로컬이 앞서 있을 뿐이다.
+            po_ahead=$(git -C "$po_path" rev-list --count "$po_remote..$po_head" 2>/dev/null) || po_ahead=?
+            record unchanged "$po_label" "받을 것이 없다(푸시하지 않은 로컬 커밋 ${po_ahead}개)"
+            return 0
+        fi
+        if ! git -C "$po_path" merge-base --is-ancestor "$po_head" "$po_remote"; then
+            po_counts=$(git -C "$po_path" rev-list --left-right --count "$po_head...$po_remote" 2>/dev/null) || po_counts="?	?"
+            po_ahead=${po_counts%%"$TAB"*}
+            po_behind=${po_counts#*"$TAB"}
+            record skipped "$po_label" "로컬 커밋 ${po_ahead}개와 원격 커밋 ${po_behind}개가 갈라져 fast-forward가 안 된다"
+            return 0
+        fi
+
+        # fast-forward가 가능하다. 받아 올 변경과 겹치는 로컬 작업이 있으면 git이 아무것도 바꾸지 않고 거부해야 한다.
+        # 사용자의 git 설정과 기본값이 그 약속을 깨지 않도록 명령줄에서 고정한다(명령줄 옵션이 설정보다 우선한다).
+        # - --no-autostash: merge.autoStash나 branch.<이름>.mergeOptions가 켜져 있으면 미커밋 변경을 스태시했다가 다시 적용해
+        #   겹치는 변경이 조용히 섞이거나 충돌 표시와 함께 남는다.
+        # - --no-overwrite-ignore: 기본은 .gitignore가 제외한 파일을 받아 올 파일로 덮어쓴다. 되돌릴 수 없는 로컬 작업이다.
+        # - -c submodule.recurse=false: 서브모듈 작업 트리를 건드리지 않는다.
+        # 거부 이유를 읽으므로 메시지 언어를 고정한다.
+        if po_out=$(LC_ALL=C git -C "$po_path" -c submodule.recurse=false merge --ff-only --no-autostash --no-overwrite-ignore --quiet "$po_remote_ref" 2>&1); then
+            po_count=$(git -C "$po_path" rev-list --count "$po_head..$po_remote" 2>/dev/null) || po_count=?
+            record updated "$po_label" "$(printf %.7s "$po_head")..$(printf %.7s "$po_remote"), 커밋 ${po_count}개"
+            if [ "$po_path" != . ]; then
+                advanced="$advanced$po_path$NL"
+            fi
+            return 0
+        fi
+        po_files=$(printf '%s\n' "$po_out" | sed -n "s/^$TAB//p" | tr '\n' ' ')
+        case $po_out in
+            *"local changes"*"would be overwritten"*)
+                record skipped "$po_label" "받아 올 변경과 같은 파일에 미커밋 변경이 있어 fast-forward가 거부되었다: ${po_files% }"
+                ;;
+            *"untracked working tree files would be overwritten"*)
+                record skipped "$po_label" "받아 올 파일과 겹치는 추적하지 않거나 무시되는 파일이 있어 fast-forward가 거부되었다: ${po_files% }"
+                ;;
+            *)
+                record skipped "$po_label" "fast-forward에 실패했다: $(first_line "$po_out")"
+                ;;
+        esac
+        return 0
+    }
+
+    # --- 루트 저장소부터 ---
+    echo "받는 중: $ROOT_LABEL"
+    pull_one . "$ROOT_LABEL" "" </dev/null
+
+    # --- 지식 저장소. 루트를 받은 뒤의 .gitmodules를 읽는다 ---
+    list_failed=0
+    if ! repos=$(knowledge_repos </dev/null); then
+        list_failed=1
+        repos=
+    fi
+    while IFS="$TAB" read -r repo_path repo_name; do
+        [ -n "$repo_path" ] || continue
+        echo "받는 중: $repo_path"
+        pull_one "$repo_path" "$repo_path" "$repo_name" </dev/null
+    done <<EOF
+    $repos
+    EOF
+
+    # --- 요약 ---
+    print_group() {
+        [ -n "$2" ] || return 0
+        printf '%s' "$2" | while IFS= read -r pg_line; do
+            printf '%s: %s\n' "$1" "$pg_line"
+        done
+    }
+    echo
+    echo "== 요약 =="
+    print_group 갱신됨 "$updated"
+    print_group "변화 없음" "$unchanged"
+    print_group 건너뜀 "$skipped"
+    print_group 실패 "$failed"
+
+    # 지식 저장소가 올라가면 루트의 서브모듈 포인터가 달라진다. 커밋하지 않고 남겨 두므로, 무엇이 바뀌었는지 알린다.
+    pointers=
+    while IFS= read -r adv_path; do
+        [ -n "$adv_path" ] || continue
+        if pointer_changed "$adv_path"; then
+            pointers="$pointers$adv_path$NL"
+        fi
+    done <<EOF
+    $advanced
+    EOF
+    if [ -n "$pointers" ]; then
+        echo
+        echo "루트 저장소의 서브모듈 포인터가 바뀌었습니다. 커밋하지 않았습니다. 확인한 뒤 직접 커밋하세요:"
+        printf '%s' "$pointers" | sed 's/^/  /'
+    fi
+    if [ "$need_setup" = 1 ]; then
+        echo
+        echo "초기화되지 않은 서브모듈이 있습니다. just setup으로 초기화하세요."
+    fi
+
+    if [ -n "$failed" ] || [ "$list_failed" = 1 ]; then
+        exit 1
+    fi
+
+# status: 루트 저장소와 지식 저장소별로 현재 브랜치, 미커밋 변경, 미푸시 커밋 수, 뒤처진 커밋 수를 한 줄씩 보여 준다.
+# 원격에 접속하지 않는다. 미푸시와 뒤처짐은 origin의 같은 이름 브랜치와 비교하고(push가 올리는 곳이다), 마지막으로 받은(fetch) 원격 정보 기준이다.
+# 아무것도 바꾸지 않고, 인덱스도 새로 쓰지 않는다.
+
+# 루트 저장소와 지식 저장소별 상태를 요약한다.
+[no-exit-message]
+status:
+    #!/usr/bin/env sh
+    set -u
+    . "{{source_directory()}}/lib.sh"
+    # 상태를 읽으며 인덱스를 새로 쓰지 않는다
+    GIT_OPTIONAL_LOCKS=0
+    export GIT_OPTIONAL_LOCKS
+
+    # show_status <경로> <표시 이름>
+    show_status() {
+        ss_path=$1
+        ss_label=$2
+        if ! repo_initialized "$ss_path"; then
+            echo "$ss_label: 초기화되지 않았다. just setup으로 초기화하세요"
+            return 0
+        fi
+        ss_branch=$(repo_branch "$ss_path")
+        if [ -n "$ss_branch" ]; then
+            ss_where="브랜치 $ss_branch"
+        else
+            ss_where="브랜치 (detached HEAD $(git -C "$ss_path" rev-parse --short HEAD 2>/dev/null))"
+        fi
+        if ss_changes=$(repo_changes "$ss_path"); then
+            if [ -z "$ss_changes" ]; then
+                ss_dirty="미커밋 없음"
+            else
+                ss_dirty="미커밋 $(printf '%s\n' "$ss_changes" | wc -l | tr -d ' ')개"
+            fi
+        else
+            ss_dirty="미커밋 ?"
+        fi
+        ss_unpushed=$(repo_unpushed_count "$ss_path" "$ss_branch" 2>/dev/null) || ss_unpushed=?
+        # 원격에 같은 이름의 브랜치가 없으면(새 작업 브랜치) 원격의 어느 브랜치에도 없는 커밋을 미푸시로 센다. 뒤처짐은 알 수 없다.
+        ss_note=
+        if [ -n "$ss_branch" ] && ! repo_has_remote_branch "$ss_path" "$ss_branch"; then
+            ss_note=" (원격에 $ss_branch 브랜치 없음)"
+        fi
+        ss_behind=$(repo_behind_count "$ss_path" "$ss_branch" 2>/dev/null) || ss_behind=-
+        echo "$ss_label: $ss_where, $ss_dirty, 미푸시 $ss_unpushed$ss_note, 뒤처짐 $ss_behind"
+    }
+
+    show_status . "$ROOT_LABEL"
+    pointers=$(pointer_changes)
+    if [ -n "$pointers" ]; then
+        echo "  서브모듈 포인터 변경(커밋하지 않음): $(printf '%s' "$pointers" | tr '\n' ' ' | sed 's/ $//')"
+    fi
+
+    list_failed=0
+    if ! repos=$(knowledge_repos </dev/null); then
+        list_failed=1
+        repos=
+    fi
+    while IFS="$TAB" read -r repo_path repo_name; do
+        [ -n "$repo_path" ] || continue
+        show_status "$repo_path" "$repo_path" </dev/null
+    done <<EOF
+    $repos
+    EOF
+
+    echo
+    echo "뒤처짐은 마지막으로 받은 원격 정보 기준입니다. 원격에 접속하지 않았습니다. 최신 정보로 보려면 just git pull을 실행하세요."
+    if [ "$list_failed" = 1 ]; then
+        exit 1
+    fi

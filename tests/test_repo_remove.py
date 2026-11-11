@@ -779,3 +779,90 @@ def test_gitmodules에_스테이징하지_않은_다른_항목의_수정은_그�
     assert 'submodule "projects/billing"' in staged and "branch = dev" not in staged  # 제거만 스테이징되었다
     assert "+\tbranch = dev" in unstaged  # 손으로 고친 것은 스테이징하지 않은 채 남았다
     assert "projects/billing" not in (root.work / ".gitmodules").read_text(encoding="utf-8")
+
+
+# --- 병합 충돌 상태의 .gitmodules ---------------------------------------------------------
+
+
+def test_gitmodules가_병합_충돌_상태이면_이유를_알리고_거부하며_아무것도_바꾸지_않는다(sandbox):
+    """두 브랜치가 동시에 저장소를 붙인 병합의 상태. 충돌 표시를 지웠어도 `git add`하기 전에는 인덱스가 충돌 상태다."""
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    root.leave_gitmodules_unmerged(sandbox.knowledge_remote("docs"))
+    assert sandbox.git("ls-files", "-u", "--", ".gitmodules", cwd=root.work).stdout  # 충돌 상태다
+
+    result = _refused_leaving_everything_unchanged(sandbox, root)
+
+    assert "충돌" in result.stderr
+    assert "fatal" not in result.stderr  # git이 아니라 이 명령이 이유를 알린다
+    assert (_sub(root) / "README.md").is_file()
+    assert _gitdir(root).is_dir()
+
+
+# --- 원격에도 있는 태그 ---------------------------------------------------------------
+
+
+def _billing_with_tag_on_deleted_branch(sandbox):
+    """원격에 태그 `v1`이 있고, 그 커밋을 가진 브랜치는 원격에서 지워진 지식 저장소. 클론하면 태그에만 이어진 커밋이 생긴다."""
+    billing = sandbox.knowledge_remote("billing")
+    billing.commit(branch="release")
+    sandbox.git("tag", "v1", cwd=billing.seed)
+    sandbox.git("push", "origin", "v1", cwd=billing.seed)
+    sandbox.git("push", "origin", "--delete", "release", cwd=billing.seed)
+    return billing
+
+
+def test_원격에도_있는_태그는_태그에만_있는_커밋이어도_제거를_막지_않는다(sandbox):
+    """클론은 원격의 태그를 모두 가져온다. 원격에 있는 태그의 커밋은 버려지는 작업이 아니다."""
+    root = sandbox.root()
+    root.register(_billing_with_tag_on_deleted_branch(sandbox))
+    sub = _sub(root)
+    assert sandbox.git("rev-list", "--count", "--tags", "--not", "--branches", "--remotes", cwd=sub).stdout.strip() == "1"
+
+    result = _remove(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stderr
+    assert not _gitdir(root).exists()
+
+
+def test_원격에도_있는_태그와_로컬에만_있는_태그가_함께_있으면_로컬에만_있는_것만_알리고_거부한다(sandbox):
+    root = sandbox.root()
+    root.register(_billing_with_tag_on_deleted_branch(sandbox))
+    sub = _sub(root)
+    sandbox.git("checkout", "--detach", cwd=sub)
+    _local_commit(sandbox, sub)
+    sandbox.git("tag", "keep-me", cwd=sub)
+    sandbox.git("checkout", "main", cwd=sub)
+
+    result = _refused_leaving_everything_unchanged(sandbox, root)
+
+    assert "작업 local.md" in result.stderr
+    assert "note 1 on release" not in result.stderr  # 원격에도 있는 v1의 커밋은 목록에 없다
+    assert "태그에만 있는 커밋: 1개" in result.stderr
+
+
+def test_원격에서_옮겨진_태그는_로컬에만_있는_것으로_본다(sandbox):
+    """같은 이름이어도 가리키는 객체가 다르면 원격에 있는 태그가 아니다."""
+    root = sandbox.root()
+    root.register(_billing_with_tag_on_deleted_branch(sandbox))
+    sub = _sub(root)
+    sandbox.git("checkout", "--detach", cwd=sub)
+    _local_commit(sandbox, sub)
+    sandbox.git("tag", "--force", "v1", cwd=sub)  # v1을 로컬 커밋으로 옮겼다
+    sandbox.git("checkout", "main", cwd=sub)
+
+    result = _refused_leaving_everything_unchanged(sandbox, root)
+
+    assert "작업 local.md" in result.stderr
+
+
+def test_태그가_원격에_있는지_확인할_수_없으면_거부하고_확인하지_못했다고_알린다(sandbox):
+    root = sandbox.root()
+    billing = _billing_with_tag_on_deleted_branch(sandbox)
+    root.register(billing)
+    billing.url.rename(billing.url.with_name("moved-away.git"))  # 원격에 접속할 수 없다
+
+    result = _refused_leaving_everything_unchanged(sandbox, root)
+
+    assert "태그" in result.stderr
+    assert "확인하지 못" in result.stderr
