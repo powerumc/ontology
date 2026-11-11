@@ -22,7 +22,7 @@ HELP = (
     "온톨로지 층의 인덱스를 가리키는 표시된 블록을 넣으며(블록 밖은 바꾸지 않는다), 없으면 온톨로지 층의 뼈대(docs/ontology/ontology.yaml과 인덱스)를 만든다. "
     "이름(서브모듈 디렉토리 이름)을 생략하면 모든 지식 저장소에 적용한다. 마지막 최신화 뒤에 손으로 고친 루트 관리 파일은 덮어쓰지 않고 보고한다. "
     "저장소 소유 파일(ontology.yaml, 페이지)은 바꾸지 않는다. 변경은 지식 저장소의 작업 트리에 남고 커밋하지 않는다. "
-    "끝에 최신화한 저장소의 페이지 가운데 새 구조 제약에 어긋난 것을 보고한다(validate와 같은 다섯 칸. 종료 코드는 바꾸지 않는다). "
+    "끝에 최신화한 저장소의 페이지와 ontology.yaml(하위 클래스 선언) 가운데 새 구조 제약에 어긋난 것을 보고한다(validate와 같은 다섯 칸. 종료 코드는 바꾸지 않는다). "
     "저장소마다 만든 파일, 바꾼 파일, 지운 파일, 건너뛴 파일을 요약한다. 건너뛴 파일은 하나씩 이유와 함께 보여 주고(같은 위치가 막은 파일만 묶는다), "
     "건너뛴 것이 있거나 사람이 확인할 것(지식 저장소가 이미 추적하는 .onto/)이 있으면 0이 아닌 종료 코드로 끝난다. "
     "루트 저장소에서만 쓸 수 있고 지식 저장소 안에서는 거부한다"
@@ -115,13 +115,13 @@ def _print(result: Result) -> None:
 
 
 def _print_nonconforming(findings: list[Finding]) -> None:
-    """최신화한 지식 저장소에서 구조 제약에 어긋난 페이지. 문제 하나에 한 줄이고 `validate`의 보고와 같은 모양(탭으로 나눈 다섯 칸)이다."""
+    """최신화한 지식 저장소에서 구조 제약에 어긋난 페이지와 하위 클래스 선언. 문제 하나에 한 줄이고 `validate`의 보고와 같은 모양(탭으로 나눈 다섯 칸)이다."""
     if not findings:
         return
-    pages = len({finding.file for finding in findings})
+    files = len({finding.file for finding in findings})
     print(
-        f"구조 제약에 어긋난 페이지 {pages}개(공통 어휘 {vocab.version() or '버전을 알 수 없음'}). "
-        "최신화는 페이지를 고치지 않는다. 페이지를 고친 뒤 `just onto validate`로 확인한다"
+        f"구조 제약에 어긋난 파일 {files}개(공통 어휘 {vocab.version() or '버전을 알 수 없음'}). 페이지와 `ontology.yaml`은 저장소 소유 파일이라 "
+        "최신화가 고치지 않는다. 고친 뒤 `just onto validate`로 확인한다"
     )
     for finding in findings:
         print("\t".join((finding.severity.value, finding.repository, finding.file, finding.check, " ".join(finding.message.split()))))

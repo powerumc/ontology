@@ -178,6 +178,106 @@ def test_두_번_연속_실행하면_두_번째는_지침_파일을_다시_쓰�
     assert "바뀐 것이 없다" in result.stdout
 
 
+# --- 블록이 이미 든 다른 후보 파일 ----------------------------------------------------------
+
+
+def bump_block(root) -> None:
+    """루트가 블록의 글을 고쳤다."""
+    source = root.work / "onto" / "onto_tool" / "guidance.py"
+    source.write_text(source.read_text(encoding="utf-8").replace("## 온톨로지 층", "## 온톨로지 층 v2", 1), encoding="utf-8")
+
+
+def test_AGENTS_md에_넣은_블록이_있는_저장소에_CLAUDE_md가_생겨도_두_파일의_블록이_모두_갱신된다(sandbox):
+    """최신화가 만든 `AGENTS.md`를 팀이 커밋하고 나중에 `CLAUDE.md`를 만들었다. 블록 글을 고치면 두 파일이 모두 새 글이어야 한다."""
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n"})
+    assert sync(sandbox, root, "billing").returncode == 0
+    agents = billing / "AGENTS.md"
+    before, after = "# 에이전트 지침\n\n다른 도구가 읽는다.\n\n", "\n끝에 팀이 더한 줄.\n"
+    agents.write_text(before + agents.read_text(encoding="utf-8") + after, encoding="utf-8")
+    (billing / "CLAUDE.md").write_text(TEAM, encoding="utf-8")  # 나중에 생겼다
+    bump_block(root)
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    claude = (billing / "CLAUDE.md").read_text(encoding="utf-8")
+    assert claude.startswith(TEAM) and "## 온톨로지 층 v2" in block_of(claude)  # 고른 파일에는 새 블록이 덧붙는다
+    text = agents.read_text(encoding="utf-8")
+    assert text.startswith(before) and text.endswith(after)  # 블록 밖은 그대로다
+    assert "## 온톨로지 층 v2" in block_of(text) and text.count(BEGIN) == 1  # 있던 자리에서 갱신되고 하나뿐이다
+    assert block_of(text) == block_of(claude)
+    assert "바꿈  AGENTS.md" in result.stdout and "바꿈  CLAUDE.md" in result.stdout
+
+
+def test_다른_후보_파일의_블록을_갱신한_뒤_다시_실행하면_아무것도_바꾸지_않는다(sandbox):
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n"})
+    assert sync(sandbox, root, "billing").returncode == 0
+    (billing / "CLAUDE.md").write_text(TEAM, encoding="utf-8")
+    bump_block(root)
+    assert sync(sandbox, root, "billing").returncode == 0
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        os.utime(billing / name, ns=(1_000_000_000, 1_000_000_000))
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stderr
+    assert "바뀐 것이 없다" in result.stdout
+    assert all((billing / name).stat().st_mtime_ns == 1_000_000_000 for name in ("AGENTS.md", "CLAUDE.md"))
+
+
+def test_블록이_없는_다른_후보_파일에는_블록을_새로_만들지_않는다(sandbox):
+    agents = "# 에이전트 지침\n\n블록이 없다.\n"
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n", "CLAUDE.md": TEAM, "AGENTS.md": agents})
+
+    for _ in range(2):
+        assert sync(sandbox, root, "billing").returncode == 0
+
+    assert (billing / "AGENTS.md").read_text(encoding="utf-8") == agents
+    assert block_of((billing / "CLAUDE.md").read_text(encoding="utf-8"))
+
+
+def test_CLAUDE_md에만_블록이_있고_AGENTS_md에_없으면_CLAUDE_md만_갱신한다(sandbox):
+    """블록을 지우거나 다른 후보로 옮기지 않는다. 블록이 있는 파일이 고른 파일이다."""
+    root = sandbox.root()
+    stale = f"{TEAM}\n<!-- onto:begin 옛 설명 -->\n옛 안내\n<!-- onto:end -->\n"
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n", "CLAUDE.md": stale, "AGENTS.md": "# 에이전트\n"})
+
+    assert sync(sandbox, root, "billing").returncode == 0
+
+    assert "옛 안내" not in (billing / "CLAUDE.md").read_text(encoding="utf-8")
+    assert (billing / "AGENTS.md").read_text(encoding="utf-8") == "# 에이전트\n"
+
+
+def test_다른_후보_파일이_이_저장소_안을_가리키는_링크이면_그_자리를_따라가지_않고_조용히_둔다(sandbox):
+    """`AGENTS.md`가 `CLAUDE.md`로 이어진 링크인 저장소다. 블록은 `CLAUDE.md`에만 있고 링크를 거쳐 두 번 쓰지도 보고하지도 않는다."""
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n", "CLAUDE.md": TEAM})
+    (billing / "AGENTS.md").symlink_to("CLAUDE.md")
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (billing / "AGENTS.md").is_symlink() and os.readlink(billing / "AGENTS.md") == "CLAUDE.md"
+    assert (billing / "CLAUDE.md").read_text(encoding="utf-8").count(BEGIN) == 1
+    assert "AGENTS.md" not in result.stdout
+
+
+def test_다른_후보_파일의_표시가_짝이_맞지_않으면_그_파일은_고치지_않고_보고한다_고른_파일은_갱신한다(sandbox):
+    broken = f"# 에이전트\n\n{BEGIN} 옛 설명 -->\n끝 표시가 없다\n"
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n", "CLAUDE.md": TEAM, "AGENTS.md": broken})
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 1
+    assert (billing / "AGENTS.md").read_text(encoding="utf-8") == broken
+    assert re.search(r"건너뜀\s+AGENTS\.md\s+—.*표시", result.stdout)
+    assert block_of((billing / "CLAUDE.md").read_text(encoding="utf-8"))
+
+
 # --- 커밋되지 않은 수정 --------------------------------------------------------------------
 
 

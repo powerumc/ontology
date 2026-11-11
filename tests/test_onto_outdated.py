@@ -222,6 +222,21 @@ def test_지식_저장소는_규칙으로_이_경고를_끌_수_있다(sandbox):
     assert [row[1] for row in findings(result)] == ["shop"]  # 끈 저장소만 빠진다
 
 
+def test_지식_저장소_안의_validate는_루트와의_비교를_건너뛰었다고_바른_이유로_알린다(sandbox):
+    """이 항목은 여러 지식 저장소가 아니라 루트 저장소의 `onto/`가 있어야 판단한다. 안내가 그렇게 말해야 한다."""
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing", files=CONFIGURED)
+    assert sync(sandbox, root, "billing").returncode == 0
+    edit(root.work / "onto" / "onto_tool" / "cli.py", '"모듈형 온톨로지 도구"', '"모듈형 온톨로지 도구(고침)"')  # 사본이 뒤처졌다
+
+    result = sandbox.just("-f", ".onto/Justfile", "validate", cwd=billing)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert findings(result) == []  # 지식 저장소 안에서는 비교하지 않는다
+    assert f"`{CHECK}`" in result.stderr  # 건너뛴 검사로 알린다
+    assert "루트 저장소" in result.stderr and "`.onto/` 사본의 비교" in result.stderr  # 뜻에 맞는 이유다
+
+
 # --- 루트의 검사는 항상 루트의 최신 공통 어휘로 한다 ----------------------------------------------
 
 
@@ -262,7 +277,7 @@ def test_최신화_뒤에_구조_제약에_어긋난_페이지가_있으면_고�
     lines = result.stdout.rstrip().splitlines()
     summary = next(number for number, line in enumerate(lines) if line.startswith("최신화: 지식 저장소"))
     report = lines[summary + 1 :]
-    assert "구조 제약" in report[0]
+    assert "구조 제약에 어긋난 파일 1개" in report[0]
     rows = [line.split("\t") for line in report[1:]]
     assert [(row[1], row[2], row[3]) for row in rows] == [("billing", "projects/billing/docs/ontology/plan/oops.md", "relation-domain")]
     assert "partOf" in rows[0][4]
@@ -281,6 +296,32 @@ def test_어휘를_올려_새_구조_제약에_어긋나게_된_페이지를_보
 
     assert result.returncode == 0, result.stderr
     assert re.search(r"오류\tbilling\tprojects/billing/docs/ontology/term/refund\.md\trelation-domain\t.*about", result.stdout)
+
+
+def test_어휘를_올려_하위_클래스_선언이_깨지면_원인인_ontology_yaml의_문제도_함께_보고한다(sandbox):
+    """하위 클래스 선언은 공통 클래스에 기댄다. 루트가 공통 클래스를 없애면 페이지만이 아니라 `ontology.yaml`도 깨진다."""
+    files = {**CONFIGURED, f"{ONTOLOGY_DIR}/ontology.yaml": 'name: "billing"\nclasses:\n  Invoice:\n    subClassOf: Term\n'}
+    root = sandbox.root()
+    attach(sandbox, root, "billing", files=files)
+    before = sync(sandbox, root, "billing")
+    assert before.returncode == 0 and "구조 제약" not in before.stdout
+    edit(root.work / "onto" / "vocab" / "onto.ttl", "onto:Term a owl:Class", "onto:Glossary a owl:Class")  # 공통 클래스 Term이 없어졌다
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stderr
+    assert re.search(r"오류\tbilling\tprojects/billing/docs/ontology/ontology\.yaml\tinvalid-class-declaration\t.*Term", result.stdout)
+    assert "구조 제약에 어긋난 파일 1개" in result.stdout  # 페이지만이 아니라 파일을 센다
+
+
+def test_어휘가_정하는_디렉토리를_어긴_페이지도_보고한다(sandbox):
+    files = {**CONFIGURED, f"{ONTOLOGY_DIR}/plan/stray.md": "---\nclass: Report\ntitle: 길을 잃은 보고\nabout: project\n---\n\n본문\n"}
+    root = sandbox.root()
+    attach(sandbox, root, "billing", files=files)
+
+    result = sync(sandbox, root, "billing")
+
+    assert re.search(r"오류\tbilling\tprojects/billing/docs/ontology/plan/stray\.md\tmisplaced-page\t", result.stdout)
 
 
 def test_구조_제약_보고는_최신화한_지식_저장소만_다룬다(sandbox):

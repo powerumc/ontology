@@ -18,7 +18,7 @@
 보고된 파일은 지우면 다음 최신화가 루트의 내용으로 되살린다.
 
 변경은 지식 저장소의 작업 트리에 남기고 커밋하지 않는다. 같은 입력에서 두 번 실행하면 두 번째는 아무 파일도 다시 쓰지 않는다.
-루트 관리 파일이 무엇이고 사본이 루트와 같은지는 `managed`가 읽는다. 최신화 뒤에 구조 제약에 어긋난 페이지를 알리는 것은 `conformance`다(`commands.sync`가 부른다).
+루트 관리 파일이 무엇이고 사본이 루트와 같은지는 `managed`가 읽는다. 최신화 뒤에 구조 제약에 어긋난 페이지와 하위 클래스 선언을 알리는 것은 `conformance`다(`commands.sync`가 부른다).
 지식 저장소의 어느 경로든 심볼릭 링크를 따라가거나 일반 파일이 아닌 것을 덮어쓰지 않는다. 쓰거나 지우는 경로가 저장소 밖으로 새지 않게 한다.
 """
 
@@ -165,9 +165,28 @@ def _update_guidance(repo: Path, result: Result) -> bool:
     """프로젝트 지침 파일(`CLAUDE.md`, 없으면 `AGENTS.md`, 둘 다 없으면 `AGENTS.md`를 만든다)의 표시된 블록을 인덱스 안내로 바꾼다.
 
     블록 밖과 커밋 여부는 따지지 않는다. 지침 파일에 커밋하지 않은 수정이 있어도, 직전 최신화가 넣은 블록이 있어도 블록만 고친다.
-    블록의 내용이 이미 같으면 파일을 다시 쓰지 않는다. 고치지 못하면 `False`다. 다른 파일에는 쓰지 않는다.
+    블록의 내용이 이미 같으면 파일을 다시 쓰지 않는다. 고른 파일을 고치지 못하면 `False`다.
+
+    블록이 이미 든 다른 후보 파일은 그 자리에서 내용만 맞춘다. 블록이 없는 다른 후보 파일, 이 저장소 안의 다른 파일을 가리키는 링크,
+    일반 파일이 아닌 것은 건드리지 않는다. 블록을 새로 만들지도 지우지도 않는다.
     """
-    return _update_block(repo, guidance.choose(repo), guidance.BLOCK, guidance.BODY, result)
+    chosen = guidance.choose(repo)
+    done = _update_block(repo, chosen, guidance.BLOCK, guidance.BODY, result)
+    for name in guidance.CANDIDATES:
+        if name != chosen and _holds_block(repo, name):
+            _update_block(repo, name, guidance.BLOCK, guidance.BODY, result)
+    return done
+
+
+def _holds_block(repo: Path, relative: str) -> bool:
+    """`repo`의 일반 파일 `relative`에 표시된 블록이 있는가. 없거나 읽을 수 없거나 링크이면 아니다."""
+    path = repo / relative
+    if blocked(repo, relative) or not path.is_file():
+        return False
+    try:
+        return guidance.holds_block(path.read_bytes())
+    except OSError:
+        return False
 
 
 def _update_block(repo: Path, relative: str, block: MarkedBlock, body: Sequence[str], result: Result, *, broken: str = "") -> bool:
