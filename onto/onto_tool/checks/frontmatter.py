@@ -10,12 +10,12 @@ import re
 from collections.abc import Iterator
 
 from ..compiler import Compiled, PageRecord
-from ..keys import PAGE_KEYS, PAGE_PROPERTY_KEYS, RELATION_KEYS, REVERSE_RELATION_KEYS
+from ..keys import PAGE_KEYS, PAGE_PROPERTY_KEYS, RELATION_KEYS, REVERSE_RELATION_KEYS, SOURCE_KEY
 from ..rules import RuleSet
 from .catalog import INVALID_IDENTIFIER, REVERSE_RELATION, UNDEFINED_KEY
 from .model import Issue
 
-DEFINED_KEYS = (*PAGE_PROPERTY_KEYS, *RELATION_KEYS)
+DEFINED_KEYS = (*PAGE_PROPERTY_KEYS, *RELATION_KEYS, SOURCE_KEY)
 
 
 def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:

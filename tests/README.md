@@ -64,3 +64,10 @@ def test_예(onto_cli):
 ### 규칙(`test_onto_rules.py`)
 
 루트 기본 규칙(`onto/rules.yaml`)은 도구 사본 안의 파일이고 테스트 세션이 공유한다. `onto_cli.set_root_check(이름, enabled=…, severity=…)`와 `onto_cli.replace_in_root_rules(옛, 새)`가 그 파일을 고치고, 테스트가 끝나면 `onto_cli`가 원래대로 되돌린다. 지식 저장소의 덮어쓰기는 `repo("billing", …, rules={"checks": {"orphan-page": {"enabled": False}}})`처럼 `ontology.yaml`의 `rules`로 적는다. `rules` 명령(`onto_cli.run(root, "rules", "billing")`)이 적용되는 규칙을 JSON으로 보여 주므로, 검사에 쓰이지 않는 값(`sources`, `push-gate`, `language`의 일부)의 병합도 여기서 확인한다.
+
+### 원본 문서와 낡음(`test_onto_sources.py`, `test_onto_status.py`)
+
+페이지의 `derivedFrom`은 `{path, hash}` 항목(또는 그 목록)이다. `path`는 지식 저장소 루트 기준 원본 문서의 경로, `hash`는 그 문서의 git 해시(`git hash-object`가 내는 40자리 소문자 16진수)다. 넘긴 문서의 목록(`docs/ontology/skipped.yaml`)은 같은 모양의 항목의 목록이다. 테스트가 기대하는 해시는 도구의 계산이 아니라 `git hash-object --no-filters`가 낸 값이고(`sandbox.git`), 커밋하지 않은 수정을 다루는 테스트는 견본 지식 저장소 안에서 `git init`과 커밋을 해 `git rev-parse HEAD:<경로>`와 비교한다.
+
+- `test_onto_sources.py`: `derivedFrom`이 그래프의 `Source` 엔티티(`onto:sourcePath`, `onto:sourceHash`)와 `onto:derivedFrom` 관계로 나타나는 것, 값의 모양, 낡음(`stale-page`)·없어진 원본 문서(`missing-source`)·없어진 넘긴 문서(`missing-skipped-source`) 검사.
+- `test_onto_status.py`: `status`가 새 문서와 바뀐 문서를 지식 저장소별로 보여 주는 것(보고는 문서 하나에 탭 다섯 칸), 넘긴 문서, 대상 범위(규칙의 글롭과 제외 경로, 온톨로지 층은 항상 제외), 아무 파일도 고치지 않는 것, 깨진 `rules`를 기본값으로 대신하지 않는 것. `just onto status`는 마지막 테스트 하나만 거친다.

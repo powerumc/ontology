@@ -1145,7 +1145,7 @@ def test_확장자가_md가_아닌_페이지_파일을_조용히_건너뛰지_�
 
 def test_페이지가_아닌_파일과_숨김_파일은_보고하지_않는다(onto_cli):
     repos = clean_repos()
-    for name in ("notes.txt", "diagram.png", ".draft.MD", "component/.hidden.markdown", "skipped.yaml"):
+    for name in ("notes.txt", "diagram.png", ".draft.MD", "component/.hidden.markdown", "other.yaml"):
         repos["billing"][f"{ONTOLOGY_DIR}/{name}"] = "내용\n"
 
     assert validate(onto_cli, onto_cli.root(repos))[1] == []

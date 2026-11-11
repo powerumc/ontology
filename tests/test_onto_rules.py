@@ -147,7 +147,15 @@ def test_ingest_대상의_기본값은_docs_아래_md_파일이고_온톨로지_
 def test_8의_기본_심각도가_루트_기본_규칙의_값으로_옮겨져_있고_모든_항목이_켜져_있다(onto_cli):
     checks = rules_of(onto_cli, onto_cli.root({}))["checks"]
 
-    assert {name: rule["severity"] for name, rule in checks.items()} == {**DEFAULT_SEVERITIES, "invalid-ontology-yaml": "error", "invalid-rules": "error"}
+    assert {name: rule["severity"] for name, rule in checks.items()} == {
+        **DEFAULT_SEVERITIES,
+        "invalid-ontology-yaml": "error",
+        "invalid-rules": "error",
+        # #10이 더한 원본 문서의 기록 검사
+        "stale-page": "warning",
+        "missing-source": "error",
+        "missing-skipped-source": "warning",
+    }
     assert all(rule["enabled"] is True for rule in checks.values())
 
 

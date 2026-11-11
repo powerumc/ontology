@@ -57,7 +57,7 @@ def test_페이지_아닌_파일은_엔티티가_되지_않는다(onto_cli):
     files["billing"].update(
         {
             f"{ONTOLOGY_DIR}/index.md": "# 인덱스\n\n- plan/auth-redesign\n",
-            f"{ONTOLOGY_DIR}/skipped.yaml": "- path: docs/old.md\n",
+            f"{ONTOLOGY_DIR}/skipped.yaml": "- path: docs/old.md\n  hash: 0123456789abcdef0123456789abcdef01234567\n",
             f"{ONTOLOGY_DIR}/.hidden/note.md": "frontmatter 없음\n",
         }
     )
@@ -613,6 +613,7 @@ PAGE_KEYS_AS_PREDICATES = {
     "implements": f"{VOCAB}implements",
     "governs": f"{VOCAB}governs",
     "supersedes": f"{VOCAB}supersedes",
+    "derivedFrom": f"{VOCAB}derivedFrom",
     "about": f"{VOCAB}about",
 }
 DOCUMENTED_RELATION_KEYS = ("partOf", "dependsOn", "implements", "governs", "supersedes", "about")
@@ -627,6 +628,7 @@ def test_문서화된_frontmatter_키를_모두_쓴_페이지는_키마다_그�
         description="설명",
         date="2026-11-01",
         aliases=["별칭", "alias"],
+        derivedFrom=[{"path": "docs/design.md", "hash": "0123456789abcdef0123456789abcdef01234567"}],
         **{key: [target] for key, target in targets.items()},
     )
     root = onto_cli.root(billing(subject, *(page(target, "Component", title=f"{key} 대상") for key, target in targets.items())))
@@ -642,6 +644,8 @@ def test_문서화된_frontmatter_키를_모두_쓴_페이지는_키마다_그�
         "aliases": {(PAGE_KEYS_AS_PREDICATES["aliases"], "별칭"), (PAGE_KEYS_AS_PREDICATES["aliases"], "alias")},
         # 관계는 값이 대상 엔티티의 IRI로 풀려, 질의 결과에서 대상 페이지의 파일 경로로 나온다.
         **{key: {(PAGE_KEYS_AS_PREDICATES[key], f"{PAGES}/{target}.md")} for key, target in targets.items()},
+        # 원본 문서는 `Source` 엔티티가 되어, 질의 결과에서 원본 문서의 파일 경로로 나온다.
+        "derivedFrom": {(PAGE_KEYS_AS_PREDICATES["derivedFrom"], "projects/billing/docs/design.md")},
     }
     assert set(expected) == set(PAGE_KEYS_AS_PREDICATES)  # 목록의 모든 키를 썼다
     missing = {key: sorted(wanted - facts) for key, wanted in expected.items() if not wanted <= facts}

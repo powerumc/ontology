@@ -57,6 +57,11 @@ INVALID_RULES = Check(
     "invalid-rules", "ontology.yaml의 rules가 틀렸다(정의되지 않은 키, 값의 종류, 루트 전용 규칙을 덮어쓰려는 시도). 그 저장소는 루트 기본 규칙으로 검사한다"
 )
 
+# --- 원본 문서의 기록 ----------------------------------------------------------------
+STALE_PAGE = Check("stale-page", "페이지가 근거로 삼은 원본 문서가 기록한 해시와 달라졌다(낡음). 작업 트리의 현재 내용으로 따진다")
+MISSING_SOURCE = Check("missing-source", "페이지의 derivedFrom이 가리키는 원본 문서가 없다")
+MISSING_SKIPPED_SOURCE = Check("missing-skipped-source", "넘긴 문서의 목록(skipped.yaml)에 적힌 원본 문서가 없다")
+
 CHECKS = (
     UNREADABLE_FILE,
     INVALID_VALUE,
@@ -79,6 +84,9 @@ CHECKS = (
     REPOSITORY_NAME_MISMATCH,
     MISSING_ONTOLOGY_LAYER,
     INVALID_RULES,
+    STALE_PAGE,
+    MISSING_SOURCE,
+    MISSING_SKIPPED_SOURCE,
 )
 
 BY_NAME = {check.name: check for check in CHECKS}

@@ -33,6 +33,8 @@ def run(args: argparse.Namespace) -> int:
     warn(compiled.warnings)
     ensure_valid(workspace, compiled)
     graph = infer(compiled.graph)
+    # 질의 결과에서 `Source` 엔티티는 원본 문서의 파일 경로로 보인다
+    files = {**compiled.files, **compiled.source_files}
     try:
         result = graph.query(args.sparql)
     except Exception as exc:  # rdflib은 문법 오류와 평가 오류를 여러 예외 형식으로 던진다
@@ -41,7 +43,7 @@ def run(args: argparse.Namespace) -> int:
     if result.type == "SELECT":
         print("\t".join(str(variable) for variable in result.vars))
         for row in result:
-            print("\t".join(_cell(row[variable], compiled.files) for variable in result.vars))
+            print("\t".join(_cell(row[variable], files) for variable in result.vars))
     elif result.type == "ASK":
         print("true" if result.askAnswer else "false")
     else:  # CONSTRUCT, DESCRIBE
@@ -49,8 +51,8 @@ def run(args: argparse.Namespace) -> int:
             result.graph.bind(prefix, namespace)
         # Turtle 본문에는 파일 경로를 넣을 수 없다. 엔티티의 IRI가 가리키는 파일을 주석으로 앞에 붙인다.
         mentioned = {str(term) for triple in result.graph for term in triple if isinstance(term, URIRef)}
-        for iri in sorted(mentioned & compiled.files.keys()):
-            print(f"# <{iri}> {compiled.files[iri]}")
+        for iri in sorted(mentioned & files.keys()):
+            print(f"# <{iri}> {files[iri]}")
         print()
         sys.stdout.write(result.graph.serialize(format="turtle"))
     return 0

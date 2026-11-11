@@ -9,6 +9,7 @@ from pathlib import Path
 PROJECTS_DIR = "projects"
 ONTOLOGY_DIR = Path("docs") / "ontology"
 ONTOLOGY_YAML = ONTOLOGY_DIR / "ontology.yaml"
+SKIPPED_YAML = ONTOLOGY_DIR / "skipped.yaml"  # 넘긴 문서의 목록. 저장소 소유 파일이고 필요할 때 생긴다
 
 
 @dataclass(frozen=True)

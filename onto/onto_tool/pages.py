@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from .keys import PAGE_KEYS
+from .keys import PAGE_KEYS, SOURCE_KEY
 
 FENCE = "---"
 INDEX_FILE = "index.md"  # 페이지에서 생성되는 인덱스. 페이지가 아니다.
@@ -106,8 +106,9 @@ def page_values(meta: dict[str, object]) -> dict[str, object]:
 
     값의 종류는 정의된 키(`keys.PAGE_KEYS`)에서만 따진다. 정의되지 않은 키는 컴파일이 버리고 스크립트 검사가 키 이름으로
     알리므로, 그 값이 중첩되어 있어도 페이지를 읽을 수 없는 것으로 만들지 않고 그대로 둔다.
+    `derivedFrom`은 중첩된 값(`{path, hash}` 항목)이 정상이라 여기서 다루지 않는다. `sources.parse_entries`가 따로 읽는다.
     """
-    defined = scalar_values({key: value for key, value in meta.items() if key in PAGE_KEYS})
+    defined = scalar_values({key: value for key, value in meta.items() if key in PAGE_KEYS and key != SOURCE_KEY})
     undefined = {key: value for key, value in meta.items() if key not in PAGE_KEYS}
     return {**defined, **undefined}
 
