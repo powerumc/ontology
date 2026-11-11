@@ -1,24 +1,33 @@
 """온톨로지 층의 페이지 파일: 위치에서 식별자를 얻고, frontmatter를 읽는다."""
 
 import datetime
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
+from .keys import PAGE_KEYS
+
 FENCE = "---"
 INDEX_FILE = "index.md"  # 페이지에서 생성되는 인덱스. 페이지가 아니다.
+# 식별자의 경로 조각(`/`로 나눈 조각 하나)은 영어 소문자, 숫자, 하이픈만 쓴다.
+IDENTIFIER_SEGMENT = re.compile(r"[a-z0-9-]+")
 
 
 class FrontmatterError(Exception):
     """frontmatter를 읽을 수 없다. 메시지는 이유다. 파일 이름은 부른 쪽이 붙인다."""
 
 
+class ValueKindError(FrontmatterError):
+    """frontmatter를 읽었지만 값의 종류가 맞지 않다(문자열이어야 하는데 중첩된 값이다 등). 스크립트 검사가 따로 보고한다."""
+
+
 @dataclass(frozen=True)
 class Page:
     identifier: str  # 온톨로지 층 기준 상대 경로에서 확장자를 뺀 것. 별도의 id 필드는 없다.
     path: Path
-    meta: dict[str, object]  # frontmatter의 키와 값. 날짜는 ISO 문자열이다.
+    meta: dict[str, object]  # frontmatter의 키와 값. 정의된 키의 날짜는 ISO 문자열이다. 정의되지 않은 키의 값은 읽은 그대로다.
 
 
 def find_pages(ontology_dir: Path) -> list[tuple[str, Path]]:
@@ -37,8 +46,15 @@ def find_pages(ontology_dir: Path) -> list[tuple[str, Path]]:
 
 
 def read_page(identifier: str, path: Path) -> Page:
-    """페이지 파일을 읽는다. frontmatter를 읽을 수 없으면 `FrontmatterError`를 던진다."""
-    return Page(identifier, path, scalar_values(read_frontmatter(path)))
+    """페이지 파일을 읽는다. frontmatter를 읽을 수 없으면 `FrontmatterError`를 던진다.
+
+    값의 종류는 정의된 키(`keys.PAGE_KEYS`)에서만 따진다. 정의되지 않은 키는 컴파일이 버리고 스크립트 검사가 키 이름으로
+    알리므로, 그 값이 중첩되어 있어도 페이지를 읽을 수 없는 것으로 만들지 않는다.
+    """
+    meta = read_frontmatter(path)
+    defined = scalar_values({key: value for key, value in meta.items() if key in PAGE_KEYS})
+    undefined = {key: value for key, value in meta.items() if key not in PAGE_KEYS}
+    return Page(identifier, path, {**defined, **undefined})
 
 
 def read_frontmatter(path: Path) -> dict[str, object]:
@@ -76,7 +92,7 @@ def scalar_values(meta: dict[str, object]) -> dict[str, object]:
             continue
         items = value if isinstance(value, list) else [value]
         if not all(isinstance(item, str | int | float | bool | datetime.date) for item in items):
-            raise FrontmatterError(f"`{key}`의 값이 문자열, 숫자, 날짜 또는 그 목록이 아니다")
+            raise ValueKindError(f"`{key}`의 값이 문자열, 숫자, 날짜 또는 그 목록이 아니다")
         converted = [item.isoformat() if isinstance(item, datetime.date) else item for item in items]
         result[str(key)] = converted if isinstance(value, list) else converted[0]
     return result

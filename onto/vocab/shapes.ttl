@@ -1,0 +1,197 @@
+# 구조 제약: 페이지가 갖춰야 할 구조. 필수 속성, 값의 종류, 허용되는 클래스, 관계를 쓰고 가리킬 수 있는 클래스를 정한다.
+# 스크립트 검사가 컴파일한 그래프(적힌 사실 그대로, 추론하지 않은 것)에 이 파일을 돌린다. 이 도구의 `vocab/`에 있는 것만 쓰고,
+# 지식 저장소가 구조 제약을 덮어쓸 수는 없다. 누락은 열린 세계를 가정하는 OWL이 아니라 SHACL이 잡는다.
+#
+# 이 파일에는 제약만 둔다. 어느 검사 항목이 보고하는지는 `onto:check`가 정하고, 심각도와 켬/끔은 검사 항목에 붙으므로 여기에 없다.
+# 도구가 `sh:sourceShape`에서 `onto:check`를 찾는다. 속성 제약(`sh:property`)은 자기 자신이나 그것을 품은 도형의 `onto:check`를 쓴다.
+# `sh:message`는 제약을 한 문장으로 적은 것이고, 도구가 어긋난 값을 덧붙여 보고한다.
+#
+# 하위 클래스: `sh:class`와 `sh:targetClass`는 데이터 그래프의 `rdfs:subClassOf`를 따른다. 지식 저장소가 선언한 하위 클래스의 엔티티는
+# 상위 클래스의 엔티티로 취급되어, 상위 클래스에 허용된 관계를 쓰고 상위 클래스를 가리키는 자리에 올 수 있다.
+#
+# 엔티티는 컴파일이 `onto:repository`를 적은 노드다. 하위 클래스 선언에는 `onto:declaredIn`을 적으므로 여기에 걸리지 않는다.
+# 필수 속성은 `class`와 `title`이다. `Project`의 제목은 필수가 아니다(`ontology.yaml`에는 `name`만 있어도 된다).
+# `description`, `date`, `aliases`와 관계는 선택이다.
+
+@prefix onto: <https://onto.invalid/vocab#> .
+@prefix shape: <https://onto.invalid/shape#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+
+# 이 도형 파일이 SPARQL 제약에서 쓰는 접두사.
+<https://onto.invalid/shape> a owl:Ontology ;
+    sh:declare [ sh:prefix "onto" ; sh:namespace "https://onto.invalid/vocab#"^^xsd:anyURI ] .
+
+# --- 클래스 --------------------------------------------------------------------
+
+# 모든 엔티티는 클래스를 가진다.
+shape:EntityHasClass a sh:NodeShape ;
+    sh:targetSubjectsOf onto:repository ;
+    sh:property shape:EntityHasClass-type .
+
+shape:EntityHasClass-type onto:check "missing-property" ;
+    sh:path rdf:type ;
+    sh:minCount 1 .
+
+# 페이지의 클래스는 페이지로 서술하는 공통 클래스이거나 그 하위 클래스다. `Source`는 페이지를 갖지 않아 여기에 없다.
+# `Project`는 `ontology.yaml`이 만드는 엔티티의 클래스라 목록에 두고, 페이지가 쓰지 못하게 아래에서 막는다.
+shape:ClassIsAllowed a sh:NodeShape ;
+    sh:targetSubjectsOf onto:repository ;
+    sh:property shape:ClassIsAllowed-type .
+
+shape:ClassIsAllowed-type onto:check "disallowed-class" ;
+    sh:path rdf:type ;
+    sh:node shape:AllowedClass ;
+    sh:message "페이지의 클래스는 Component, Plan, Policy, Term, Decision, Report 또는 그 하위 클래스여야 한다" .
+
+shape:AllowedClass a sh:NodeShape ;
+    sh:property [
+        sh:path [ sh:zeroOrMorePath rdfs:subClassOf ] ;
+        sh:qualifiedValueShape [
+            sh:in ( onto:Project onto:Component onto:Plan onto:Policy onto:Term onto:Decision onto:Report )
+        ] ;
+        sh:qualifiedMinCount 1
+    ] .
+
+# `Project` 엔티티는 `ontology.yaml`에서만 만들어지고, 그 IRI는 `<저장소 이름>/project`다. 페이지는 `Project` 클래스를 쓸 수 없다.
+shape:ProjectIsNotAPage a sh:NodeShape ;
+    onto:check "disallowed-class" ;
+    sh:targetClass onto:Project ;
+    sh:pattern "^https://onto\\.invalid/entity/[^/]+/project$" ;
+    sh:message "Project는 ontology.yaml이 만드는 엔티티의 클래스라 페이지의 클래스로 쓸 수 없다" .
+
+# --- 필수 속성 -----------------------------------------------------------------
+
+shape:PageHasTitle a sh:NodeShape ;
+    sh:targetClass onto:Component, onto:Plan, onto:Policy, onto:Term, onto:Decision, onto:Report ;
+    sh:property shape:PageHasTitle-title .
+
+shape:PageHasTitle-title onto:check "missing-property" ;
+    sh:path dcterms:title ;
+    sh:minCount 1 .
+
+# --- 값의 종류 -----------------------------------------------------------------
+# 관계의 값이 식별자 문자열인지는 컴파일이 확인한다(그래프에 오기 전에 걸린다).
+
+shape:ValueKinds a sh:NodeShape ;
+    sh:targetSubjectsOf onto:repository ;
+    sh:property shape:Title-kind, shape:Description-kind, shape:Date-kind, shape:Aliases-kind .
+
+shape:Title-kind onto:check "invalid-value" ;
+    sh:path dcterms:title ;
+    sh:datatype xsd:string ;
+    sh:maxCount 1 .
+
+shape:Description-kind onto:check "invalid-value" ;
+    sh:path dcterms:description ;
+    sh:datatype xsd:string ;
+    sh:maxCount 1 .
+
+shape:Date-kind onto:check "invalid-value" ;
+    sh:path dcterms:date ;
+    sh:datatype xsd:date ;
+    sh:maxCount 1 .
+
+shape:Aliases-kind onto:check "invalid-value" ;
+    sh:path skos:altLabel ;
+    sh:datatype xsd:string .
+
+# --- 관계 ----------------------------------------------------------------------
+# 관계마다 `-domain`(쓸 수 있는 클래스)과 `-range`(가리킬 수 있는 클래스) 도형을 둔다. 표는 스펙의 관계 표와 같다.
+# 가리키는 엔티티가 없는 경우(깨진 참조)는 여기서 따지지 않고, 도구가 깨진 참조로 따로 보고한다.
+
+shape:partOf-domain a sh:NodeShape ;
+    onto:check "relation-domain" ;
+    sh:targetSubjectsOf onto:partOf ;
+    sh:class onto:Component ;
+    sh:message "partOf: Component만 쓸 수 있다" .
+
+shape:partOf-range a sh:NodeShape ;
+    sh:targetSubjectsOf onto:partOf ;
+    sh:property shape:partOf-range-values .
+
+shape:partOf-range-values onto:check "relation-range" ;
+    sh:path onto:partOf ;
+    sh:or ( [ sh:class onto:Component ] [ sh:class onto:Project ] ) ;
+    sh:message "partOf: Component와 Project만 가리킬 수 있다" .
+
+shape:dependsOn-domain a sh:NodeShape ;
+    onto:check "relation-domain" ;
+    sh:targetSubjectsOf onto:dependsOn ;
+    sh:or ( [ sh:class onto:Component ] [ sh:class onto:Project ] ) ;
+    sh:message "dependsOn: Component와 Project만 쓸 수 있다" .
+
+shape:dependsOn-range a sh:NodeShape ;
+    sh:targetSubjectsOf onto:dependsOn ;
+    sh:property shape:dependsOn-range-values .
+
+shape:dependsOn-range-values onto:check "relation-range" ;
+    sh:path onto:dependsOn ;
+    sh:or ( [ sh:class onto:Component ] [ sh:class onto:Project ] ) ;
+    sh:message "dependsOn: Component와 Project만 가리킬 수 있다" .
+
+shape:implements-domain a sh:NodeShape ;
+    onto:check "relation-domain" ;
+    sh:targetSubjectsOf onto:implements ;
+    sh:class onto:Report ;
+    sh:message "implements: Report만 쓸 수 있다" .
+
+shape:implements-range a sh:NodeShape ;
+    sh:targetSubjectsOf onto:implements ;
+    sh:property shape:implements-range-values .
+
+shape:implements-range-values onto:check "relation-range" ;
+    sh:path onto:implements ;
+    sh:or ( [ sh:class onto:Plan ] [ sh:class onto:Decision ] ) ;
+    sh:message "implements: Plan과 Decision만 가리킬 수 있다" .
+
+shape:governs-domain a sh:NodeShape ;
+    onto:check "relation-domain" ;
+    sh:targetSubjectsOf onto:governs ;
+    sh:class onto:Policy ;
+    sh:message "governs: Policy만 쓸 수 있다" .
+
+shape:governs-range a sh:NodeShape ;
+    sh:targetSubjectsOf onto:governs ;
+    sh:property shape:governs-range-values .
+
+shape:governs-range-values onto:check "relation-range" ;
+    sh:path onto:governs ;
+    sh:or ( [ sh:class onto:Project ] [ sh:class onto:Component ] ) ;
+    sh:message "governs: Project와 Component만 가리킬 수 있다" .
+
+# supersedes는 어느 클래스의 페이지든 쓸 수 있고, 가리키는 쪽과 같은 클래스(적힌 클래스 가운데 하나)의 엔티티만 가리킬 수 있다.
+shape:supersedes-range a sh:NodeShape ;
+    onto:check "relation-range" ;
+    sh:targetSubjectsOf onto:supersedes ;
+    sh:sparql [
+        sh:message "supersedes: 같은 클래스의 엔티티만 가리킬 수 있다" ;
+        sh:prefixes <https://onto.invalid/shape> ;
+        sh:select """
+            SELECT $this ?value
+            WHERE {
+                $this onto:supersedes ?value .
+                FILTER NOT EXISTS { $this a ?class . ?value a ?class }
+            }
+        """
+    ] .
+
+shape:about-domain a sh:NodeShape ;
+    onto:check "relation-domain" ;
+    sh:targetSubjectsOf onto:about ;
+    sh:or ( [ sh:class onto:Plan ] [ sh:class onto:Decision ] [ sh:class onto:Report ] [ sh:class onto:Term ] ) ;
+    sh:message "about: Plan, Decision, Report, Term만 쓸 수 있다" .
+
+shape:about-range a sh:NodeShape ;
+    sh:targetSubjectsOf onto:about ;
+    sh:property shape:about-range-values .
+
+shape:about-range-values onto:check "relation-range" ;
+    sh:path onto:about ;
+    sh:or ( [ sh:class onto:Project ] [ sh:class onto:Component ] ) ;
+    sh:message "about: Project와 Component만 가리킬 수 있다" .

@@ -21,6 +21,14 @@ PAGE_PROPERTY_KEYS = ("class", "title", "description", "date", "aliases")
 # 출처를 다루는 티켓이 더한다.
 RELATION_KEYS = ("partOf", "dependsOn", "implements", "governs", "supersedes", "about")
 PAGE_KEYS = frozenset((*PAGE_PROPERTY_KEYS, *RELATION_KEYS))
+# 공통 어휘에는 있지만 페이지에는 쓰지 않는 역방향 관계와 그 원래 방향. 추론이 만든다.
+# 페이지에 쓰면 정의되지 않은 키가 아니라 역방향 관계로 알린다.
+REVERSE_RELATION_KEYS = {
+    "hasPart": "partOf",
+    "implementedBy": "implements",
+    "governedBy": "governs",
+    "supersededBy": "supersedes",
+}
 
 # ontology.yaml
 ONTOLOGY_YAML_REQUIRED_KEYS = ("name",)
