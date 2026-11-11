@@ -1,4 +1,4 @@
-"""엔티티의 클래스를 공통 어휘의 클래스로 환원한다.
+"""엔티티의 클래스를 공통 어휘의 클래스로 환원한다. 스크립트 검사(`checks`)와 인덱스(`index`)가 쓴다.
 
 하위 클래스의 엔티티는 상위 클래스로도 질의되고 집계된다. 그래서 클래스를 비교하는 검사(중복, 클래스별 디렉토리)는
 적힌 클래스가 아니라, 상위 클래스를 따라가 닿는 공통 어휘의 클래스로 비교한다. 지식 저장소마다 선언한 하위 클래스의 IRI가
@@ -8,8 +8,8 @@
 from rdflib import Graph, URIRef
 from rdflib.namespace import RDF, RDFS
 
-from .. import vocab
-from ..keys import PAGE_CLASS_DIRECTORIES
+from . import vocab
+from .keys import PAGE_CLASS_DIRECTORIES
 
 
 class ClassIndex:

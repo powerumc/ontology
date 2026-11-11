@@ -1,8 +1,8 @@
-"""그래프의 IRI를 사람이 읽을 이름으로 바꾼다. 검사 결과의 설명에 쓴다."""
+"""그래프의 IRI를 사람이 읽을 이름으로 바꾼다. 검사 결과의 설명과 인덱스에 쓴다."""
 
 from urllib.parse import unquote
 
-from ..iri import CLASS_BASE, ENTITY_BASE, UNRESOLVED_BASE
+from .iri import CLASS_BASE, ENTITY_BASE, UNRESOLVED_BASE
 
 
 def class_label(iri: object) -> str:

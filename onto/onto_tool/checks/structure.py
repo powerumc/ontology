@@ -15,9 +15,9 @@ from rdflib.namespace import RDF, SH, XSD
 from .. import vocab
 from ..compiler import Compiled
 from ..rules import RuleSet
+from ..classes import ClassIndex
+from ..labels import class_label, entity_label
 from .catalog import BY_NAME, INVALID_ONTOLOGY_YAML, INVALID_VALUE, MISSING_PROPERTY, RELATION_DOMAIN, RELATION_RANGE
-from .classes import ClassIndex
-from .labels import class_label, entity_label
 from .model import Issue
 
 # 범위가 주어의 클래스에도 달린 관계(`supersedes`: 같은 클래스끼리)의 도형. `vocab/shapes.ttl`의 `shape:supersedes-range`다.

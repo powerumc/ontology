@@ -104,10 +104,15 @@ class OntoCli:
         if self._original_rules is not None:
             self.write_root_rules(self._original_rules)
 
-    def root(self, repos: dict[str, dict[str, str]] | None = None) -> Path:
+    def root(self, repos: dict[str, dict[str, str]] | None = None, *, indexed: bool = True) -> Path:
         """견본 루트 디렉토리를 만든다. `repos`는 `{저장소명: {지식 저장소 안의 파일 경로: 내용}}`이다.
 
         페이지와 `ontology.yaml`은 지식 저장소 안의 경로(`docs/ontology/…`)로 적는다.
+
+        지식 저장소에는 인덱스(`docs/ontology/index.md`)가 있어야 하고 없으면 스크립트 검사가 오류로 잡는다(`index-mismatch`).
+        그래서 기본으로 파일을 쓴 뒤 `build`를 한 번 실행해 인덱스를 갖춘다. 견본이 정상이면 인덱스가 생겨 다른 검사 항목의 테스트에
+        인덱스 문제가 끼지 않는다. 읽을 수 없는 파일이 든 견본은 `build`가 멈춰 인덱스 없이 남는다. `build`가 남기는 산출물은 비운다.
+        인덱스가 없는 견본이 필요하면(인덱스가 없는 저장소, `build`가 인덱스를 새로 만드는 것을 보는 테스트) `indexed=False`로 만든다.
         """
         self._roots += 1
         root = self._sandbox.new_dir("samples", f"root-{self._roots}")
@@ -116,6 +121,9 @@ class OntoCli:
                 target = root / "projects" / name / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(text, encoding="utf-8")
+        if indexed and repos:
+            self.run(root, "build")  # 종료 코드는 보지 않는다. 멈춘 견본은 인덱스가 없는 채로 쓴다.
+            shutil.rmtree(self.build_dir, ignore_errors=True)
         return root
 
     def run(

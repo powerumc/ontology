@@ -978,7 +978,8 @@ def test_실행할_때마다_현재_파일에서_다시_컴파일한다(onto_cli
     broken.write_text(broken.read_text(encoding="utf-8").replace('"titel"', '"title"'), encoding="utf-8")
     after_fix = checks_of(onto_cli, root)
 
-    assert after_break == ["missing-property", "undefined-key"]
+    # build가 만든 인덱스에는 제목이 있던 페이지라, 제목을 잃은 지금은 인덱스도 어긋난다(페이지 파일 다음에 인덱스 파일 순).
+    assert after_break == ["missing-property", "undefined-key", "index-mismatch"]
     assert after_fix == []
 
 

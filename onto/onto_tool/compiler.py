@@ -9,6 +9,7 @@
 페이지의 `derivedFrom`은 항목(원본 문서의 경로와 해시)마다 `Source` 엔티티가 되어 페이지가 `onto:derivedFrom`으로 가리킨다.
 `Source`는 페이지가 없어 `onto:repository`를 적지 않고, 구조 제약의 대상 엔티티가 아니다. 파일은 `Compiled.source_files`가 알려 준다.
 추론(하위 클래스, 역관계, 추이 관계)은 여기서 하지 않는다. `inference.infer`가 이 그래프에 적용한다.
+인덱스 파일은 만들지 않고 지금 있는 글자만 읽어 둔다(`RepositoryRecord.index_text`). 인덱스는 `index`가 컴파일한 결과에서 만든다.
 """
 
 import json
@@ -26,6 +27,7 @@ from .iri import UNRESOLVED_BASE, class_iri, entity_iri, resolve_reference, sour
 from .keys import CLASS_DECLARATION_KEYS, CLASSES_KEY, PAGE_KEYS, PROJECT_KEYS, RELATION_KEYS, RULES_KEY, SOURCE_KEY
 from .ontology_yaml import OntologyYamlError, read_ontology_yaml, undefined_keys_message
 from .pages import (
+    INDEX_FILE,
     FrontmatterError,
     ValueKindError,
     find_misnamed_pages,
@@ -35,7 +37,7 @@ from .pages import (
     scalar_values,
 )
 from .sources import SourceEntry, document_hash, parse_entries, read_skipped
-from .workspace import ONTOLOGY_YAML, SKIPPED_YAML, Repository, Workspace
+from .workspace import ONTOLOGY_DIR, ONTOLOGY_YAML, SKIPPED_YAML, Repository, Workspace
 
 PROJECT_IDENTIFIER = "project"
 # 지식 저장소가 선언하는 클래스의 이름. 공통 어휘의 클래스 이름처럼 영어로 쓰고 대문자로 시작한다.
@@ -55,6 +57,10 @@ INVALID_IDENTIFIER = "invalid-identifier"  # 페이지로 쓸 수 없는 식별�
 # 규칙을 담은 파일이라 이 항목은 루트 전용이다. 저장소의 `rules`가 자기 파일의 오타를 끄거나 낮추지 못하게 한다.
 # 페이지의 같은 문제(`undefined-key`, `invalid-value`)는 저장소가 규칙으로 조정할 수 있는 별개의 항목이다.
 INVALID_ONTOLOGY_YAML = "invalid-ontology-yaml"
+# 서로 다른 지식 저장소가 같은 `name`을 쓴다. 엔티티의 IRI가 `name`으로 만들어져 두 저장소의 엔티티가 하나로 합쳐진다.
+# 한 저장소의 제목이 다른 저장소의 커밋되는 인덱스에 들어가는 길이라, 읽을 수 없는 파일처럼 `build`와 `query`를 멈춘다.
+# 겹친 저장소를 가려내는 것은 컴파일이라, 이 항목도 루트 전용이다.
+DUPLICATE_REPOSITORY_NAME = "duplicate-repository-name"
 
 
 @dataclass(frozen=True)
@@ -86,11 +92,15 @@ class RepositoryRecord:
     directory: str  # 서브모듈 디렉토리 이름
     path: str  # 루트 저장소 기준 디렉토리 경로
     yaml_file: str  # 루트 저장소 기준 `ontology.yaml` 경로
+    index_file: str  # 루트 저장소 기준 인덱스(`index.md`)의 경로. 파일이 없어도 있어야 할 자리다
     has_layer: bool  # `ontology.yaml`이 있다. 없으면 컴파일이 건너뛴다
     name: str | None = None  # `ontology.yaml`의 `name`. 파일이 없거나 읽을 수 없으면 알 수 없다
     rules: object = None  # `ontology.yaml`의 `rules` 값 그대로. 규칙을 읽고 검증하는 것은 스크립트 검사의 몫이다. 없으면 None
     pages: list[PageRecord] = field(default_factory=list)
     misnamed_pages: list[str] = field(default_factory=list)  # 페이지처럼 보이지만 확장자가 `.md`가 아니라 읽지 않은 파일의 경로
+    index_text: str | None = None  # 지금 인덱스 파일의 글자(줄바꿈은 `\n`으로 통일). 파일이 없거나 읽지 않았으면 None
+    # 인덱스 경로를 읽지도 쓰지도 않는 이유. 심볼릭 링크, 일반 파일이 아닌 것, 지식 저장소 밖을 가리키는 경로다. 문제가 없으면 None
+    index_problem: str | None = None
     skipped: list[SourceEntry] = field(default_factory=list)  # 넘긴 문서의 목록(`skipped.yaml`)의 항목. 파일이 없거나 읽을 수 없으면 비어 있다
     # 페이지와 넘긴 문서의 목록이 가리키는 원본 문서의 경로 -> 지금 작업 트리에 있는 내용의 해시. 없거나 읽을 수 없는 문서는 None이다.
     document_hashes: dict[str, str | None] = field(default_factory=dict)
@@ -153,8 +163,54 @@ def compile_workspace(workspace: Workspace) -> Compiled:
         files.update(read.files)
         source_files.update(read.source_files)
 
+    problems += _duplicate_names(records)
     raw.parse(data=json.dumps({"@context": context, "@graph": nodes}), format="json-ld", base=UNRESOLVED_BASE)
     return Compiled(canonical(raw), files, names, warnings, problems, records, source_files)
+
+
+def _duplicate_names(records: list[RepositoryRecord]) -> list[Problem]:
+    """같은 `name`을 쓰는 지식 저장소가 있으면, 그 가운데 `name`이 서브모듈 디렉토리 이름과 다른 저장소마다 문제 하나를 만든다.
+
+    디렉토리 이름은 서로 다르므로 겹친 저장소 가운데 적어도 하나는 `name`이 디렉토리 이름과 다르다. 그것이 고칠 곳이다.
+    """
+    by_name: dict[str, list[RepositoryRecord]] = {}
+    for record in records:
+        if record.name is not None:
+            by_name.setdefault(record.name, []).append(record)
+    return [
+        Problem(
+            record.yaml_file,
+            f"name `{name}`이 다른 지식 저장소({', '.join(f'`{o.directory}`' for o in group if o is not record)})와 같다. "
+            "name은 지식 저장소마다 고유하고 서브모듈 디렉토리 이름과 같아야 한다",
+            DUPLICATE_REPOSITORY_NAME,
+        )
+        for name, group in by_name.items()
+        if len(group) > 1
+        for record in group
+        if record.name != record.directory
+    ]
+
+
+def _read_index(repository: Repository, record: RepositoryRecord) -> None:
+    """인덱스 파일의 글자를 읽어 `record`에 둔다. 읽거나 쓰면 안 되는 경로면 이유만 둔다.
+
+    인덱스는 지식 저장소가 커밋하는 파일이라 그 저장소의 작성자가 정한 모양일 수 있다. 심볼릭 링크를 따라가면 `build`가 저장소 밖의
+    파일을 덮어쓰고 `validate`가 그 내용을 보여 주게 된다. 일반 파일이 아닌 것(디렉토리)은 읽을 수 없고, `docs/`나 `docs/ontology/`가
+    링크라 저장소 밖으로 나가는 경로도 쓰지 않는다.
+    """
+    path = repository.ontology_dir / INDEX_FILE
+    if path.is_symlink():
+        record.index_problem = "심볼릭 링크라 따라가지 않는다"
+    elif path.exists() and not path.is_file():
+        record.index_problem = "일반 파일이 아니다"
+    elif not path.parent.resolve().is_relative_to(repository.path.resolve()):
+        record.index_problem = "경로가 지식 저장소 밖을 가리킨다"
+    elif path.is_file():
+        try:
+            # 깨진 글자가 있어도 읽는다. 생성한 인덱스와 다른 글자가 되어 어긋난 인덱스로 보고될 뿐이다.
+            record.index_text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            record.index_problem = f"읽을 수 없다({exc.strerror})"
 
 
 def _record(workspace: Workspace, repository: Repository, *, has_layer: bool) -> RepositoryRecord:
@@ -162,6 +218,7 @@ def _record(workspace: Workspace, repository: Repository, *, has_layer: bool) ->
         directory=repository.directory,
         path=workspace.relative(repository.path),
         yaml_file=workspace.relative(repository.path / ONTOLOGY_YAML),
+        index_file=workspace.relative(repository.path / ONTOLOGY_DIR / INDEX_FILE),
         has_layer=has_layer,
     )
 
@@ -200,6 +257,7 @@ def _read_repository(
         read.problems.append(Problem(yaml_file, str(exc), INVALID_ONTOLOGY_YAML))
 
     read.record.misnamed_pages = [workspace.relative(path) for path in find_misnamed_pages(repository.ontology_dir)]
+    _read_index(repository, read.record)
     for identifier, path in find_pages(repository.ontology_dir):
         file = workspace.relative(path)
         meta: dict[str, object] | None

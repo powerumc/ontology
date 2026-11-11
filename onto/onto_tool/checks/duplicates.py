@@ -19,8 +19,8 @@ from .. import vocab
 from ..compiler import Compiled
 from ..rules import Duplicates, RuleSet
 from .catalog import DUPLICATE_ENTITY, DUPLICATE_ENTITY_ACROSS_REPOSITORIES
-from .classes import ClassIndex
-from .labels import class_label
+from ..classes import ClassIndex
+from ..labels import class_label
 from .model import Issue
 from .model import repository_of as directory_of
 

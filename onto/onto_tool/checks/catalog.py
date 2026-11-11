@@ -3,8 +3,8 @@
 검사를 더할 때 고치는 곳이다. 켬/끔과 심각도는 여기가 아니라 규칙 파일(`rules.yaml`)이 정하므로, 검사를 더하면 `rules.yaml`의
 `checks`에도 같은 이름의 항목을 더한다(빠지면 도구가 알린다). 항목을 실제로 돌리는 코드는 같은 패키지의 다른 모듈에 있고,
 여기의 항목을 가리켜 문제를 보고한다. 이름은 규칙 파일이 항목을 가리키는 키가 되고 보고에도 나온다.
-루트 전용 항목(지식 저장소의 규칙이 끄거나 심각도를 바꿀 수 없는 것)은 `root_only=True`로 적는다. 공유 범위 검사와, 규칙을 담은
-`ontology.yaml` 자체의 문제를 보고하는 항목이 그렇다.
+루트 전용 항목(지식 저장소의 규칙이 끄거나 심각도를 바꿀 수 없는 것)은 `root_only=True`로 적는다. 공유 범위 검사, 규칙을 담은
+`ontology.yaml` 자체의 문제를 보고하는 항목, 지식 저장소 사이의 `name` 겹침이 그렇다.
 """
 
 from .. import compiler
@@ -52,6 +52,11 @@ DUPLICATE_ENTITY_ACROSS_REPOSITORIES = Check(
 
 # --- 지식 저장소 ---------------------------------------------------------------------
 REPOSITORY_NAME_MISMATCH = Check("repository-name-mismatch", "ontology.yaml의 name이 서브모듈 디렉토리 이름과 다르다")
+DUPLICATE_REPOSITORY_NAME = Check(
+    compiler.DUPLICATE_REPOSITORY_NAME,
+    "여러 지식 저장소가 같은 name을 쓴다(엔티티가 하나로 합쳐지므로 build와 query도 멈춘다)",
+    root_only=True,
+)
 MISSING_ONTOLOGY_LAYER = Check("missing-ontology-layer", "등록된 지식 저장소에 온톨로지 층(ontology.yaml)이 없어 검사하지 못했다")
 INVALID_RULES = Check(
     "invalid-rules", "ontology.yaml의 rules가 틀렸다(정의되지 않은 키, 값의 종류, 루트 전용 규칙을 덮어쓰려는 시도). 그 저장소는 루트 기본 규칙으로 검사한다"
@@ -61,6 +66,12 @@ INVALID_RULES = Check(
 STALE_PAGE = Check("stale-page", "페이지가 근거로 삼은 원본 문서가 기록한 해시와 달라졌다(낡음). 작업 트리의 현재 내용으로 따진다")
 MISSING_SOURCE = Check("missing-source", "페이지의 derivedFrom이 가리키는 원본 문서가 없다")
 MISSING_SKIPPED_SOURCE = Check("missing-skipped-source", "넘긴 문서의 목록(skipped.yaml)에 적힌 원본 문서가 없다")
+
+# --- 인덱스 -------------------------------------------------------------------------
+INDEX_MISMATCH = Check(
+    "index-mismatch",
+    "지식 저장소의 인덱스(index.md)가 없거나 현재 페이지에서 만들어지는 인덱스와 다르다(심볼릭 링크나 디렉토리라 쓸 수 없는 경우 포함. 다시 build한다)",
+)
 
 CHECKS = (
     UNREADABLE_FILE,
@@ -82,11 +93,13 @@ CHECKS = (
     DUPLICATE_ENTITY,
     DUPLICATE_ENTITY_ACROSS_REPOSITORIES,
     REPOSITORY_NAME_MISMATCH,
+    DUPLICATE_REPOSITORY_NAME,
     MISSING_ONTOLOGY_LAYER,
     INVALID_RULES,
     STALE_PAGE,
     MISSING_SOURCE,
     MISSING_SKIPPED_SOURCE,
+    INDEX_MISMATCH,
 )
 
 BY_NAME = {check.name: check for check in CHECKS}

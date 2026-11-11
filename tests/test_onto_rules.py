@@ -151,6 +151,8 @@ def test_8의_기본_심각도가_루트_기본_규칙의_값으로_옮겨져_�
         **DEFAULT_SEVERITIES,
         "invalid-ontology-yaml": "error",
         "invalid-rules": "error",
+        "duplicate-repository-name": "error",
+        "index-mismatch": "error",
         # #10이 더한 원본 문서의 기록 검사
         "stale-page": "warning",
         "missing-source": "error",

@@ -5,6 +5,7 @@
 """
 
 import json
+import shutil
 from pathlib import Path
 
 from support.onto_cli import ONTOLOGY_DIR, copy_onto, page, parse_table, repo, snapshot
@@ -13,6 +14,8 @@ PAGES = "projects/billing/docs/ontology"
 PLAN_FILE = f"{PAGES}/plan/auth-redesign.md"
 PLAN_TITLE = "인증 재설계"
 GRAPH = Path("onto") / ".build" / "graph.ttl"  # 도구 디렉토리 안의 무시되는 디렉토리
+ALL_INDEX = Path("onto") / ".build" / "index.md"  # 모든 지식 저장소를 모은 전체 인덱스. 도구 디렉토리 안의 무시되는 디렉토리다
+INDEX = "docs/ontology/index.md"  # 지식 저장소 하나의 인덱스. 그 저장소 안의 경로
 
 
 def root_with_billing(sandbox, *pages, **project) -> Path:
@@ -35,17 +38,58 @@ def test_just_onto_build가_projects_아래_지식_저장소의_페이지로_그
     assert PLAN_TITLE in (root / GRAPH).read_text(encoding="utf-8")
 
 
-def test_컴파일된_그래프는_빌드_산출물이라_git에_잡히지_않는다(sandbox):
+def test_컴파일된_그래프와_전체_인덱스는_빌드_산출물이라_루트_저장소의_git에_잡히지_않는다(sandbox):
     root = root_with_billing(sandbox, page("plan/auth-redesign", "Plan", title=PLAN_TITLE))
     assert sandbox.git("status", "--porcelain", cwd=root).stdout == ""
 
     build = sandbox.just("onto", "build", cwd=root)
 
     assert build.returncode == 0, build.stderr
-    assert (root / GRAPH).is_file()
+    assert (root / GRAPH).is_file() and (root / ALL_INDEX).is_file()
     assert not (root / "build").exists()  # 루트 저장소 최상위에는 아무것도 만들지 않는다
-    # 그래프뿐 아니라 도구의 가상환경과 잠금 파일도 작업 트리를 더럽히지 않는다.
-    assert sandbox.git("status", "--porcelain", cwd=root).stdout == ""
+    # 그래프와 전체 인덱스뿐 아니라 도구의 가상환경과 잠금 파일도 루트 저장소의 작업 트리를 더럽히지 않는다.
+    # (지식 저장소가 서브모듈이라 인덱스가 생긴 것은 포인터 변경으로 보이므로 서브모듈은 뺀다.)
+    assert sandbox.git("status", "--porcelain", "--ignore-submodules=all", cwd=root).stdout == ""
+    for artifact in (GRAPH, ALL_INDEX):
+        assert sandbox.git("check-ignore", "--quiet", artifact.as_posix(), cwd=root, check=False).returncode == 0, artifact
+
+
+def test_지식_저장소의_인덱스는_그_저장소의_git에_잡히는_파일이다(sandbox):
+    root = root_with_billing(sandbox, page("plan/auth-redesign", "Plan", title=PLAN_TITLE))
+    billing = root / "projects" / "billing"
+
+    build = sandbox.just("onto", "build", cwd=root)
+
+    assert build.returncode == 0, build.stderr
+    assert (billing / INDEX).is_file()
+    assert sandbox.git("check-ignore", "--quiet", INDEX, cwd=billing, check=False).returncode == 1  # 무시되지 않는다
+    assert sandbox.git("status", "--porcelain", "--untracked-files=all", cwd=billing).stdout == f"?? {INDEX}\n"
+
+
+def test_인덱스를_커밋한_뒤_같은_페이지로_다시_build해도_지식_저장소에_바뀐_것이_없다(sandbox):
+    """인덱스가 커밋되는 파일이라, 다시 만들어도 같은 글자여야 이력에 의미 없는 변경이 쌓이지 않는다."""
+    root = root_with_billing(sandbox, page("plan/auth-redesign", "Plan", title=PLAN_TITLE))
+    billing = root / "projects" / "billing"
+    assert sandbox.just("onto", "build", cwd=root).returncode == 0
+    sandbox.git("add", INDEX, cwd=billing)
+    sandbox.git("commit", "-m", "인덱스", cwd=billing)
+
+    rebuild = sandbox.just("onto", "build", cwd=root)
+
+    assert rebuild.returncode == 0, rebuild.stderr
+    assert sandbox.git("status", "--porcelain", "--untracked-files=all", cwd=billing).stdout == ""
+
+
+def test_just_onto_validate는_커밋된_인덱스가_페이지와_어긋나면_오류로_보고한다(sandbox):
+    root = root_with_billing(sandbox, page("plan/auth-redesign", "Plan", title=PLAN_TITLE))
+    assert sandbox.just("onto", "build", cwd=root).returncode == 0
+    page_file = root / PLAN_FILE
+    page_file.write_text(page_file.read_text(encoding="utf-8").replace(PLAN_TITLE, "인증 재설계 2차"), encoding="utf-8")
+
+    result = sandbox.just("onto", "validate", cwd=root)
+
+    assert result.returncode == 1
+    assert result.stdout.split("\t")[:4] == ["오류", "billing", f"{PAGES}/index.md", "index-mismatch"]
 
 
 def test_just_onto_query는_결과의_엔티티를_루트_저장소_기준_파일_경로로_보여_준다(sandbox):
@@ -231,12 +275,18 @@ def test_just_onto_validate는_문제가_없으면_아무것도_보고하지_않
         sandbox, page("component/gateway", "Component", title="게이트웨이", partOf="project"), title="결제"
     )
 
+    # 지식 저장소는 인덱스가 있어야 검사를 통과한다. 만든 인덱스까지 포함해 검사 전후의 작업 트리를 비교한다.
+    assert sandbox.just("onto", "build", cwd=root).returncode == 0
+    shutil.rmtree(root / "onto" / ".build")
+    status = ("status", "--porcelain", "--untracked-files=all")
+    before = (sandbox.git(*status, cwd=root).stdout, sandbox.git(*status, cwd=root / "projects" / "billing").stdout)
+
     result = sandbox.just("onto", "validate", cwd=root)
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
     assert not (root / GRAPH).parent.exists()
-    assert sandbox.git("status", "--porcelain", cwd=root).stdout == ""
+    assert (sandbox.git(*status, cwd=root).stdout, sandbox.git(*status, cwd=root / "projects" / "billing").stdout) == before
 
 
 def test_just_onto_rules는_루트_기본_규칙과_저장소가_덮어쓴_규칙을_보여_주고_파일을_만들지_않는다(sandbox):
