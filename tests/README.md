@@ -49,7 +49,8 @@ def test_예(onto_cli):
 ```
 
 - `onto_cli.root({저장소명: {지식 저장소 안의 경로: 내용}})`: `projects/<저장소명>/…` 모양의 임시 디렉토리. git 저장소가 아니다. 도구는 현재 디렉토리를 루트 저장소로 본다.
-- `repo(이름, 페이지…)`, `page(식별자, 클래스, 제목=…, partOf=[…])`, `ontology_yaml(이름, …)`: 견본 파일을 만든다. 값은 JSON으로 적어 YAML이 된다.
+- `repo(이름, 페이지…)`, `page(식별자, 클래스, 제목=…, partOf=[…])`, `ontology_yaml(이름, …)`: 견본 파일을 만든다. 값은 JSON으로 적어 YAML이 된다. `repo`의 키워드 인자는 `ontology.yaml`의 키가 된다(예: `repo("billing", title="결제", classes={"Invoice": {"subClassOf": "Component"}})`). 다른 지식 저장소의 엔티티는 `partOf=["shop:component/api"]`처럼 `<저장소 이름>:<식별자>`로 가리킨다.
 - 도구는 이 저장소의 추적 `onto/` 파일의 사본에서 돈다. 가상환경은 테스트 세션마다 한 번 만든다. 의존성을 처음 내려받을 때만 네트워크가 필요하다.
+- `onto_cli.query`와 `build`가 보는 그래프는 추론(하위 클래스, 역관계, 추이 관계)이 끝난 것이다. 정렬하지 않은 질의의 행 순서는 rdflib이 정하고 실행마다 다를 수 있으니, 행의 순서를 비교하는 테스트는 `ORDER BY`를 쓴다.
 - 도구는 산출물(컴파일한 그래프)을 자기 디렉토리의 `.build/`에 둔다. 도구 사본은 테스트 세션이 공유하므로 `onto_cli`가 테스트마다 비운다. `onto_cli.build(root)`가 그래프 파일의 내용을, `onto_cli.graph_file`이 그 위치를 준다. 견본 루트에는 아무것도 생기지 않아야 하고, `snapshot(root)`로 앞뒤를 비교한다.
 - 같은 도구를 `just onto …`로 부르는 테스트(`test_onto_just.py`)는 서브모듈로 붙인 지식 저장소를 상대로 하고, 테스트마다 가상환경을 새로 만들어 더 느리다. 명령줄 인자 전달, 산출물이 git에 잡히지 않는 것, 모듈 연결처럼 just를 거쳐야 보이는 것만 거기서 확인한다.

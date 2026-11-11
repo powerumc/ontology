@@ -10,6 +10,9 @@
 from urllib.parse import quote
 
 ENTITY_BASE = "https://onto.invalid/entity/"
+# 지식 저장소가 선언한 하위 클래스의 IRI는 `<CLASS_BASE><저장소 이름>/<클래스 이름>`이다. 저장소마다 네임스페이스가 따로라
+# 다른 저장소가 같은 이름의 클래스를 선언해도 겹치지 않고, 엔티티의 IRI와 공통 어휘의 네임스페이스와도 겹치지 않는다.
+CLASS_BASE = "https://onto.invalid/class/"
 # context에 없는 용어(예: 공통 어휘에 없는 `class` 값)는 JSON-LD가 상대 IRI로 풀어 base를 붙인다.
 # base를 주지 않으면 rdflib이 실행 위치의 `file://` 주소를 쓰므로, 기기마다 다른 IRI가 그래프에 들어간다.
 # 엔티티의 IRI와 겹치지 않는 고정값을 주어, 풀리지 않은 용어가 그래프에서 알아볼 수 있게 남게 한다.
@@ -23,3 +26,26 @@ def entity_iri(repository: str, identifier: str) -> str:
     빠지지 않고 스크립트 검사가 오류로 알리게 하려는 것이다. rdflib은 공백이 든 IRI를 객체째 버린다.
     """
     return ENTITY_BASE + quote(f"{repository}/{identifier}", safe="/")
+
+
+def resolve_reference(repository: str, reference: str) -> str:
+    """`repository` 안의 페이지가 쓴 참조가 가리키는 엔티티의 IRI.
+
+    같은 지식 저장소의 엔티티는 식별자 그대로(`component/api`), 다른 지식 저장소의 엔티티는
+    `<저장소 이름>:<식별자>`(`billing:component/api`)로 쓴다. 식별자의 경로 조각은 영어 소문자, 숫자, 하이픈이라
+    `:`는 저장소 이름과 식별자의 경계로만 나온다. 가리키는 엔티티가 있는지는 여기서 따지지 않는다.
+    """
+    name, separator, identifier = reference.partition(":")
+    if separator:
+        return entity_iri(name.strip(), identifier.strip())
+    return entity_iri(repository, reference.strip())
+
+
+def class_iri(repository: str, name: str) -> str:
+    """지식 저장소 `repository`가 선언한 하위 클래스 `name`의 IRI."""
+    return CLASS_BASE + quote(f"{repository}/{name}", safe="/")
+
+
+def unresolved_iri(term: str) -> str:
+    """어느 엔티티나 클래스도 가리키지 않는 용어 `term`의 IRI. 풀리지 않은 채로 그래프에서 알아볼 수 있게 `UNRESOLVED_BASE` 아래에 둔다."""
+    return UNRESOLVED_BASE + quote(term, safe="")

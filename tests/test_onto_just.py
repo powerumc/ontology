@@ -179,3 +179,34 @@ def test_실행_위치에_표준_라이브러리나_의존성과_같은_이름�
 
     assert result.returncode == 0, result.stderr
     assert parse_table(result.stdout) == [["e"], [PLAN_FILE]]
+
+
+def test_just_onto_query는_서브모듈로_붙은_여러_저장소를_합쳐_교차_참조와_추론을_질의한다(sandbox):
+    """가장 높은 이음매에서 보는 이 티켓의 줄기: 저장소 둘이 하나의 그래프가 되고, 교차 참조가 풀리고, 추이·역관계가 나온다."""
+    root = sandbox.root()
+    root.register(
+        sandbox.knowledge_remote(
+            "billing",
+            files=repo("billing", page("component/gateway", "Component", title="게이트웨이", partOf=["shop:component/api"])),
+        )
+    )
+    root.register(
+        sandbox.knowledge_remote(
+            "shop",
+            files=repo("shop", page("component/api", "Component", title="상점 API", partOf=["project"]), title="상점"),
+        )
+    )
+
+    part_of = query(sandbox, root.work, "SELECT ?s ?o WHERE { ?s onto:partOf ?o } ORDER BY ?s ?o")
+    has_part = query(
+        sandbox, root.work, 'SELECT ?o WHERE { ?s a onto:Project ; onto:repository "shop" ; onto:hasPart ?o } ORDER BY ?o'
+    )
+
+    gateway, api, shop = (
+        "projects/billing/docs/ontology/component/gateway.md",
+        "projects/shop/docs/ontology/component/api.md",
+        "projects/shop/docs/ontology/ontology.yaml",
+    )
+    assert part_of.returncode == 0, part_of.stderr
+    assert parse_table(part_of.stdout) == [["s", "o"], [gateway, api], [gateway, shop], [api, shop]]
+    assert parse_table(has_part.stdout) == [["o"], [gateway], [api]]  # 정렬은 IRI 순이라 billing이 shop보다 앞선다

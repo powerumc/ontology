@@ -53,26 +53,32 @@ onto:Source a owl:Class ;
     rdfs:comment "원본 문서를 가리키는 엔티티. 페이지를 따로 갖지 않는다."@ko .
 
 # --- 관계 ------------------------------------------------------------------
-# 페이지에는 아래에 적은 방향(쓰는 쪽 → 가리키는 쪽)만 쓴다. 역방향은 추론으로만 생긴다.
+# 페이지에는 아래에 적은 방향(쓰는 쪽 → 가리키는 쪽)만 쓴다. 역방향은 추론으로만 생긴다(아래 "역관계").
+# 추론은 하위 클래스(rdfs:subClassOf), 역관계(owl:inverseOf), 추이 관계(owl:TransitiveProperty) 세 규칙뿐이고,
+# 어떤 클래스와 관계에 적용할지는 이 파일의 선언이 정한다. 추이 관계는 partOf 하나다. dependsOn은 추이 관계가 아니다.
 
-onto:partOf a owl:ObjectProperty ;
+onto:partOf a owl:ObjectProperty, owl:TransitiveProperty ;
     rdfs:label "partOf"@en ;
-    rdfs:comment "A는 B의 일부다. 한 Component가 다른 Component나 Project의 일부라는 관계. Component → Component, Project."@ko .
+    owl:inverseOf onto:hasPart ;
+    rdfs:comment "A는 B의 일부다. 한 Component가 다른 Component나 Project의 일부라는 관계. Component → Component, Project. 추이 관계다: A가 B의 일부이고 B가 C의 일부이면 A는 C의 일부다."@ko .
 
 onto:dependsOn a owl:ObjectProperty ;
     rdfs:label "dependsOn"@en ;
-    rdfs:comment "A가 동작하려면 B가 필요하다. 직접 의존만 적는다. Component, Project → Component, Project."@ko .
+    rdfs:comment "A가 동작하려면 B가 필요하다. 직접 의존만 적는다. Component, Project → Component, Project. 추이 관계가 아니다: 간접 의존은 질의에서 경로로 구한다."@ko .
 
 onto:implements a owl:ObjectProperty ;
     rdfs:label "implements"@en ;
+    owl:inverseOf onto:implementedBy ;
     rdfs:comment "이 구현 결과가 그 계획이나 결정을 실행했다. Report → Plan, Decision."@ko .
 
 onto:governs a owl:ObjectProperty ;
     rdfs:label "governs"@en ;
+    owl:inverseOf onto:governedBy ;
     rdfs:comment "이 정책이 그 대상에 적용된다. Policy → Project, Component."@ko .
 
 onto:supersedes a owl:ObjectProperty ;
     rdfs:label "supersedes"@en ;
+    owl:inverseOf onto:supersededBy ;
     rdfs:comment "새 것이 옛 것을 대체한다. 같은 클래스끼리."@ko .
 
 onto:derivedFrom a owl:ObjectProperty ;
@@ -83,3 +89,40 @@ onto:derivedFrom a owl:ObjectProperty ;
 onto:about a owl:ObjectProperty ;
     rdfs:label "about"@en ;
     rdfs:comment "이 페이지가 다루는 대상. Plan, Decision, Report, Term → Project, Component."@ko .
+
+# --- 역관계 ------------------------------------------------------------------
+# 페이지에는 쓰지 않는다(context.jsonld에 키가 없다). 추론이 위 관계의 방향을 뒤집어 만든다.
+# 방향은 위 관계의 owl:inverseOf에 한 번만 적는다. owl:inverseOf는 대칭이라 반대쪽에도 같은 뜻이다.
+
+onto:hasPart a owl:ObjectProperty ;
+    rdfs:label "hasPart"@en ;
+    rdfs:comment "partOf의 역. A가 B를 일부로 가진다. partOf가 추이 관계이므로 간접으로 가진 일부도 포함한다."@ko .
+
+onto:implementedBy a owl:ObjectProperty ;
+    rdfs:label "implementedBy"@en ;
+    rdfs:comment "implements의 역. 이 계획이나 결정을 그 구현 결과가 실행했다."@ko .
+
+onto:governedBy a owl:ObjectProperty ;
+    rdfs:label "governedBy"@en ;
+    rdfs:comment "governs의 역. 이 대상에 그 정책이 적용된다."@ko .
+
+onto:supersededBy a owl:ObjectProperty ;
+    rdfs:label "supersededBy"@en ;
+    rdfs:comment "supersedes의 역. 옛 것을 새 것이 대체했다."@ko .
+
+# --- 출처 ------------------------------------------------------------------
+# 컴파일이 모든 엔티티에 적는다. 합쳐진 그래프에서 엔티티가 어느 지식 저장소에서 왔는지 질의로 가려내는 데 쓴다.
+# 값은 그 지식 저장소의 이름(ontology.yaml의 name)이고, 교차 참조의 `<저장소 이름>`과 같다. 페이지에는 쓰지 않는다.
+
+onto:repository a owl:DatatypeProperty ;
+    rdfs:label "repository"@en ;
+    rdfs:range xsd:string ;
+    rdfs:comment "이 엔티티가 온 지식 저장소의 이름. 컴파일이 적으며 페이지에는 쓰지 않는다."@ko .
+
+# 지식 저장소가 선언한 하위 클래스(ontology.yaml의 classes)에 컴파일이 적는다. 엔티티의 출처인 onto:repository와 구분해,
+# 엔티티를 지식 저장소로 묻는 질의에 클래스 선언이 섞이지 않게 한다.
+
+onto:declaredIn a owl:DatatypeProperty ;
+    rdfs:label "declaredIn"@en ;
+    rdfs:range xsd:string ;
+    rdfs:comment "이 클래스를 선언한 지식 저장소의 이름. 컴파일이 적으며 엔티티가 아니라 지식 저장소가 선언한 하위 클래스에만 붙는다."@ko .
