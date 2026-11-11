@@ -3,7 +3,12 @@
 최신화(`sync`)는 사본을 루트의 내용으로 맞추고, 스크립트 검사(`checks.outdated`)는 사본이 루트와 같은지 읽는다. 둘이 같은 것을 같은 방식으로
 읽도록 루트가 정한 파일, 파일의 지문, 마지막 최신화의 기록, 쓰면 안 되는 경로의 판정을 여기에 둔다. 이 모듈은 아무 파일도 쓰지 않는다.
 
-루트 관리 파일은 루트 저장소가 추적(`git ls-files`)하는 `onto/` 파일뿐이다. 작업 트리의 지금 내용이다.
+루트 관리 파일은 루트 저장소가 추적(`git ls-files`)하는 파일 가운데 두 묶음(`MANAGED_TREES`)뿐이다. 작업 트리의 지금 내용이다.
+
+- `onto/` 전체: 지식 저장소의 `.onto/`가 된다. 온톨로지 도구, 공통 어휘, 구조 제약, 기본 규칙, 템플릿, 규약 문서다.
+- `.claude/skills/onto-*/`: 에이전트 스킬. 지식 저장소의 같은 위치로 복사한다. `.claude/skills/`에는 지식 저장소 팀의 스킬도 있을 수 있어서, 묶음은
+  `onto-`로 시작하는 스킬 디렉토리뿐이다. 루트의 다른 스킬과 `.claude/`의 나머지(에이전트 정의, 설정)는 복사하지도 지키지도 않고, 지식 저장소의 팀 스킬은 건드리지 않는다.
+
 사본이 루트와 같은지는 버전 번호가 아니라 내용(지문)으로 판단한다. 버전 번호를 올리지 않고 코드만 고쳐도 사본은 뒤처진다.
 """
 
@@ -18,10 +23,53 @@ from . import gitenv
 from .errors import OntoError
 from .paths import TOOL_DIR
 
+
+@dataclass(frozen=True)
+class Tree:
+    """루트 저장소의 디렉토리 하나에서 지식 저장소의 같은 위치로 복사하는 루트 관리 파일의 묶음."""
+
+    source: str  # 루트 저장소 안의 디렉토리
+    target: str  # 지식 저장소 안의 위치
+    prefix: str = ""  # 비어 있지 않으면 `source` 바로 아래의 디렉토리 가운데 이 글자로 시작하는 것(과 그 안)만 묶음이다
+    required: bool = True  # 루트에 이 묶음의 파일이 하나도 없으면 복사할 기능이 없는 것이다
+
+    def ships(self, relative: str) -> bool:
+        """`source` 기준 경로 `relative`가 이 묶음에 드는가."""
+        if not self.prefix:
+            return True
+        parts = PurePosixPath(relative).parts
+        return len(parts) >= 2 and parts[0].startswith(self.prefix)
+
+    def owns(self, path: str) -> bool:
+        """지식 저장소 기준 경로 `path`가 이 묶음의 사본이 놓이는 곳인가. 마지막 최신화의 기록을 거를 때 쓴다."""
+        parts = PurePosixPath(path).parts
+        base = PurePosixPath(self.target).parts
+        if parts[: len(base)] != base or len(parts) <= len(base):
+            return False
+        return self.ships(PurePosixPath(*parts[len(base) :]).as_posix())
+
+    def target_of(self, relative: str) -> str:
+        return f"{self.target}/{relative}"
+
+    @property
+    def label(self) -> str:
+        """사람이 읽는 위치. 보고에서 이 묶음의 파일을 묶어 부를 때 쓴다."""
+        return f"{self.target}/{self.prefix}*/" if self.prefix else f"{self.target}/"
+
+    @property
+    def ignore_pattern(self) -> str:
+        """지식 저장소의 `.gitignore`가 이 묶음을 제외하는 패턴. 지식 저장소의 루트에 고정한다(`/`로 시작)."""
+        return f"/{self.target}/{self.prefix}*/" if self.prefix else f"/{self.target}/"
+
+
 # 루트 저장소의 디렉토리 -> 지식 저장소 안의 위치. 지식 저장소에 복사하는 루트 관리 파일의 묶음이다.
 ROOT_TREE = "onto"
 MANAGED_DIR = ".onto"
-MANAGED_TREES = ((ROOT_TREE, MANAGED_DIR),)
+SKILLS_DIR = ".claude/skills"
+SKILL_PREFIX = "onto-"
+ONTO_TREE = Tree(ROOT_TREE, MANAGED_DIR)
+SKILL_TREE = Tree(SKILLS_DIR, SKILLS_DIR, SKILL_PREFIX, required=False)
+MANAGED_TREES = (ONTO_TREE, SKILL_TREE)
 # 마지막 최신화가 쓴 루트 관리 파일의 지문. `.onto/` 안의 기록이라 지식 저장소의 `.gitignore`가 함께 제외한다.
 RECORD_FILE = f"{MANAGED_DIR}/.sync-record.json"
 
@@ -61,36 +109,42 @@ def runs_from_root(root: Path) -> bool:
 
 
 def collect_sources(root: Path) -> dict[str, Source]:
-    """루트 저장소가 추적하는 `onto/` 파일을 지식 저장소 안의 경로(`.onto/…`)로 모은다. 작업 트리의 지금 내용이다.
+    """루트 저장소가 추적하는 루트 관리 파일을 지식 저장소 안의 경로(`.onto/…`, `.claude/skills/onto-…/…`)로 모은다. 작업 트리의 지금 내용이다.
 
     추적하지만 작업 트리에서 지운 파일은 없는 것으로 본다. 추적하지 않는 파일(새 파일, 가상환경, 캐시, 산출물)은 복사하지 않는다.
     """
     sources: dict[str, Source] = {}
-    for tree, target in MANAGED_TREES:
-        listing = _git(root, "ls-files", "--stage", "-z", "--", f"{tree}/")
+    for tree in MANAGED_TREES:
+        listing = _git(root, "ls-files", "--stage", "-z", "--", f"{tree.source}/")
         entries = [entry for entry in listing.split(b"\0") if entry]
-        if not entries:
-            raise OntoError(f"루트 저장소가 추적하는 `{tree}/` 파일이 없다. 복사할 기능이 없다")
+        shipped = False
         for entry in entries:
             meta, _, raw_path = entry.partition(b"\t")
             mode = meta.split()[0]
             relative = os.fsdecode(raw_path)
+            inside = PurePosixPath(relative).relative_to(tree.source).as_posix()
+            if not tree.ships(inside):
+                continue  # 이 묶음에 들지 않는 파일(루트의 다른 스킬 등)은 링크여도 상관없다
+            shipped = True
             if mode in (b"120000", b"160000"):
-                raise OntoError(f"`{relative}`는 심볼릭 링크나 서브모듈이라 복사할 수 없다. 루트의 `{tree}/`에는 일반 파일만 둔다")
+                raise OntoError(f"`{relative}`는 심볼릭 링크나 서브모듈이라 복사할 수 없다. 루트의 `{tree.label}`에는 일반 파일만 둔다")
             try:
                 content = (root / relative).read_bytes()
             except FileNotFoundError:
                 continue
-            sources[f"{target}/{PurePosixPath(relative).relative_to(tree).as_posix()}"] = Source(content, mode == b"100755")
+            sources[tree.target_of(inside)] = Source(content, mode == b"100755")
+        if tree.required and not shipped:
+            raise OntoError(f"루트 저장소가 추적하는 `{tree.source}/` 파일이 없다. 복사할 기능이 없다")
     return sources
 
 
 def untracked_sources(root: Path) -> list[str]:
-    """루트의 `onto/`에 있지만 추적하지 않아 복사하지 않는 파일(`.gitignore`가 제외한 가상환경, 캐시, 산출물은 뺀다). 루트 기준 경로다."""
+    """루트에 있지만 추적하지 않아 복사하지 않는 파일(`.gitignore`가 제외한 가상환경, 캐시, 산출물은 뺀다). 루트 기준 경로다. 복사 대상 묶음 안의 것만 본다."""
     found: list[str] = []
-    for tree, _ in MANAGED_TREES:
-        listing = _git(root, "ls-files", "-z", "--others", "--exclude-standard", "--", f"{tree}/")
-        found += sorted(os.fsdecode(entry) for entry in listing.split(b"\0") if entry)
+    for tree in MANAGED_TREES:
+        listing = _git(root, "ls-files", "-z", "--others", "--exclude-standard", "--", f"{tree.source}/")
+        paths = (os.fsdecode(entry) for entry in listing.split(b"\0") if entry)
+        found += sorted(path for path in paths if tree.ships(PurePosixPath(path).relative_to(tree.source).as_posix()))
     return found
 
 
@@ -117,11 +171,11 @@ def is_repository(path: Path) -> bool:
 
 def drift(repo: Path, sources: dict[str, Source]) -> Drift:
     """지식 저장소 `repo`의 `.onto/`가 `sources`(루트가 정한 내용)와 다른 곳. 아무것도 쓰지 않는다."""
-    for _, target_dir in MANAGED_TREES:
-        if reason := blocked(repo, target_dir, directory=True):
-            return Drift(blocked=reason)
-        if not (repo / target_dir).exists():
-            return Drift(absent=True)
+    # `.onto/`가 사본의 본체다. 없으면 최신화한 적이 없다. 스킬 사본은 파일마다 아래에서 읽는다(`.claude/`는 저장소의 것이라 없어도 이상하지 않다).
+    if reason := blocked(repo, ONTO_TREE.target, directory=True):
+        return Drift(blocked=reason)
+    if not (repo / ONTO_TREE.target).exists():
+        return Drift(absent=True)
     recorded = read_record(repo)
     missing: list[str] = []
     different: list[str] = []
@@ -145,7 +199,7 @@ def drift(repo: Path, sources: dict[str, Source]) -> Drift:
 def read_record(repo: Path) -> dict[str, str]:
     """마지막 최신화가 쓴 루트 관리 파일의 지문. 없거나 읽을 수 없거나 모양이 틀리면 빈 기록이다(손으로 고쳤는지 알 수 없는 것으로 본다).
 
-    기록은 지식 저장소 안의 파일이라 믿지 않는다. 루트 관리 파일의 위치(`.onto/` 아래)를 벗어나는 경로는 버려, 기록으로 저장소 밖을 지우게 할 수 없다.
+    기록은 지식 저장소 안의 파일이라 믿지 않는다. 루트 관리 파일의 위치(`.onto/` 아래, `.claude/skills/onto-*/` 아래)를 벗어나는 경로는 버려, 기록으로 저장소 밖이나 팀의 파일을 지우게 할 수 없다.
     """
     if blocked(repo, RECORD_FILE):
         return {}
@@ -155,15 +209,14 @@ def read_record(repo: Path) -> dict[str, str]:
         return {}
     if not isinstance(data, dict):
         return {}
-    prefixes = tuple(f"{target}/" for _, target in MANAGED_TREES)
     return {
         path: fingerprint
         for path, fingerprint in data.items()
         if isinstance(path, str)
         and isinstance(fingerprint, str)
-        and path.startswith(prefixes)
         and ".." not in PurePosixPath(path).parts
         and not PurePosixPath(path).is_absolute()
+        and any(tree.owns(path) for tree in MANAGED_TREES)  # 팀의 스킬(`onto-`로 시작하지 않는 스킬)과 저장소의 다른 파일은 기록에 있어도 건드리지 않는다
     }
 
 

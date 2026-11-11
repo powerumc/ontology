@@ -302,10 +302,12 @@ CONFIGURED = repo(
 
 
 def owned_files(billing: Path) -> dict[str, tuple[bytes, int]]:
-    """지식 저장소의 저장소 소유 파일(원본 문서와 온톨로지 층)의 내용과 수정 시각. 루트 관리 파일(`.onto/`)과 표시된 블록이 든 파일(`.gitignore`, 지침 파일)은 뺀다."""
+    """지식 저장소의 저장소 소유 파일(원본 문서와 온톨로지 층)의 내용과 수정 시각. 루트 관리 파일(`.onto/`, 스킬 사본 `.claude/skills/onto-*/`)과 표시된 블록이 든 파일(`.gitignore`, 지침 파일)은 뺀다."""
     found = {}
     for path in sorted(billing.rglob("*")):
         relative = path.relative_to(billing).as_posix()
+        if relative.startswith(".claude/skills/onto-"):
+            continue
         if path.is_file() and relative.split("/")[0] not in (".git", ".onto") and relative not in (".gitignore", "CLAUDE.md", "AGENTS.md"):
             found[relative] = (path.read_bytes(), path.stat().st_mtime_ns)
     return found
@@ -553,7 +555,10 @@ def test_끝에_저장소별로_만든_파일_바꾼_파일_건너뛴_파일을_
     attach(sandbox, root, "billing"), attach(sandbox, root, "shop")
     first = sync(sandbox, root)
     tracked = tracked_onto_files(sandbox, root)
-    created = len(tracked) + 4  # .onto/ 아래 복사본(기록은 세지 않는다)과 .gitignore, AGENTS.md(지침 파일), ontology.yaml, 인덱스
+    skills = sandbox.git("ls-files", "-z", ".claude/skills", cwd=root.work).stdout.split("\0")
+    skills = [path for path in skills if path.startswith(".claude/skills/onto-")]
+    assert len(skills) >= 3  # 스킬 세 개
+    created = len(tracked) + len(skills) + 4  # .onto/ 아래 복사본(기록은 세지 않는다)과 스킬 사본, .gitignore, AGENTS.md(지침 파일), ontology.yaml, 인덱스
 
     assert f"billing: 만든 파일 {created}개, 바꾼 파일 0개, 지운 파일 0개, 건너뛴 파일 0개" in first.stdout
     assert f"shop: 만든 파일 {created}개" in first.stdout

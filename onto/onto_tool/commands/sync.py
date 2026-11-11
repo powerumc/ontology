@@ -7,7 +7,7 @@ from .. import vocab
 from ..checks import Finding
 from ..conformance import nonconforming
 from ..errors import OntoError
-from ..managed import MANAGED_DIR, MANAGED_TREES, ROOT_TREE, collect_sources, untracked_sources
+from ..managed import MANAGED_TREES, ROOT_TREE, collect_sources, untracked_sources
 from ..paths import TOOL_DIR
 from ..sync import Result, sync_repository
 from ..workspace import Within, Workspace
@@ -17,14 +17,15 @@ from ._workspace import open_workspace
 
 NAME = "sync"
 HELP = (
-    "루트 저장소의 기능을 지식 저장소에 복사하거나 최신화한다. 루트 저장소의 onto/(추적하는 파일만)를 지식 저장소의 .onto/로 복사하고, "
-    "지식 저장소의 .gitignore에 표시된 블록으로 .onto/를 제외하고, 프로젝트 지침 파일(CLAUDE.md, 없으면 AGENTS.md, 둘 다 없으면 AGENTS.md를 만든다)에는 "
+    "루트 저장소의 기능을 지식 저장소에 복사하거나 최신화한다. 루트 저장소의 onto/(추적하는 파일만)를 지식 저장소의 .onto/로, "
+    "에이전트 스킬 .claude/skills/onto-*/(추적하는 파일만)를 지식 저장소의 같은 위치로 복사하고(저장소 팀의 스킬은 건드리지 않고, 루트에서 없앤 onto-* 스킬은 지운다), "
+    "지식 저장소의 .gitignore에 표시된 블록으로 .onto/와 .claude/skills/onto-*/를 제외하고, 프로젝트 지침 파일(CLAUDE.md, 없으면 AGENTS.md, 둘 다 없으면 AGENTS.md를 만든다)에는 "
     "온톨로지 층의 인덱스를 가리키는 표시된 블록을 넣으며(블록 밖은 바꾸지 않는다), 없으면 온톨로지 층의 뼈대(docs/ontology/ontology.yaml과 인덱스)를 만든다. "
     "이름(서브모듈 디렉토리 이름)을 생략하면 모든 지식 저장소에 적용한다. 마지막 최신화 뒤에 손으로 고친 루트 관리 파일은 덮어쓰지 않고 보고한다. "
     "저장소 소유 파일(ontology.yaml, 페이지)은 바꾸지 않는다. 변경은 지식 저장소의 작업 트리에 남고 커밋하지 않는다. "
     "끝에 최신화한 저장소의 페이지와 ontology.yaml(하위 클래스 선언) 가운데 새 구조 제약에 어긋난 것을 보고한다(validate와 같은 다섯 칸. 종료 코드는 바꾸지 않는다). "
     "저장소마다 만든 파일, 바꾼 파일, 지운 파일, 건너뛴 파일을 요약한다. 건너뛴 파일은 하나씩 이유와 함께 보여 주고(같은 위치가 막은 파일만 묶는다), "
-    "건너뛴 것이 있거나 사람이 확인할 것(지식 저장소가 이미 추적하는 .onto/)이 있으면 0이 아닌 종료 코드로 끝난다. "
+    "건너뛴 것이 있거나 사람이 확인할 것(지식 저장소가 이미 추적하는 .onto/나 스킬 사본)이 있으면 0이 아닌 종료 코드로 끝난다. "
     "루트 저장소에서만 쓸 수 있고 지식 저장소 안에서는 거부한다"
 )
 
@@ -54,7 +55,7 @@ def run(args: argparse.Namespace) -> int:
     sources = collect_sources(workspace.root)
     if untracked := untracked_sources(workspace.root):  # 동작은 바꾸지 않는다. 고친 코드가 빠진 파일을 가져다 쓰면 지식 저장소의 도구가 깨진다
         shown = ", ".join(untracked[:UNTRACKED_SHOWN]) + (f" 외 {len(untracked) - UNTRACKED_SHOWN}개" if len(untracked) > UNTRACKED_SHOWN else "")
-        warn([f"루트의 `{ROOT_TREE}/`에 추적하지 않는 파일이 있어 복사하지 않았다: {shown}. 복사하려면 `git add`한다"])
+        warn([f"루트의 `{ROOT_TREE}/`나 `.claude/skills/onto-*/`에 추적하지 않는 파일이 있어 복사하지 않았다: {shown}. 복사하려면 `git add`한다"])
     results = [sync_repository(workspace, repository, sources) for repository in repositories]
     for result in results:
         _print(result)
@@ -134,11 +135,12 @@ def _summary(created: int, changed: int, removed: int, skipped: int, attention: 
 
 def _lines(paths: list[str]) -> list[str]:
     """보여 줄 줄. 루트 관리 파일이 많으면 위치별로 묶고, 그 밖의 파일(`.gitignore`, `ontology.yaml`, 인덱스)은 하나씩 적는다."""
-    prefixes = tuple(f"{target}/" for _, target in MANAGED_TREES)
-    managed = [path for path in paths if path.startswith(prefixes)]
+    managed = [path for path in paths if any(tree.owns(path) for tree in MANAGED_TREES)]
     if len(managed) <= LISTED_LIMIT:
         return paths
-    grouped = [f"{prefix} 아래 파일 {count}개" for prefix in prefixes if (count := sum(path.startswith(prefix) for path in managed))]
+    grouped = [
+        f"{tree.label} 아래 파일 {count}개" for tree in MANAGED_TREES if (count := sum(tree.owns(path) for path in managed))
+    ]
     return [path for path in paths if path not in managed] + grouped
 
 

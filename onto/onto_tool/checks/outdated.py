@@ -1,6 +1,6 @@
-"""뒤처진 루트 관리 파일: 지식 저장소의 `.onto/`가 루트 저장소의 `onto/`와 내용이 다르다.
+"""뒤처진 루트 관리 파일: 지식 저장소의 `.onto/`(와 스킬 사본 `.claude/skills/onto-*/`)가 루트 저장소의 `onto/`(와 `.claude/skills/onto-*/`)와 내용이 다르다.
 
-최신화는 루트의 `onto/`(추적하는 파일)를 지식 저장소의 `.onto/`로 복사한다. 루트가 기능을 고친 뒤 최신화하지 않은 지식 저장소는 옛 사본을 가진다.
+최신화는 루트의 `onto/`와 `.claude/skills/onto-*/`(추적하는 파일)를 지식 저장소의 `.onto/`와 같은 위치로 복사한다. 루트가 기능을 고친 뒤 최신화하지 않은 지식 저장소는 옛 사본을 가진다.
 이 항목은 그런 저장소를 경고해, 최신화가 필요한 곳을 알린다. 공통 어휘의 버전(`owl:versionInfo`)을 보여 주지만 **버전 번호로 판단하지 않는다.**
 버전 번호를 올리지 않고 코드만 고친 경우도 사본이 뒤처진 것이므로, 루트가 정한 파일마다 사본의 내용을 지문(`managed`)으로 비교한다.
 다른 곳은 세 가지다: 사본에 없는 파일, 내용이 다른 파일, 루트에서 없어졌는데 마지막 최신화가 둔 채 남은 파일.
@@ -53,7 +53,7 @@ def _message(record: RepositoryRecord, repo: Path, drift: managed.Drift, root_ve
         )
     version = "" if drift.blocked or drift.absent else _version(repo, root_version)
     return (
-        f"루트 관리 파일(`{managed.MANAGED_DIR}/`)이 루트 저장소의 `{managed.ROOT_TREE}/`와 다르다: {what}. "
+        f"루트 관리 파일(`{managed.MANAGED_DIR}/`, `{managed.SKILL_TREE.label}`)이 루트 저장소의 `{managed.ROOT_TREE}/`, `{managed.SKILL_TREE.label}`와 다르다: {what}. "
         f"{version}`just onto sync {record.directory}`로 최신화한다"
     )
 

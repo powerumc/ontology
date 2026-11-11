@@ -1,10 +1,12 @@
 """최신화: 루트 저장소의 기능을 지식 저장소에 복사한다(ADR 0005).
 
 지식 저장소에는 온톨로지 기능이 없다. 루트 저장소의 `onto/`(도구, 공통 어휘, 구조 제약, 기본 규칙, 템플릿, 규약 문서)를
-지식 저장소의 `.onto/`로 복사하고, 온톨로지 층의 뼈대를 만들어 준다. 지식 저장소의 파일은 셋으로 나뉜다.
+지식 저장소의 `.onto/`로, 에이전트 스킬 `.claude/skills/onto-*/`를 같은 위치로 복사하고, 온톨로지 층의 뼈대를 만들어 준다. 지식 저장소의 파일은 셋으로 나뉜다.
 
-- **루트 관리 파일**: `.onto/` 아래의 사본. 최신화 때마다 루트의 내용으로 덮어쓰고, 지식 저장소의 `.gitignore`로 제외해
-  그 저장소의 커밋에 들어가지 않게 한다. 복사하는 것은 루트 저장소가 추적(`git ls-files`)하는 `onto/` 파일뿐이다.
+- **루트 관리 파일**: `.onto/` 아래의 사본과 `.claude/skills/onto-*/` 아래의 스킬 사본(`managed.MANAGED_TREES`). 최신화 때마다 루트의 내용으로 덮어쓰고, 지식 저장소의
+  `.gitignore`로 제외해 그 저장소의 커밋에 들어가지 않게 한다. 복사하는 것은 루트 저장소가 추적(`git ls-files`)하는 파일뿐이다.
+  `.claude/skills/`에는 지식 저장소 팀의 스킬도 있어서, `onto-`로 시작하는 스킬 디렉토리만 루트 관리 파일이다. 다른 스킬은 복사하지도 지우지도 않는다.
+  루트에서 없앤 `onto-` 스킬의 사본은 마지막 최신화의 기록에 있는 파일이라 다음 최신화가 지운다.
   루트의 가상환경이나 캐시는 추적하지 않으므로 복사되지 않고, 지식 저장소의 `.onto/`에서 도구를 돌려 생긴 가상환경, 캐시, 빌드 산출물은
   루트 관리 파일이 아니라 건드리지 않는다.
 - **표시된 블록**: 지식 저장소가 추적하는 파일 안의 블록(`.gitignore`, 프로젝트 지침 파일). 블록만 루트가 관리하고 블록 밖은 건드리지 않는다(`blocks`).
@@ -28,7 +30,7 @@ import subprocess
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -42,6 +44,7 @@ from .managed import (
     MANAGED_TREES,
     RECORD_FILE,
     Source,
+    Tree,
     blocked,
     fingerprint_of,
     is_repository,
@@ -54,8 +57,9 @@ GITIGNORE = ".gitignore"
 GITIGNORE_BLOCK = MarkedBlock(
     "# onto:begin", "# onto:end", " 루트 저장소가 관리하는 블록이다. `onto sync`가 이 블록만 고친다. 손으로 고치지 않는다."
 )
-# 지식 저장소의 커밋에 들어가지 않을 루트 관리 파일의 경로. 지식 저장소의 루트에 고정한다(`/`로 시작).
-IGNORED_PATHS = (f"/{MANAGED_DIR}/", "/.claude/skills/onto-*/")
+# 지식 저장소의 커밋에 들어가지 않을 루트 관리 파일의 경로(`.onto/`와 `.claude/skills/onto-*/`). 지식 저장소의 루트에 고정한다(`/`로 시작).
+# 스킬은 `onto-`로 시작하는 디렉토리만 제외한다. 저장소 팀의 스킬(`.claude/skills/<다른 이름>/`)은 그 저장소의 것이라 커밋해야 한다.
+IGNORED_PATHS = tuple(tree.ignore_pattern for tree in MANAGED_TREES)
 
 ONTOLOGY_YAML_PATH = ONTOLOGY_YAML.as_posix()
 INDEX_PATH = (ONTOLOGY_DIR / INDEX_FILE).as_posix()
@@ -110,7 +114,7 @@ def sync_repository(workspace: Workspace, repository: Repository, sources: dict[
     # `.gitignore`가 먼저다. 제외하지 못한 채 `.onto/`를 복사하면 루트 관리 파일이 지식 저장소의 git 상태에 나타나 커밋될 수 있다.
     if not _update_gitignore(path, result):
         return result
-    _report_tracked(path, result)
+    _report_tracked(path, sources, result)
     if _create_ontology_yaml(path, repository.directory, result):
         _create_index(workspace, repository, result)
         _update_guidance(path, result)
@@ -118,25 +122,39 @@ def sync_repository(workspace: Workspace, repository: Repository, sources: dict[
     return result
 
 
-def _report_tracked(repo: Path, result: Result) -> None:
+def _report_tracked(repo: Path, sources: dict[str, Source], result: Result) -> None:
     """지식 저장소의 git이 루트 관리 파일의 위치를 이미 추적하고 있으면 알린다. 복사는 계속한다.
 
-    `.gitignore`는 추적하는 파일을 제외하지 못한다. 누가 블록이 없는 사이에 `git add -A`로 `.onto/`를 커밋했다면, 블록을 되살려도 그 위치의 변경이
+    `.gitignore`는 추적하는 파일을 제외하지 못한다. 누가 블록이 없는 사이에 `git add -A`로 `.onto/`나 스킬 사본을 커밋했다면, 블록을 되살려도 그 위치의 변경이
     git 상태에 계속 나타난다. 추적에서 빼는 것은 지식 저장소의 이력을 바꾸는 일이라 최신화가 하지 않고, 방법을 알린다.
+
+    스킬은 저장소 팀의 스킬과 같은 디렉토리에 놓이므로, 최신화가 두는(또는 마지막 최신화가 둔) 파일을 추적하는 스킬 디렉토리만 알린다.
+    팀이 추적하는 다른 스킬은 알리지 않는다.
     """
-    for _, target_dir in MANAGED_TREES:
-        if _is_tracked(repo, target_dir):
+    managed = set(sources) | set(read_record(repo))
+    for tree in MANAGED_TREES:
+        tracked = _tracked_paths(repo, tree.target)
+        places = sorted({_place(tree, path) for path in tracked if not tree.prefix or path in managed})
+        for place in places:
             result.attention.append(
                 (
-                    f"{target_dir}/",
+                    f"{place}/",
                     f"이 저장소의 git이 이미 추적하고 있어 `.gitignore`가 제외하지 못하고 변경이 git 상태에 나타난다. "
-                    f"추적에서 뺀다(파일은 남는다): `git rm -r --cached {target_dir}`",
+                    f"추적에서 뺀다(파일은 남는다): `git rm -r --cached {place}`",
                 )
             )
 
 
-def _is_tracked(repo: Path, relative: str) -> bool:
-    """지식 저장소 `repo`의 git이 `relative` 아래를 추적하는가. 읽는 저장소는 `repo`이고, 환경 변수나 위의 저장소가 대신하지 않는다(`gitenv`)."""
+def _place(tree: Tree, path: str) -> str:
+    """추적하는 파일 `path`가 속한, 추적에서 뺄 위치. 묶음이 통째로 하나(`.onto`)이거나, 스킬 하나의 디렉토리(`.claude/skills/onto-ingest`)다."""
+    if not tree.prefix:
+        return tree.target
+    base = PurePosixPath(tree.target).parts
+    return PurePosixPath(*PurePosixPath(path).parts[: len(base) + 1]).as_posix()
+
+
+def _tracked_paths(repo: Path, relative: str) -> list[str]:
+    """지식 저장소 `repo`의 git이 추적하는 `relative` 아래의 파일. 읽는 저장소는 `repo`이고, 환경 변수나 위의 저장소가 대신하지 않는다(`gitenv`)."""
     try:
         listing = subprocess.run(
             ["git", "--literal-pathspecs", "-C", str(repo), "ls-files", "-z", "--", relative],
@@ -145,8 +163,10 @@ def _is_tracked(repo: Path, relative: str) -> bool:
             check=False,
         )
     except FileNotFoundError:
-        return False
-    return listing.returncode == 0 and bool(listing.stdout.strip(b"\0"))
+        return []
+    if listing.returncode != 0:
+        return []
+    return [os.fsdecode(entry) for entry in listing.stdout.split(b"\0") if entry]
 
 
 def _update_gitignore(repo: Path, result: Result) -> bool:
@@ -206,7 +226,7 @@ def _guidance_target(repo: Path, name: str) -> tuple[str | None, str]:
     if not real.is_relative_to(root):
         return None, f"`{name}`가 이 저장소 밖을 가리키는 심볼릭 링크라 따라가지 않는다"
     relative = real.relative_to(root).as_posix()
-    if relative.split("/")[0] in (".git", MANAGED_DIR):
+    if relative.split("/")[0] in (".git", MANAGED_DIR) or any(tree.owns(relative) for tree in MANAGED_TREES):
         return None, f"`{name}`가 `{relative}`를 가리키는 심볼릭 링크라 따라가지 않는다. 루트 관리 파일과 git의 파일에는 블록을 쓰지 않는다"
     if not real.is_file():
         return None, f"`{name}`가 일반 파일이 아닌 것을 가리키는 심볼릭 링크라 따라가지 않는다"
@@ -327,9 +347,10 @@ def _create_index(workspace: Workspace, repository: Repository, result: Result) 
 
 def _copy_managed_files(repo: Path, sources: dict[str, Source], result: Result) -> None:
     """루트 관리 파일을 루트의 내용으로 맞춘다. 마지막 최신화 뒤에 손으로 고친 파일은 덮어쓰거나 지우지 않고 보고한다."""
-    for _, target_dir in MANAGED_TREES:
-        if reason := blocked(repo, target_dir, directory=True):
-            result.skip(f"{target_dir}/", f"{reason}. 루트 관리 파일을 복사하지 않았다")
+    # `.onto/`가 막혔으면 복사를 시작하지 않는다. 스킬 사본이 놓일 `.claude/`는 저장소의 것이라 막혀 있어도 `.onto/`는 복사하고, 스킬은 파일마다 막힌 이유와 함께 건너뛴다.
+    for tree in MANAGED_TREES:
+        if tree.required and (reason := blocked(repo, tree.target, directory=True)):
+            result.skip(f"{tree.label}", f"{reason}. 루트 관리 파일을 복사하지 않았다")
             return
     recorded = read_record(repo)
     record = dict(recorded)

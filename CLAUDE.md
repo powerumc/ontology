@@ -1,3 +1,10 @@
+## 온톨로지
+
+이 저장소는 루트 저장소다. 기능(`onto/`, `git/`, `repo/`)만 담고 지식은 담지 않는다. 지식은 `projects/` 아래의 지식 저장소에 있다(이유는 `docs/adr/0001`).
+
+- 지식을 ingest, 질의, 점검할 때는 스킬 `onto-ingest`, `onto-query`, `onto-lint`를 쓴다(`.claude/skills/`).
+- 명령은 `just`다. `just`, `just onto`, `just git`, `just repo`가 명령 목록을 보여 주고, 사용법은 `README.md`에 있다.
+
 ## Agent skills
 
 ### Issue tracker
