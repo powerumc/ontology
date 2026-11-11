@@ -13,7 +13,10 @@ from ..workspace import Workspace
 from ._output import warn
 
 NAME = "query"
-HELP = "SPARQL 질의를 실행한다. 결과의 엔티티는 루트 저장소 기준 파일 경로로 나온다"
+HELP = (
+    "SPARQL 질의를 실행한다. SELECT 결과의 엔티티는 루트 저장소 기준 파일 경로로 나온다. "
+    "CONSTRUCT와 DESCRIBE는 Turtle로 나오고, 엔티티의 IRI가 가리키는 파일이 주석으로 붙는다"
+)
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -23,6 +26,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 def run(args: argparse.Namespace) -> int:
     compiled = compile_workspace(Workspace(Path.cwd()))
     warn(compiled.warnings)
+    compiled.ensure_valid()
     try:
         result = compiled.graph.query(args.sparql)
     except Exception as exc:  # rdflib은 문법 오류와 평가 오류를 여러 예외 형식으로 던진다
@@ -37,6 +41,11 @@ def run(args: argparse.Namespace) -> int:
     else:  # CONSTRUCT, DESCRIBE
         for prefix, namespace in compiled.graph.namespaces():
             result.graph.bind(prefix, namespace)
+        # Turtle 본문에는 파일 경로를 넣을 수 없다. 엔티티의 IRI가 가리키는 파일을 주석으로 앞에 붙인다.
+        mentioned = {str(term) for triple in result.graph for term in triple if isinstance(term, URIRef)}
+        for iri in sorted(mentioned & compiled.files.keys()):
+            print(f"# <{iri}> {compiled.files[iri]}")
+        print()
         sys.stdout.write(result.graph.serialize(format="turtle"))
     return 0
 

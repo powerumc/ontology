@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from support.sandbox import SOURCE_REPO, Sandbox
+from support.sandbox import SOURCE_REPO, Sandbox, copy_tracked_files
 
 
 def _git_at(sandbox, repo: Path, *args: str) -> str:
@@ -89,6 +89,23 @@ def test_루트_저장소는_이_저장소의_추적_파일을_복사해_만든�
 
     assert _tracked_files(sandbox, work) == _tracked_files(sandbox, SOURCE_REPO)
     assert (work / "Justfile").read_bytes() == (SOURCE_REPO / "Justfile").read_bytes()
+
+
+def test_추적_파일_복사는_하위_디렉토리만_접두어를_떼고_복사하고_심볼릭_링크와_지워진_파일을_다룬다(sandbox):
+    """`onto/`를 지식 저장소의 `.onto/`로 복사하는 것과 같은 복사. 루트 복사와 같은 함수를 쓴다."""
+    work = sandbox.root().work
+    (work / "onto" / "link").symlink_to("Justfile")
+    (work / "onto" / "gone.txt").write_text("지울 파일\n", encoding="utf-8")
+    sandbox.git("add", "onto/link", "onto/gone.txt", cwd=work)
+    (work / "onto" / "gone.txt").unlink()  # 지웠지만 아직 스테이지하지 않았다
+    dest = sandbox.new_dir("copies", "onto")
+
+    copy_tracked_files(sandbox, work, dest, under="onto")
+
+    assert (dest / "Justfile").read_bytes() == (work / "onto" / "Justfile").read_bytes()
+    assert (dest / "link").is_symlink() and os.readlink(dest / "link") == "Justfile"
+    assert not (dest / "gone.txt").exists()
+    assert not (dest / "onto").exists() and not (dest / "tests").exists()  # 접두어를 떼고, 그 밖의 파일은 복사하지 않는다
 
 
 def test_서브모듈_등록은_임시_저장소에서만_일어나고_이_저장소에는_남지_않는다(sandbox):

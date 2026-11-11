@@ -1,4 +1,4 @@
-"""도구가 일하는 루트 저장소의 모양: 지식 저장소를 찾는 곳과 산출물을 두는 곳.
+"""도구가 일하는 루트 저장소의 모양: 지식 저장소를 찾는 곳.
 
 도구는 현재 디렉토리를 루트 저장소로 본다. `just onto …`는 어디서 부르든 루트 저장소에서 실행된다.
 """
@@ -9,7 +9,6 @@ from pathlib import Path
 PROJECTS_DIR = "projects"
 ONTOLOGY_DIR = Path("docs") / "ontology"
 ONTOLOGY_YAML = ONTOLOGY_DIR / "ontology.yaml"
-GRAPH_FILE = Path("build") / "graph.ttl"
 
 
 @dataclass(frozen=True)
@@ -43,6 +42,6 @@ class Workspace:
             if entry.is_dir() and not entry.name.startswith(".")
         ]
 
-    @property
-    def graph_file(self) -> Path:
-        return self.root / GRAPH_FILE
+    def display(self, path: Path) -> str:
+        """사용자에게 보여 줄 경로. 루트 저장소 안이면 상대 경로, 밖이면 절대 경로다."""
+        return self.relative(path) if path.is_relative_to(self.root) else str(path)

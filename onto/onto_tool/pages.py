@@ -56,6 +56,8 @@ def read_frontmatter(path: Path) -> dict[str, object]:
         meta = yaml.safe_load("\n".join(lines[1:closing]))
     except yaml.YAMLError as exc:
         raise FrontmatterError(f"YAML 문법 오류: {_first_line(exc)}") from exc
+    except ValueError as exc:  # `2026-02-30`처럼 날짜 모양이지만 없는 날짜는 YAMLError가 아니라 ValueError로 나온다
+        raise FrontmatterError(f"값을 읽을 수 없다: {exc}") from exc
     if meta is None:
         return {}
     if not isinstance(meta, dict):

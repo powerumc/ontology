@@ -10,6 +10,10 @@
 from urllib.parse import quote
 
 ENTITY_BASE = "https://onto.invalid/entity/"
+# context에 없는 용어(예: 공통 어휘에 없는 `class` 값)는 JSON-LD가 상대 IRI로 풀어 base를 붙인다.
+# base를 주지 않으면 rdflib이 실행 위치의 `file://` 주소를 쓰므로, 기기마다 다른 IRI가 그래프에 들어간다.
+# 엔티티의 IRI와 겹치지 않는 고정값을 주어, 풀리지 않은 용어가 그래프에서 알아볼 수 있게 남게 한다.
+UNRESOLVED_BASE = "https://onto.invalid/unresolved/"
 
 
 def entity_iri(repository: str, identifier: str) -> str:

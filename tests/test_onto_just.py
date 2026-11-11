@@ -6,11 +6,12 @@
 
 from pathlib import Path
 
-from support.onto_cli import ONTOLOGY_DIR, copy_onto, page, parse_table, repo
+from support.onto_cli import ONTOLOGY_DIR, copy_onto, page, parse_table, repo, snapshot
 
 PAGES = "projects/billing/docs/ontology"
 PLAN_FILE = f"{PAGES}/plan/auth-redesign.md"
 PLAN_TITLE = "인증 재설계"
+GRAPH = Path("onto") / ".build" / "graph.ttl"  # 도구 디렉토리 안의 무시되는 디렉토리
 
 
 def root_with_billing(sandbox, *pages, **project) -> Path:
@@ -30,8 +31,7 @@ def test_just_onto_build가_projects_아래_지식_저장소의_페이지로_그
     result = sandbox.just("onto", "build", cwd=root)
 
     assert result.returncode == 0, result.stderr
-    graph = root / "build" / "graph.ttl"
-    assert PLAN_TITLE in graph.read_text(encoding="utf-8")
+    assert PLAN_TITLE in (root / GRAPH).read_text(encoding="utf-8")
 
 
 def test_컴파일된_그래프는_빌드_산출물이라_git에_잡히지_않는다(sandbox):
@@ -41,7 +41,8 @@ def test_컴파일된_그래프는_빌드_산출물이라_git에_잡히지_않�
     build = sandbox.just("onto", "build", cwd=root)
 
     assert build.returncode == 0, build.stderr
-    assert (root / "build" / "graph.ttl").is_file()
+    assert (root / GRAPH).is_file()
+    assert not (root / "build").exists()  # 루트 저장소 최상위에는 아무것도 만들지 않는다
     # 그래프뿐 아니라 도구의 가상환경과 잠금 파일도 작업 트리를 더럽히지 않는다.
     assert sandbox.git("status", "--porcelain", cwd=root).stdout == ""
 
@@ -89,7 +90,7 @@ def test_just_onto_query는_이전_build의_결과를_쓰지_않고_현재_파�
     page_file.write_text(page_file.read_text(encoding="utf-8").replace(PLAN_TITLE, "인증 재설계 2차"), encoding="utf-8")
 
     after_edit = query(sandbox, root, "SELECT ?t WHERE { ?e dcterms:title ?t }")
-    (root / "build" / "graph.ttl").write_text("깨진 그래프", encoding="utf-8")
+    (root / GRAPH).write_text("깨진 그래프", encoding="utf-8")
     after_corruption = query(sandbox, root, "SELECT ?t WHERE { ?e dcterms:title ?t }")
 
     assert parse_table(after_edit.stdout) == [["t"], ["인증 재설계 2차"]]
@@ -103,7 +104,7 @@ def test_just_onto_query는_build를_하지_않아도_돈다(sandbox):
     result = query(sandbox, root, "SELECT ?e WHERE { ?e a onto:Plan }")
 
     assert result.returncode == 0, result.stderr
-    assert not (root / "build").exists()  # query는 파일을 남기지 않는다
+    assert not (root / GRAPH).parent.exists()  # query는 파일을 남기지 않는다
 
 
 def test_읽을_수_없는_페이지는_just를_거쳐도_파일_이름과_함께_오류로_알린다(sandbox):
@@ -129,3 +130,52 @@ def test_루트_저장소의_다른_파일_없이_onto만_복사한_디렉토리
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "true"
     assert not (knowledge_repo / "pyproject.toml").exists()
+
+
+def test_지식_저장소_안에서_돌려도_산출물은_onto_디렉토리_안에만_생긴다(sandbox):
+    """지식 저장소는 팀과 공유한다. `.onto/` 밖의 작업 트리에 파일이 생기면 그 저장소가 원래 쓰는 `build/`와 섞인다."""
+    knowledge_repo = sandbox.new_dir("knowledge", "billing")
+    copy_onto(sandbox, knowledge_repo / ".onto")
+    justfile = knowledge_repo / ".onto" / "Justfile"
+    (knowledge_repo / "build").mkdir()
+    (knowledge_repo / "build" / "app.jar").write_text("그 저장소의 빌드 산출물\n", encoding="utf-8")
+    outside = {path for path in snapshot(knowledge_repo) if not path.startswith(".onto")}
+
+    build = sandbox.just("build", cwd=knowledge_repo, justfile=justfile)
+    query = sandbox.just("query", "ASK { ?s ?p ?o }", cwd=knowledge_repo, justfile=justfile)
+
+    assert build.returncode == 0, build.stderr
+    assert query.returncode == 0, query.stderr
+    assert (knowledge_repo / ".onto" / ".build" / "graph.ttl").is_file()
+    assert {path for path in snapshot(knowledge_repo) if not path.startswith(".onto")} == outside
+    assert (knowledge_repo / "build" / "app.jar").read_text(encoding="utf-8") == "그 저장소의 빌드 산출물\n"
+
+
+def test_레시피_없이_부르면_명령_목록만_보여_주고_파일을_만들지_않는다(sandbox):
+    """첫 레시피인 build가 기본으로 돌아 파일을 쓰지 않는다. 루트 `Justfile`의 기본 레시피와 같다."""
+    root = root_with_billing(sandbox, page("plan/auth-redesign", "Plan", title=PLAN_TITLE))
+    knowledge_repo = sandbox.new_dir("knowledge", "billing")
+    copy_onto(sandbox, knowledge_repo / ".onto")
+    before = snapshot(knowledge_repo)
+
+    as_module = sandbox.just("onto", cwd=root)
+    as_file = sandbox.just(cwd=knowledge_repo, justfile=knowledge_repo / ".onto" / "Justfile")
+
+    for result in (as_module, as_file):
+        assert result.returncode == 0, result.stderr
+        assert "build" in result.stdout and "query" in result.stdout
+    assert not (root / GRAPH).parent.exists()
+    assert sandbox.git("status", "--porcelain", cwd=root).stdout == ""
+    assert snapshot(knowledge_repo) == before
+
+
+def test_실행_위치에_표준_라이브러리나_의존성과_같은_이름의_파일이_있어도_도구가_돈다(sandbox):
+    """`.onto/`는 구현 코드가 있는 프로젝트 저장소의 최상위에서 돈다. 거기의 `yaml.py`나 `types.py`가 도구를 가리면 안 된다."""
+    root = root_with_billing(sandbox, page("plan/auth-redesign", "Plan", title=PLAN_TITLE))
+    for name in ("yaml", "types", "rdflib"):
+        (root / f"{name}.py").write_text("raise RuntimeError('도구가 실행 위치의 모듈에 가려졌다')\n", encoding="utf-8")
+
+    result = query(sandbox, root, "SELECT ?e WHERE { ?e a onto:Plan }")
+
+    assert result.returncode == 0, result.stderr
+    assert parse_table(result.stdout) == [["e"], [PLAN_FILE]]

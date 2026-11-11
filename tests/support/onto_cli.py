@@ -11,32 +11,20 @@ git 저장소일 필요가 없다. 도구는 현재 디렉토리를 루트 저�
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
-from support.sandbox import SOURCE_REPO, Sandbox
+from support.sandbox import SOURCE_REPO, Sandbox, copy_tracked_files
 
 # `just onto`가 부르는 것과 같은 명령줄. 모듈 이름으로 실행하므로 현재 디렉토리와 무관하다.
-TOOL_COMMAND = ("python", "-X", "utf8", "-m", "onto_tool")
+# `-P`는 현재 디렉토리를 `sys.path` 맨 앞에 넣지 않는다. 지식 저장소 최상위의 `yaml.py` 같은 파일이 의존성을 가리지 않게 한다.
+TOOL_COMMAND = ("python", "-P", "-X", "utf8", "-m", "onto_tool")
 
 
 def copy_onto(sandbox: Sandbox, dest: Path) -> Path:
     """루트 저장소가 추적하는 `onto/` 파일을 `dest` 디렉토리로 복사한다. 지식 저장소의 `.onto/`를 만드는 것과 같다."""
-    listing = subprocess.run(
-        ["git", "ls-files", "-z", "--", "onto"],
-        cwd=SOURCE_REPO,
-        env=sandbox.env,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    for rel in filter(None, listing.split("\0")):
-        source = SOURCE_REPO / rel
-        if not source.is_file():
-            continue  # 지웠지만 아직 스테이지하지 않은 파일
-        target = dest / Path(rel).relative_to("onto")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(source.read_bytes())
+    copy_tracked_files(sandbox, SOURCE_REPO, dest, under="onto")
     return dest
 
 
@@ -58,6 +46,17 @@ class OntoCli:
         self._sandbox = sandbox
         self._tool_dir = tool_dir
         self._roots = 0
+        # 도구 사본은 테스트 세션이 공유한다. 앞 테스트가 남긴 산출물이 보이지 않게 비운다.
+        shutil.rmtree(self.build_dir, ignore_errors=True)
+
+    @property
+    def build_dir(self) -> Path:
+        """도구가 산출물(컴파일한 그래프)을 두는 곳. 도구 디렉토리 안의 무시되는 디렉토리다."""
+        return self._tool_dir / ".build"
+
+    @property
+    def graph_file(self) -> Path:
+        return self.build_dir / "graph.ttl"
 
     def root(self, repos: dict[str, dict[str, str]] | None = None) -> Path:
         """견본 루트 디렉토리를 만든다. `repos`는 `{저장소명: {지식 저장소 안의 파일 경로: 내용}}`이다.
@@ -80,11 +79,22 @@ class OntoCli:
         command = ["uv", "run", "--locked", "--quiet", "--project", self._tool_dir, *TOOL_COMMAND, *args]
         return self._sandbox.run(command, cwd=root, check=False, env=env)
 
+    def build(self, root: Path) -> bytes:
+        """`build`를 실행하고 컴파일된 그래프 파일의 내용을 돌려준다. 실패하면 예외를 던진다."""
+        result = self.run(root, "build")
+        assert result.returncode == 0, result.stderr
+        return self.graph_file.read_bytes()
+
     def query(self, root: Path, sparql: str) -> list[list[str]]:
         """SPARQL SELECT 질의를 실행하고 결과를 행 목록(머리 행 제외)으로 돌려준다. 실패하면 예외를 던진다."""
         result = self.run(root, "query", sparql)
         assert result.returncode == 0, result.stderr
         return parse_table(result.stdout)[1:]
+
+
+def snapshot(root: Path) -> set[str]:
+    """`root` 아래 모든 파일과 디렉토리의 상대 경로. 명령이 작업 트리에 무언가를 남겼는지 앞뒤를 비교하는 데 쓴다."""
+    return {p.relative_to(root).as_posix() for p in root.rglob("*")}
 
 
 def parse_table(output: str) -> list[list[str]]:
