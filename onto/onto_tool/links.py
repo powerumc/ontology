@@ -23,8 +23,10 @@ HTML 태그의 `href`와 `src`(따옴표가 없어도 된다. 태그 밖의 평�
   웹 브라우저가 http(s) 주소의 `\`를 `/`로 읽기 때문이다.
 
 `http`, `https`, `mailto`처럼 파일이 아닌 주소, `//host/…`(스킴 없는 주소), 문서 안의 조각(`#제목`)은 파일이 아니라 보지 않는다.
-`<저장소 이름>:<식별자>` 모양의 링크 대상은 다른 지식 저장소를 가리키는 교차 참조라 공유 범위 검사(`checks/scopes.py`)가 본다.
-경로는 글자 그대로 풀어 따진다. 지식 저장소 안의 심볼릭 링크가 밖을 가리키는지는 보지 않는다. 대상 파일이 있는지도 따지지 않는다.
+`<저장소 이름>:<식별자>` 모양의 링크 대상은 다른 지식 저장소를 가리키는 교차 참조(`cross_reference`)라 공유 범위 검사(`checks/scopes.py`)와
+참조 검사(`checks/references.py`)가 본다.
+경로는 글자 그대로 풀어 따진다. 지식 저장소 안의 심볼릭 링크가 밖을 가리키는지는 보지 않는다. 지식 저장소 안을 가리키는 상대 링크(`local_target`)의
+대상이 있는지는 참조 검사가 본다.
 """
 
 import posixpath
@@ -162,7 +164,7 @@ def outside_reason(page_directory: str, destination: str) -> str | None:
         if _DRIVE.match(target):
             return "윈도우의 절대 경로다"
         return "`file:` 주소다" if scheme[1].lower() == "file" else None  # http, https, mailto 같은 주소는 파일이 아니다
-    path = unquote(re.split(r"[#?]", target, maxsplit=1)[0]).replace("\\", "/")
+    path = _path_of(target)
     if not path:
         return None  # 문서 안의 조각(`#제목`)
     if path.startswith("/"):
@@ -171,3 +173,34 @@ def outside_reason(page_directory: str, destination: str) -> str | None:
     if resolved == ".." or resolved.startswith("../"):
         return "페이지에서 상대 경로를 풀면 지식 저장소의 루트 위로 나간다"
     return None
+
+
+def local_target(page_directory: str, destination: str) -> str | None:
+    """페이지의 링크 대상 `destination`이 가리키는 지식 저장소 안의 파일이나 디렉토리를 지식 저장소 루트 기준 경로(`/`로 구분)로 돌려준다.
+
+    파일을 가리키는 링크가 아니거나(`http`, `mailto` 같은 주소, 교차 참조, 문서 안의 조각) 저장소 밖을 가리키면(`outside_reason`) None이다.
+    조각(`#제목`)과 질의(`?…`)는 뗀다. 대상이 있는지는 여기서 따지지 않는다.
+    """
+    target = destination.strip()
+    if outside_reason(page_directory, destination) is not None or target.startswith("//") or _SCHEME.match(target):
+        return None
+    path = _path_of(target)
+    return posixpath.normpath(posixpath.join(page_directory, path)) if path else None
+
+
+def cross_reference(destination: str) -> tuple[str, str] | None:
+    """링크 대상 `destination`이 다른 지식 저장소의 엔티티를 가리키는 `<저장소 이름>:<식별자>` 모양이면 `(저장소 이름, 식별자)`를, 아니면 None을 돌려준다.
+
+    `//`가 뒤따르는 주소(`http://…`)와 파일 경로(윈도우 드라이브, `file:` 주소)는 교차 참조가 아니다. 식별자에서 조각(`#제목`)과 질의(`?…`)는 뗀다.
+    `mailto:me@example.com`이나 `tel:+8210…` 같은 스킴이 이 모양이므로, 저장소 이름과 식별자의 모양으로 진짜 교차 참조인지 가리는 것은 부른 쪽의 몫이다.
+    """
+    target = destination.strip()
+    name, separator, rest = target.partition(":")
+    if not separator or not name or rest.startswith("//") or _DRIVE.match(target) or name.lower() == "file":
+        return None
+    return name.strip(), re.split(r"[#?]", rest, maxsplit=1)[0].strip()
+
+
+def _path_of(target: str) -> str:
+    """스킴이 없는 링크 대상의 경로 부분. 조각과 질의를 떼고 퍼센트 인코딩을 풀고 `\\`를 `/`로 읽는다. 문서 안의 조각(`#제목`)이면 빈 글자다."""
+    return unquote(re.split(r"[#?]", target, maxsplit=1)[0]).replace("\\", "/")

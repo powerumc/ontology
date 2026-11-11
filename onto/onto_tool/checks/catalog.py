@@ -45,9 +45,12 @@ RELATION_RANGE = Check("relation-range", "관계가 가리킬 수 없는 클래�
 # --- 페이지의 키와 참조 ------------------------------------------------------------
 UNDEFINED_KEY = Check("undefined-key", "페이지에 정의되지 않은 frontmatter 키가 있다")
 REVERSE_RELATION = Check("reverse-relation", "역방향 관계(hasPart, implementedBy, governedBy, supersededBy)를 페이지에 직접 썼다")
-BROKEN_REFERENCE = Check("broken-reference", "관계가 가리키는 엔티티가 없다(같은 지식 저장소와 교차 참조)")
+BROKEN_REFERENCE = Check(
+    "broken-reference",
+    "관계(페이지의 관계와 ontology.yaml의 dependsOn)나 본문 링크의 교차 참조가 가리키는 엔티티가 없다(같은 지식 저장소와 교차 참조), 본문의 상대 링크가 가리키는 파일이 없다",
+)
 UNREGISTERED_REPOSITORY = Check(
-    "unregistered-repository", "교차 참조가 등록되지 않은 지식 저장소를 가리킨다", across_repositories=True
+    "unregistered-repository", "교차 참조(관계의 값과 본문 링크)가 등록되지 않은 지식 저장소를 가리킨다", across_repositories=True
 )
 ORPHAN_PAGE = Check(
     "orphan-page",

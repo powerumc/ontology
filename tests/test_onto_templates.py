@@ -183,6 +183,13 @@ def test_규약_문서가_참조와_링크의_공유_범위_규칙과_검사의_
         assert phrase in text, phrase
 
 
+def test_규약_문서가_본문_링크의_대상이_없으면_깨진_참조라고_적는다():
+    section = conventions().split("### 본문의 링크")[1].split("## 원본 문서와")[0]
+
+    assert "`broken-reference`" in section  # 교차 참조가 가리키는 엔티티와 저장소 안의 상대 링크가 가리키는 파일이 있어야 한다
+    assert "교차 참조" in section and "상대 링크" in section
+
+
 def test_규약_문서가_Project의_dependsOn을_관계_표와_ontology_yaml_절에_적는다():
     text = conventions()
     relations = text.split("## 관계와 교차 참조")[1].split("### 참조하는 법")[0]
@@ -217,7 +224,7 @@ def test_규약_문서가_보여_주는_본문_링크와_교차_참조는_도구
     link = "[설계](../../design.md) [결제 API](billing:component/api)\n"
     ok = page("component/gateway", "Component", title="게이트웨이", partOf="project", dependsOn="billing:component/api", body=link)
     repos = {
-        "shop": repo("shop", ok, scope="private"),
+        "shop": {**repo("shop", ok, scope="private"), "docs/design.md": SOURCE_CONTENT},  # 링크의 대상(`../../design.md`)은 저장소 안에 있다
         "billing": repo("billing", page("component/api", "Component", title="결제 API", partOf="project"), scope="private"),
     }
     assert onto_cli.run(onto_cli.root(repos), "validate").stdout == ""

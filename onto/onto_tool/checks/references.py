@@ -1,6 +1,6 @@
 """참조를 훑는 검사 항목: 깨진 참조, 등록되지 않은 지식 저장소, 식별자도 교차 참조도 아닌 값(파일 경로).
 
-훑는 것은 페이지의 관계의 값과 `Project` 엔티티의 관계의 값(`ontology.yaml`의 `dependsOn`)이다.
+훑는 것은 페이지의 관계의 값, `Project` 엔티티의 관계의 값(`ontology.yaml`의 `dependsOn`), 페이지 본문의 링크다.
 `Project`는 페이지가 없어 자기가 쓰는 관계를 `ontology.yaml`에 적는다. 그 값은 페이지의 관계와 같은 규칙으로 검사하고, 문제는 `ontology.yaml`의 것으로 보고한다.
 
 관계의 값은 그래프가 아니라 frontmatter 원문(`ontology.yaml`은 그 값)에서 본다. 등록되지 않은 저장소 이름을 쓴 교차 참조는 컴파일에서 오류 없이
@@ -23,11 +23,24 @@
 
 가리키는 엔티티가 있으면 모양과 상관없이 식별자로 본다(루트의 언어 규칙 `identifier-pattern`이 점을 허용하는 경우, 클래스 디렉토리 밖에 잘못
 둔 페이지). 이런 값은 깨진 참조나 등록되지 않은 지식 저장소로 다시 보고하지 않는다.
+
+본문의 링크는 두 가지를 본다. 둘 다 링크의 모양이 아니라 대상만 따지고, 코드 안의 링크는 링크가 아니다(`links.destinations`).
+
+- 교차 참조(`[글](billing:component/api)`)는 관계의 값과 같은 규칙으로 가리키는 엔티티를 찾는다. 등록되지 않은 저장소는 `unregistered-repository`,
+  온톨로지 층이 없는 저장소나 없는 엔티티는 `broken-reference`다. `mailto:me@example.com` 같은 스킴은 교차 참조가 아니다. 저장소 이름이 등록된 것이면
+  식별자의 모양과 상관없이 교차 참조로 본다(클래스 디렉토리의 오타를 깨진 참조로 알린다). 등록된 것이 아니면 식별자의 모양일 때만 교차 참조다.
+  파일 경로의 모양(`path-reference`)은 따지지 않는다. 본문의 링크는 경로여도 되기 때문이다.
+- 지식 저장소 안의 상대 링크(`[글](../term/x.md)`)는 가리키는 파일이나 디렉토리가 있어야 한다(`broken-reference`). 저장소 밖을 가리키는 링크(`outside-link`)와
+  파일이 아닌 주소(`https`, `mailto`), 문서 안의 조각(`#제목`)은 따지지 않는다. 상대 링크는 이 저장소 안의 사실이라 지식 저장소 안에서도 검사하고,
+  다른 저장소를 가리키는 교차 참조는 지식 저장소 안에서는 건너뛴다(`unregistered-repository`가 여러 저장소에 걸친 검사다).
 """
 
+import os
+import posixpath
 import re
 from collections.abc import Iterator
 
+from .. import links
 from ..compiler import PROJECT_IDENTIFIER, Compiled, PageRecord, RepositoryRecord
 from ..iri import entity_iri, resolve_reference
 from ..keys import PAGE_CLASS_DIRECTORIES
@@ -113,4 +126,19 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
                     )
                 else:
                     yield from known.dangling(record, page, where, target)
+            yield from _body_links(compiled, known, record, page)
 
+
+def _body_links(compiled: Compiled, known: _Known, record: RepositoryRecord, page: PageRecord) -> Iterator[Issue]:
+    """페이지 본문의 링크가 가리키는 대상이 있는지 본다: 교차 참조는 엔티티를, 지식 저장소 안의 상대 링크는 파일이나 디렉토리를."""
+    directory = posixpath.dirname(page.file.removeprefix(f"{record.path}/"))  # 지식 저장소 루트 기준
+    for destination in links.destinations(page.body):
+        where = f"본문의 링크 `{destination}`"
+        if (parts := links.cross_reference(destination)) is not None:
+            name, identifier = parts
+            # 저장소 이름이 등록된 것이면 식별자의 모양과 상관없이 교차 참조다. 아니면 식별자의 모양일 때만이다(`mailto:me@example.com`은 아니다).
+            if name in known.registered or not_a_reference(f"{name}:{identifier}") is None:
+                yield from known.dangling(record, page, where, f"{name}:{identifier}")
+        elif compiled.root is not None and (target := links.local_target(directory, destination)) is not None:
+            if not os.path.exists(compiled.root / record.path / target):
+                yield Issue(BROKEN_REFERENCE, page.file, f"{where}: 가리키는 파일이나 디렉토리가 없다(지식 저장소의 `{target}`)")

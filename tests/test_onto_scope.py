@@ -701,7 +701,7 @@ def test_페이지가_깊은_디렉토리에_있으면_그_위치에서_상대_�
 def test_본문의_링크는_모든_지식_저장소에서_저장소_밖을_기준으로_잡는다(onto_cli):
     repos = {
         "billing": repo("billing", page("component/gateway", "Component", title="게이트웨이", partOf="project", body=f"[x]({OUTSIDE}shop/docs/design.md)\n")),
-        "shop": repo("shop", page("component/api", "Component", title="API", partOf="project", body=f"[y]({INSIDE}README.md)\n")),
+        "shop": {**repo("shop", page("component/api", "Component", title="API", partOf="project", body=f"[y]({INSIDE}README.md)\n")), "README.md": "# 상점\n"},
     }
 
     assert found(onto_cli, onto_cli.root(repos)) == [(ERROR, "billing", file("component/gateway"), "outside-link")]
