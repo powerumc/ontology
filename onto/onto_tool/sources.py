@@ -4,9 +4,16 @@
 페이지는 `derivedFrom`에 근거로 삼은 문서의 경로와 git 해시를 적고(`{path, hash}` 항목), 읽고도 기록할 것이 없는 문서는
 넘긴 문서의 목록(`docs/ontology/skipped.yaml`)에 같은 모양의 항목으로 적는다. 문서의 지금 해시와 적힌 해시가 다르면 낡음이다.
 
-- 해시는 git이 그 문서를 커밋할 때 기록하는 정규 blob 해시다. 깨끗한 클론에서 `git rev-parse HEAD:<경로>`와 같고, 같은 커밋이면
-  `core.autocrlf`나 `.gitattributes`의 `eol`·`text`·`filter`가 달라 작업 트리의 바이트가 기기마다 달라도 같다. 작업 트리에 있는 파일의
-  지금 내용으로 계산하므로 커밋하지 않은 수정도 달라진 것으로 본다.
+- 해시는 git이 그 문서를 `git add`할 때 기록할 정규 blob 해시다. 저장소의 blob에 CRLF가 들어 있지 않은 문서(LF로 커밋한 문서, 대부분)는
+  깨끗한 클론에서 `git rev-parse HEAD:<경로>`와 같고, 같은 커밋이면 `core.autocrlf`나 `.gitattributes`의 `eol`·`text`·`filter`가
+  달라 작업 트리의 바이트가 기기마다 달라도 같다. 작업 트리에 있는 파일의 지금 내용으로 계산하므로 커밋하지 않은 수정도 달라진 것으로 본다.
+  한계: 저장소의 blob에 이미 CRLF가 들어 있는 문서(변환 설정 없이 CRLF로 커밋한 문서, 줄바꿈이 CRLF인 채 시작한 저장소에 흔하다)는 해시가
+  `git rev-parse HEAD:<경로>`와 다를 수 있다. git은 줄바꿈 자동 변환에서 인덱스에 이미 CRLF로 든 파일을 변환하지 않는데(`git add`와
+  `git status`는 인덱스를 읽어 그렇게 한다), `git hash-object`는 인덱스를 읽지 않아 `core.autocrlf=true`나 `.gitattributes`의 `text=auto`가
+  있으면 CRLF를 LF로 바꿔 해시하기 때문이다. 변환 설정이 없는 기기에서는 같다. 그래서 `core.autocrlf`가 다른 기기에서는 같은 커밋인데도
+  해시가 다르고(한쪽에서 ingest한 페이지가 다른 쪽에서 낡음으로 나온다), 커밋한 뒤 `text=auto`를 더한 저장소에서는 모든 기기에서 `git rev-parse`와
+  다르다. 해시는 `git rev-parse`가 아니라 `onto status`가 내는 값을 쓴다. 이 한계를 없애려면 저장소의 blob을 LF로 정규화해 다시 커밋한다
+  (`.gitattributes`에 `text=auto`를 두고 `git add --renormalize .`).
   지식 저장소가 git 작업 트리(`.git`이 있다)이면 `git hash-object --stdin-paths`(`-w` 없이)로 낸다. git이 그 경로에 `.gitattributes`와
   `core.autocrlf` 같은 변환 설정을 적용해 `git add`가 기록할 blob의 해시를 준다. 그 설정은 사용자가 체크아웃에 쓴 것과 같은
   설정이라 결과를 정하는 입력이므로 고정하지 않는다. 고정하는 것은 저장소를 찾는 방식(`GIT_DIR` 같은 환경 변수를 버리고, 상위 디렉토리의
@@ -83,6 +90,11 @@ def _entry(item: object, where: str) -> SourceEntry:
         raise ValueKindError(
             f"{where}의 `path` `{path}`가 지식 저장소 루트 기준 파일 경로가 아니다"
             "(`/`로 구분하고, `/`로 시작하거나 `.`, `..`, 빈 조각이 있으면 안 된다)"
+        )
+    if path == _LAYER or path.startswith(f"{_LAYER}/"):
+        raise ValueKindError(
+            f"{where}의 `path` `{path}`가 온톨로지 층(`{_LAYER}/`) 안을 가리킨다. 온톨로지 층은 원본 문서가 아니다"
+            "(원본 문서는 층과 분리된 문서이고 ingest 대상에서 항상 빠진다)"
         )
     if not isinstance(hash_, str) or not GIT_HASH.fullmatch(hash_):
         raise ValueKindError(

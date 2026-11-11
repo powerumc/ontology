@@ -1,7 +1,7 @@
 """낡음과 원본 문서의 기록: 페이지가 근거로 삼은 원본 문서가 바뀌었거나 없어졌는지, 넘긴 문서가 없어졌는지.
 
 페이지의 `derivedFrom`과 넘긴 문서의 목록(`skipped.yaml`)이 적은 해시를, 컴파일이 읽어 둔 원본 문서의 지금 해시
-(`RepositoryRecord.document_hashes`: git이 기록하는 blob 해시이고 작업 트리의 현재 내용으로 낸다)와 비교한다.
+(`RepositoryRecord.document_hashes`: git이 기록할 blob 해시이고 작업 트리의 현재 내용으로 낸다)와 비교한다.
 커밋하지 않은 수정도 달라진 것으로 본다. `sources` 모듈 설명이 해시와 경로 대조의 규칙을 적는다.
 대상 범위(규칙의 `sources`)와 상관없이 페이지가 가리키는 문서는 모두 본다. 범위는 새 원본 문서를 가려내는 `status`의 몫이다.
 

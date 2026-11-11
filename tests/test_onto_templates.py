@@ -163,3 +163,36 @@ def test_규약_문서가_보여_주는_페이지_예는_도구가_받아들인�
     assert result.returncode == 0, result.stdout
     assert result.stdout == ""
 
+
+
+def test_규약_문서가_참조와_링크의_공유_범위_규칙과_검사의_한계를_적는다():
+    text = conventions()
+
+    for phrase in (
+        "`path-reference`",  # 관계의 값에는 식별자나 교차 참조만 쓴다. 경로와 주소는 오류다
+        "`docs/ontology/plan/x`",
+        "`componet/api`",
+        "`scope-violation`",  # 더 좁은 범위나 다른 팀의 저장소는 가리킬 수 없다
+        "`outside-link`",  # 본문 링크는 저장소 밖을 가리키지 않는다
+        "페이지 기준 상대 경로",
+        "`/docs/design.md`",  # 저장소 루트 기준 링크도 오류다
+        "[결제 API](billing:component/api)",  # 본문에서 다른 저장소의 엔티티를 가리키는 법
+        "`team:<팀 이름>`",
+        "제목, 별칭, 본문 글(평문)에 더 좁은 범위의 저장소 이름을 적는 것은 검사가 잡지 못하니",  # 검사의 한계
+    ):
+        assert phrase in text, phrase
+
+
+def test_규약_문서가_보여_주는_본문_링크와_교차_참조는_도구가_받아들이고_경로_참조는_거부한다(onto_cli):
+    """문서가 권하는 쓰기(페이지 기준 상대 경로, `<저장소>:<식별자>` 링크)는 통과하고, 금지하는 값(`docs/ontology/plan/x`)은 걸린다."""
+    link = "[설계](../../design.md) [결제 API](billing:component/api)\n"
+    ok = page("component/gateway", "Component", title="게이트웨이", partOf="project", dependsOn="billing:component/api", body=link)
+    repos = {
+        "shop": repo("shop", ok, scope="private"),
+        "billing": repo("billing", page("component/api", "Component", title="결제 API", partOf="project"), scope="private"),
+    }
+    assert onto_cli.run(onto_cli.root(repos), "validate").stdout == ""
+
+    bad = {"shop": repo("shop", page("component/gateway", "Component", title="게이트웨이", partOf="project", dependsOn="docs/ontology/plan/x"))}
+
+    assert "path-reference" in onto_cli.run(onto_cli.root(bad), "validate").stdout

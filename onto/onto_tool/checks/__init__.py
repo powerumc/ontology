@@ -15,7 +15,21 @@ from .. import rules
 from ..compiler import Compiled, Problem
 from ..rules import RuleSet, Rules
 from ..workspace import Scope
-from . import duplicates, freshness, frontmatter, indexes, layout, orphans, overrides, problems, references, repositories, structure
+from . import (
+    duplicates,
+    freshness,
+    frontmatter,
+    indexes,
+    layout,
+    links,
+    orphans,
+    overrides,
+    problems,
+    references,
+    repositories,
+    scopes,
+    structure,
+)
 from .catalog import BY_NAME, CHECKS
 from .model import Check, Finding, Severity
 
@@ -34,7 +48,21 @@ __all__ = [
 ]
 
 # 검사를 돌리는 모듈. 모듈마다 `find(compiled, rule_set)`가 문제를 찾는다.
-_MODULES = (problems, repositories, overrides, frontmatter, layout, indexes, references, orphans, duplicates, freshness, structure)
+_MODULES = (
+    problems,
+    repositories,
+    overrides,
+    frontmatter,
+    layout,
+    indexes,
+    references,
+    scopes,
+    links,
+    orphans,
+    duplicates,
+    freshness,
+    structure,
+)
 
 # 지식 저장소의 규칙이 덮어쓸 수 없는 검사 항목
 ROOT_ONLY_CHECKS: Collection[str] = tuple(check.name for check in CHECKS if check.root_only)

@@ -76,9 +76,9 @@ def test_예(onto_cli):
 
 ### 원본 문서와 낡음(`test_onto_sources.py`, `test_onto_status.py`)
 
-페이지의 `derivedFrom`은 `{path, hash}` 항목(또는 그 목록)이다. `path`는 지식 저장소 루트 기준 원본 문서의 경로, `hash`는 그 문서의 git 해시(git이 기록하는 blob 해시, 40자리 소문자 16진수)다. 넘긴 문서의 목록(`docs/ontology/skipped.yaml`)은 같은 모양의 항목의 목록이다. 지식 저장소가 git 작업 트리이면 도구가 `git hash-object --stdin-paths`로 해시를 내므로(`.gitattributes`와 `core.autocrlf` 적용), 깨끗한 클론의 `git rev-parse HEAD:<경로>`와 같고 줄바꿈 변환 설정과 무관하다. git 저장소가 아닌 견본 디렉토리에서는 파일 내용 그대로 blob 해시를 낸다. 테스트가 기대하는 해시는 도구의 계산이 아니라 git이 낸 값이다: `git hash-object`(견본 루트를 만들기 전에 임시 파일로 구한다)와 `git rev-parse HEAD:<경로>`. 줄바꿈 변환을 다루는 테스트는 `git init`과 커밋으로 만든 원본 저장소를 `git clone -c core.autocrlf=true`로 클론한다.
+페이지의 `derivedFrom`은 `{path, hash}` 항목(또는 그 목록)이다. `path`는 지식 저장소 루트 기준 원본 문서의 경로, `hash`는 그 문서의 git 해시(git이 기록하는 blob 해시, 40자리 소문자 16진수)다. 넘긴 문서의 목록(`docs/ontology/skipped.yaml`)은 같은 모양의 항목의 목록이다. 지식 저장소가 git 작업 트리이면 도구가 `git hash-object --stdin-paths`로 해시를 내므로(`.gitattributes`와 `core.autocrlf` 적용), 저장소의 blob에 CRLF가 들어 있지 않은 문서는 깨끗한 클론의 `git rev-parse HEAD:<경로>`와 같고 줄바꿈 변환 설정과 무관하다. 한계: 저장소의 blob에 이미 CRLF가 든 문서는 `core.autocrlf=true`나 `text=auto`가 있으면 CRLF를 LF로 바꿔 해시하므로 `git rev-parse`와 다르고(변환 설정이 없는 기기에서는 같아 기기마다 다를 수 있다), 이를 `test_저장소의_blob에_CRLF가_든_문서의_…`와 `test_CRLF로_커밋한_문서에_text_auto를_…`가 못 박는다. git 저장소가 아닌 견본 디렉토리에서는 파일 내용 그대로 blob 해시를 낸다. 테스트가 기대하는 해시는 도구의 계산이 아니라 git이 낸 값이다: `git hash-object`(견본 루트를 만들기 전에 임시 파일로 구한다)와 `git rev-parse HEAD:<경로>`. 줄바꿈 변환을 다루는 테스트는 `git init`과 커밋으로 만든 원본 저장소를 `git clone -c core.autocrlf=true`로 클론한다.
 
-- `test_onto_sources.py`: `derivedFrom`이 그래프의 `Source` 엔티티(`onto:sourcePath`, `onto:sourceHash`)와 `onto:derivedFrom` 관계로 나타나는 것, 값의 모양, 낡음(`stale-page`, 경고)·없어진 원본 문서(`missing-source`, 경고)·없어진 넘긴 문서(`missing-skipped-source`, 경고) 검사, git 저장소에서의 해시(줄바꿈 변환, 환경 변수, 아무것도 고치지 않는 것, git 실패 시 대체), 경로 대조(대소문자, 유니코드 정규화, 심볼릭 링크).
+- `test_onto_sources.py`: `derivedFrom`이 그래프의 `Source` 엔티티(`onto:sourcePath`, `onto:sourceHash`)와 `onto:derivedFrom` 관계로 나타나는 것, 값의 모양(온톨로지 층 안을 가리키는 `path`는 값의 종류 오류), 낡음(`stale-page`, 경고)·없어진 원본 문서(`missing-source`, 경고)·없어진 넘긴 문서(`missing-skipped-source`, 경고) 검사, git 저장소에서의 해시(줄바꿈 변환과 CRLF가 든 blob의 한계, 환경 변수, 아무것도 고치지 않는 것, git 실패 시 대체), 경로 대조(대소문자, 유니코드 정규화, 심볼릭 링크).
 - `test_onto_status.py`: `status`가 새 문서와 바뀐 문서를 지식 저장소별로 보여 주는 것(보고는 문서 하나에 탭 다섯 칸), 넘긴 문서(페이지가 지금 내용을 근거로 삼았으면 넘긴 목록의 옛 항목은 무시), 대상 범위(규칙의 글롭과 제외 경로, 온톨로지 층·숨김 경로·심볼릭 링크는 항상 제외), 아무 파일도 고치지 않는 것, 깨진 `rules`를 기본값으로 대신하지 않는 것. `just onto status`는 마지막 테스트 하나만 거친다.
 - 읽을 수 없는 파일의 문제로 `build`·`query`·`status`가 멈추는 조건(그 항목이 오류일 때만)과 `validate`와의 동치는 `test_onto_rules.py`의 `test_validate가_0으로_끝나면…`이 확인한다.
 
@@ -106,3 +106,13 @@ def test_예(onto_cli):
 ### 템플릿과 규약 문서(`test_onto_templates.py`)
 
 `onto/template/`의 견본과 규약 문서가 보여 주는 예는 도구에 돌려 확인한다(`onto_cli`). 견본의 키(`derivedFrom` 포함)가 모두 그 클래스의 페이지가 쓸 수 있는 것인지, 규약 문서의 페이지 예와 하위 클래스 선언이 받아들여지는지를 스크립트 검사가 판단한다. 견본을 더하거나 고치면 이 테스트가 걸러 낸다. 예의 근거 문서는 테스트가 만들고 해시는 git의 정의(`sha1("blob <바이트 수>\0" + 내용)`)로 계산해 자리표시 해시를 바꿔 넣는다. 규약 문서가 해시를 구하는 법(`status`의 값을 옮겨 적는다, 해시는 따옴표로 감싼다)은 글자로 확인한다.
+
+### 공유 범위(`test_onto_scope.py`)
+
+공유 범위 검사 항목 넷(`invalid-scope`, `scope-violation`, `path-reference`, `outside-link`)을 `onto_cli`로 본다. 모두 루트 전용이라 지식 저장소의 `rules`가 끄거나 심각도를 바꾸려 하면 `invalid-rules` 오류이고, 그래도 문제는 루트 기본 규칙의 심각도로 보고된다(이 파일이 항목마다 확인한다). 공유 범위는 `repo("billing", …, scope="team:payments")`처럼 `ontology.yaml`의 `scope`로 적는다. 적지 않은 지식 저장소는 `private`으로 본다.
+
+- 값: `private`, `team`, `team:<팀 이름>`, `public`만 통과하고 나머지(대소문자, 공백, 빈 팀 이름, 문자열이 아닌 값)는 오류다.
+- 교차 참조: 공유 범위 쌍마다 통과 여부를 표(`REFERENCES`)로 적었다. 더 넓은 범위로는 되고, 같은 범위끼리는 `private`과 `public`이면 되고 `team`이면 같은 팀(`team`과 `team`, 같은 `team:<팀 이름>`)만 된다. 가리키는 엔티티가 없어도 저장소 이름이 드러나므로 잡는다. 저장소는 `name`으로도 서브모듈 디렉토리 이름으로도 가리킬 수 있고 둘 다 본다. 범위를 알 수 없는 저장소(층이 없다, `ontology.yaml`을 읽을 수 없다, `scope` 값이 틀렸다)는 `private`으로 보고 비교한다. 이 경우마다 덮어쓸 수 있는 항목(`broken-reference`, `repository-name-mismatch` 등)을 저장소 규칙으로 꺼도 `scope-violation`이 남는지 본다.
+- 파일 경로: 관계의 값이 식별자도 교차 참조도 아니면 `path-reference`만 보고하고 `broken-reference`나 `unregistered-repository`로 다시 보고하지 않는다. 절대 경로, `file:` 주소, `..` 조각, 확장자로 끝나는 경로, 첫 조각이 클래스 디렉토리가 아닌 값(`docs/ontology/plan/x`, `projects/<저장소>/…`, 오타)이 그렇다. 이 값들도 끌 수 있는 항목을 꺼 두고 확인한다.
+- 본문의 링크: 인라인 링크, 이미지, 참조 정의, 자동 링크, HTML `href`·`src`(따옴표 없는 것 포함)가 저장소 밖의 파일(절대 경로, `file:` 주소, 저장소 루트 위로 나가는 상대 경로, 역슬래시 경로)을 가리키면 `outside-link`다. 코드 블록(목록 안에서 들여쓴 것 포함)과 인라인 코드와 HTML 주석 안, `http` 같은 주소, 저장소 안의 경로는 잡지 않는다. 견본 페이지가 `docs/ontology/component/` 아래에 있어 `../`를 세 번 오르면 저장소의 루트, 네 번 오르면 저장소 밖이다. `<저장소 이름>:<식별자>` 모양의 링크 대상은 관계의 값과 같이 공유 범위를 따진다(`scope-violation`). 제목·별칭·본문 평문에 적힌 저장소 이름은 검사하지 않는다.
+- 심볼릭 링크 페이지: 페이지 파일이 다른 저장소의 파일을 가리키는 심볼릭 링크이면 읽지 않고 `outside-link` 오류로 알린다(`build`도 멈춘다). 링크의 내용(비공개 제목)은 출력과 인덱스에 나오지 않는다. 링크는 `onto_cli.root()`가 만든 뒤 테스트가 만든다.
