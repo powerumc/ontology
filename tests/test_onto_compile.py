@@ -594,3 +594,81 @@ def test_여러_지식_저장소의_읽을_수_없는_파일을_한꺼번에_모
     for file in (f"{PAGES}/plan/broken.md", "projects/shop/docs/ontology/ontology.yaml", "projects/mall/docs/ontology/report/bad-date.md"):
         assert file in result.stderr
     assert not onto_cli.graph_file.exists()
+
+
+# --- 문서화된 키 -------------------------------------------------------------
+
+DCTERMS = "http://purl.org/dc/terms/"
+VOCAB = "https://onto.invalid/vocab#"
+# 문서화된 frontmatter 키와, 그 키가 그래프에서 되는 술어. `onto/onto_tool/keys.py`가 아는 키의 집합과 같아야 한다.
+# 키를 더하면 여기에도 더한다. 도구 내부의 상수를 읽지 않고, 여기 적힌 목록으로 도구를 실행해 결과를 본다.
+PAGE_KEYS_AS_PREDICATES = {
+    "class": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+    "title": f"{DCTERMS}title",
+    "description": f"{DCTERMS}description",
+    "date": f"{DCTERMS}date",
+    "aliases": "http://www.w3.org/2004/02/skos/core#altLabel",
+    "partOf": f"{VOCAB}partOf",
+    "dependsOn": f"{VOCAB}dependsOn",
+    "implements": f"{VOCAB}implements",
+    "governs": f"{VOCAB}governs",
+    "supersedes": f"{VOCAB}supersedes",
+    "about": f"{VOCAB}about",
+}
+DOCUMENTED_RELATION_KEYS = ("partOf", "dependsOn", "implements", "governs", "supersedes", "about")
+
+
+def test_문서화된_frontmatter_키를_모두_쓴_페이지는_키마다_그래프에_나타나고_관계는_대상_엔티티와_이어진다(onto_cli):
+    targets = {key: f"component/{key.lower()}-target" for key in DOCUMENTED_RELATION_KEYS}
+    subject = page(
+        "component/subject",
+        "Component",
+        title="주체",
+        description="설명",
+        date="2026-11-01",
+        aliases=["별칭", "alias"],
+        **{key: [target] for key, target in targets.items()},
+    )
+    root = onto_cli.root(billing(subject, *(page(target, "Component", title=f"{key} 대상") for key, target in targets.items())))
+
+    rows = onto_cli.query(root, 'SELECT (STR(?p) AS ?predicate) ?o WHERE { ?e dcterms:title "주체" ; ?p ?o }')
+
+    facts = {(predicate, obj) for predicate, obj in rows}
+    expected = {
+        "class": {(PAGE_KEYS_AS_PREDICATES["class"], f"{VOCAB}Component")},
+        "title": {(PAGE_KEYS_AS_PREDICATES["title"], "주체")},
+        "description": {(PAGE_KEYS_AS_PREDICATES["description"], "설명")},
+        "date": {(PAGE_KEYS_AS_PREDICATES["date"], "2026-11-01")},
+        "aliases": {(PAGE_KEYS_AS_PREDICATES["aliases"], "별칭"), (PAGE_KEYS_AS_PREDICATES["aliases"], "alias")},
+        # 관계는 값이 대상 엔티티의 IRI로 풀려, 질의 결과에서 대상 페이지의 파일 경로로 나온다.
+        **{key: {(PAGE_KEYS_AS_PREDICATES[key], f"{PAGES}/{target}.md")} for key, target in targets.items()},
+    }
+    assert set(expected) == set(PAGE_KEYS_AS_PREDICATES)  # 목록의 모든 키를 썼다
+    missing = {key: sorted(wanted - facts) for key, wanted in expected.items() if not wanted <= facts}
+    assert missing == {}
+
+
+def test_문서화된_ontology_yaml_키를_모두_쓰면_키마다_그래프에_나타난다(onto_cli):
+    """`name`은 엔티티의 출처와 식별자에, `title`·`description`·`aliases`는 Project의 사실에, `classes`는 선언한 클래스에 나타난다."""
+    root = onto_cli.root(
+        billing(
+            page("component/invoice-service", "Invoice", title="청구서 서비스"),
+            title="결제",
+            description="결제 서비스",
+            aliases=["billing service", "청구"],
+            classes={"Invoice": {"subClassOf": "Component"}},
+        )
+    )
+
+    project = onto_cli.query(
+        root, 'SELECT (STR(?e) AS ?iri) (STR(?p) AS ?predicate) ?o WHERE { ?e a onto:Project ; ?p ?o }'
+    )
+    invoice_as_component = onto_cli.query(root, 'SELECT ?e WHERE { ?e a onto:Component ; dcterms:title "청구서 서비스" }')
+
+    facts = {(predicate, obj) for _, predicate, obj in project}
+    assert {iri for iri, _, _ in project} == {"https://onto.invalid/entity/billing/project"}  # name
+    assert (f"{VOCAB}repository", "billing") in facts  # name
+    assert (f"{DCTERMS}title", "결제") in facts
+    assert (f"{DCTERMS}description", "결제 서비스") in facts
+    assert {obj for predicate, obj in facts if predicate.endswith("altLabel")} == {"billing service", "청구"}
+    assert invoice_as_component == [[f"{PAGES}/component/invoice-service.md"]]  # classes

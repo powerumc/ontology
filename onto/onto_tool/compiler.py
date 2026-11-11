@@ -19,7 +19,7 @@ from rdflib.namespace import OWL, RDFS
 from . import vocab
 from .errors import OntoError
 from .graphs import canonical
-from .iri import UNRESOLVED_BASE, class_iri, entity_iri, resolve_reference
+from .iri import UNRESOLVED_BASE, class_iri, entity_iri, resolve_reference, unresolved_iri
 from .keys import CLASS_DECLARATION_KEYS, CLASSES_KEY, PAGE_KEYS, PROJECT_KEYS, RELATION_KEYS
 from .ontology_yaml import OntologyYamlError, read_ontology_yaml
 from .pages import FrontmatterError, find_pages, read_page, scalar_values
@@ -28,6 +28,11 @@ from .workspace import ONTOLOGY_YAML, Repository, Workspace
 PROJECT_IDENTIFIER = "project"
 # 지식 저장소가 선언하는 클래스의 이름. 공통 어휘의 클래스 이름처럼 영어로 쓰고 대문자로 시작한다.
 CLASS_NAME = re.compile(r"[A-Z][A-Za-z0-9]*")
+# 페이지로 서술하지 않는 공통 클래스와 그 이유. 하위 클래스를 선언해 페이지가 이 클래스의 엔티티가 되게 할 수 없다.
+UNPAGED_CLASSES = {
+    "Project": "별도 페이지 없이 ontology.yaml에서만 만들어지는 클래스",
+    "Source": "페이지를 따로 갖지 않는 클래스",
+}
 
 
 @dataclass
@@ -145,9 +150,22 @@ def _node(repository: str, identifier: str, meta: dict[str, object], declared_cl
 
 
 def _classes(repository: str, value: object, declared_classes: set[str]) -> object:
-    """`class`의 값 가운데 이 지식 저장소가 선언한 클래스의 이름을 그 클래스의 IRI로 바꾼다. 다른 값은 context가 푼다."""
+    """`class`의 값 가운데 이 지식 저장소가 선언한 클래스의 이름을 그 클래스의 IRI로 바꾼다. 다른 이름은 context가 푼다.
+
+    클래스는 이름으로만 쓴다. `:`가 든 값(`https://…`, `onto:Component`)은 JSON-LD가 IRI로 읽어 어느 클래스든 가리킬 수 있어,
+    다른 저장소가 선언한 클래스를 이름만으로는 못 끌어 쓰는 제한을 우회한다. 그런 값은 어느 클래스도 가리키지 않는
+    풀리지 않은 클래스로 남긴다. 알 수 없는 클래스를 오류로 알리는 것은 스크립트 검사의 몫이다.
+    """
+
+    def resolve(name: object) -> object:
+        if isinstance(name, str) and name in declared_classes:
+            return class_iri(repository, name)
+        if isinstance(name, str) and ":" in name:
+            return unresolved_iri(name)
+        return name
+
     names = value if isinstance(value, list) else [value]
-    resolved = [class_iri(repository, n) if isinstance(n, str) and n in declared_classes else n for n in names]
+    resolved = [resolve(name) for name in names]
     return resolved if isinstance(value, list) else resolved[0]
 
 
@@ -185,7 +203,13 @@ def _declare_classes(
     for key, declaration in declarations.items():
         name = str(key)
         where = f"{yaml_file}: `{CLASSES_KEY}.{name}`"
-        if not CLASS_NAME.fullmatch(name):
+        if not isinstance(key, str):
+            # YAML 1.1은 따옴표 없는 No, Yes, On, Off, Null, 숫자를 문자열이 아닌 값으로 읽는다. str()로 바꾸면 다른 이름이 된다.
+            result.problems.append(
+                f"{where}: 클래스 이름은 문자열이어야 한다. YAML은 따옴표 없는 `No`, `Yes`, `On`, `Off`, `Null`, 숫자를 "
+                f"문자열로 읽지 않으니 따옴표로 감싼다(읽힌 값: `{key!r}`)"
+            )
+        elif not CLASS_NAME.fullmatch(name):
             result.problems.append(f"{where}: 클래스 이름은 영어 대문자로 시작하고 영어와 숫자만 쓴다(예: `Invoice`)")
         elif name in context:
             result.problems.append(f"{where}: 공통 어휘의 용어라 하위 클래스 이름으로 쓸 수 없다")
@@ -201,22 +225,46 @@ def _declare_classes(
 
     declared = set(superclasses)
     for name, superclass in superclasses.items():
-        if superclass in declared:
-            super_iri = class_iri(repository, superclass)
-        elif superclass in common_classes:
-            super_iri = str(common_classes[superclass])
-        else:
+        where = f"{yaml_file}: `{CLASSES_KEY}.{name}`"
+        if superclass not in declared and superclass not in common_classes:
             result.problems.append(
-                f"{yaml_file}: `{CLASSES_KEY}.{name}`의 상위 클래스 `{superclass}`가 공통 어휘에도 이 지식 저장소의 `{CLASSES_KEY}`에도 없다"
+                f"{where}의 상위 클래스 `{superclass}`가 공통 어휘에도 이 지식 저장소의 `{CLASSES_KEY}`에도 없다"
             )
             continue
+        root, cyclic = _root(name, superclasses, common_classes)
+        if cyclic:
+            result.problems.append(f"{where}: 상위 클래스를 따라가면 순환해 공통 어휘의 클래스에 닿지 않는다")
+            continue
+        if root is None:
+            continue  # 상위 클래스를 따라가다 없는 이름을 만났다. 그 선언이 이미 문제로 알려진다.
+        if root in UNPAGED_CLASSES:
+            result.problems.append(
+                f"{where}: 상위 클래스를 따라가면 `{root}`에 닿는데, `{root}`는 {UNPAGED_CLASSES[root]}라 하위 클래스를 선언할 수 없다"
+            )
+            continue
+        super_iri = class_iri(repository, superclass) if superclass in declared else str(common_classes[superclass])
         result.nodes.append(
             {
                 "@id": class_iri(repository, name),
                 "@type": str(OWL.Class),
                 str(RDFS.label): {"@value": name, "@language": "en"},
                 str(RDFS.subClassOf): {"@id": super_iri},
-                "onto:repository": repository,
+                # 엔티티의 출처(`onto:repository`)와 구분한다. 엔티티를 지식 저장소로 묻는 질의에 클래스 선언이 섞이지 않는다.
+                "onto:declaredIn": repository,
             }
         )
     return result, declared
+
+
+def _root(name: str, superclasses: dict[str, str], common_classes: dict[str, URIRef]) -> tuple[str | None, bool]:
+    """선언한 클래스 `name`의 상위 클래스를 따라가 닿는 공통 어휘의 클래스 이름과, 순환했는지를 돌려준다.
+
+    순환하면 `(None, True)`다. 선언에도 공통 어휘에도 없는 이름에서 끊기면 `(None, False)`다.
+    """
+    seen: set[str] = set()
+    while name in superclasses:
+        if name in seen:
+            return None, True
+        seen.add(name)
+        name = superclasses[name]
+    return (name, False) if name in common_classes else (None, False)

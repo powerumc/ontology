@@ -44,3 +44,8 @@ def resolve_reference(repository: str, reference: str) -> str:
 def class_iri(repository: str, name: str) -> str:
     """지식 저장소 `repository`가 선언한 하위 클래스 `name`의 IRI."""
     return CLASS_BASE + quote(f"{repository}/{name}", safe="/")
+
+
+def unresolved_iri(term: str) -> str:
+    """어느 엔티티나 클래스도 가리키지 않는 용어 `term`의 IRI. 풀리지 않은 채로 그래프에서 알아볼 수 있게 `UNRESOLVED_BASE` 아래에 둔다."""
+    return UNRESOLVED_BASE + quote(term, safe="")

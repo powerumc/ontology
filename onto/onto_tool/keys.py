@@ -2,7 +2,10 @@
 
 컴파일은 여기 있는 키만 그래프로 옮긴다. 뒤 티켓이 같은 상수를 쓴다: 정의되지 않은 키를 오류로 알리는 검사,
 규칙(`ontology.yaml`의 공유 범위와 규칙 덮어쓰기), `ontology.yaml`을 만드는 최신화.
-frontmatter 키와 RDF의 대응은 `vocab/context.jsonld`가 정하고, 두 곳이 어긋나지 않는지는 `tests/test_onto_keys.py`가 확인한다.
+frontmatter 키와 RDF의 대응은 `vocab/context.jsonld`가 정한다. 여기 있는 키가 context와 어긋나지 않고 모두 그래프에 나타나는지는
+`tests/test_onto_compile.py`의 `test_문서화된_…`가 확인한다. 문서화된 키의 목록을 값으로 적고, 그 키를 모두 쓴 견본을
+컴파일해 키마다 그래프에서 찾는다(키를 더하면 그 목록에도 더한다). 반대로 여기 없는 키는 컴파일이 버리고,
+그런 키를 쓴 페이지는 정의되지 않은 키를 오류로 알리는 검사가 잡는다.
 
 정해 둔 것:
 

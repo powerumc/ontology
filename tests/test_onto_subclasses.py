@@ -14,7 +14,7 @@ classes:
 
 import pytest
 
-from support.onto_cli import page, repo
+from support.onto_cli import ONTOLOGY_DIR, page, repo
 
 BILLING = "projects/billing/docs/ontology"
 INVOICE = "https://onto.invalid/class/billing/Invoice"
@@ -65,7 +65,7 @@ def test_선언한_클래스는_자기_네임스페이스에_생기고_어느_�
     rows = onto_cli.query(
         root,
         "SELECT (STR(?c) AS ?iri) ?label ?super ?repository WHERE { ?c a owl:Class ; rdfs:label ?label ; "
-        "rdfs:subClassOf ?super ; onto:repository ?repository }",
+        "rdfs:subClassOf ?super ; onto:declaredIn ?repository }",
     )
 
     assert rows == [[INVOICE, "Invoice", "https://onto.invalid/vocab#Component", "billing"]]
@@ -158,7 +158,7 @@ def test_두_지식_저장소가_같은_이름의_클래스를_선언해도_서�
 
     components = onto_cli.query(root, "SELECT ?t WHERE { ?e a onto:Component ; dcterms:title ?t }")
     plans = onto_cli.query(root, "SELECT ?t WHERE { ?e a onto:Plan ; dcterms:title ?t }")
-    classes = onto_cli.query(root, "SELECT (STR(?c) AS ?iri) ?repository WHERE { ?c a owl:Class ; onto:repository ?repository } ORDER BY ?iri")
+    classes = onto_cli.query(root, "SELECT (STR(?c) AS ?iri) ?repository WHERE { ?c a owl:Class ; onto:declaredIn ?repository } ORDER BY ?iri")
 
     assert components == [["결제 쪽 청구서"]]
     assert plans == [["상점 쪽 청구서"]]
@@ -211,6 +211,12 @@ BAD_DECLARATIONS = {
     "공백이_든_이름": {"Bad Name": {"subClassOf": "Component"}},
     "한글_이름": {"청구서": {"subClassOf": "Component"}},
     "공통_어휘의_클래스_이름": {"Component": {"subClassOf": "Plan"}},
+    "자기_자신이_상위_클래스": {"Invoice": {"subClassOf": "Invoice"}},
+    "서로가_상위_클래스": {"A": {"subClassOf": "B"}, "B": {"subClassOf": "A"}},
+    "순환_아래의_클래스": {"A": {"subClassOf": "B"}, "B": {"subClassOf": "A"}, "C": {"subClassOf": "A"}},
+    "Project의_하위_클래스": {"MyProject": {"subClassOf": "Project"}},
+    "Source의_하위_클래스": {"Reference": {"subClassOf": "Source"}},
+    "Project의_하위_클래스의_하위_클래스": {"MyProject": {"subClassOf": "Project"}, "Deeper": {"subClassOf": "MyProject"}},
 }
 
 
@@ -262,3 +268,134 @@ def test_ontology_yaml의_classes는_Project_엔티티의_사실이_되지_않�
         "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
         "https://onto.invalid/vocab#repository",
     ]
+
+
+def test_순환하는_선언은_순환에_든_클래스와_그_아래의_클래스를_모두_알린다(onto_cli):
+    classes = {
+        "A": {"subClassOf": "B"},
+        "B": {"subClassOf": "A"},
+        "C": {"subClassOf": "A"},
+        "Fine": {"subClassOf": "Component"},
+    }
+    root = onto_cli.root(billing_with(classes))
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode != 0
+    for name in ("A", "B", "C"):
+        assert f"classes.{name}`" in result.stderr
+    assert "classes.Fine`" not in result.stderr
+    assert "순환" in result.stderr
+
+
+@pytest.mark.parametrize("superclass", ["Component", "Plan", "Policy", "Term", "Decision", "Report"])
+def test_페이지를_갖는_공통_클래스_여섯_개는_모두_상위_클래스가_될_수_있다(onto_cli, superclass):
+    root = onto_cli.root(
+        billing_with(
+            {"Special": {"subClassOf": superclass}},
+            page("component/special", "Special", title="특별한 것"),
+        )
+    )
+
+    rows = onto_cli.query(root, f"SELECT ?e WHERE {{ ?e a onto:{superclass} ; dcterms:title ?t }}")
+
+    assert rows == [[file("component/special")]]
+
+
+@pytest.mark.parametrize("superclass", ["Project", "Source"])
+def test_페이지가_없는_클래스의_하위_클래스는_선언할_수_없고_이유를_알린다(onto_cli, superclass):
+    """`Project`는 `ontology.yaml`에서만 만들어지고, `Source`는 페이지를 갖지 않는다."""
+    root = onto_cli.root(
+        billing_with(
+            {"Mine": {"subClassOf": superclass}},
+            page("component/mine", "Mine", title="내 것"),
+        )
+    )
+
+    result = onto_cli.run(root, "query", f"SELECT ?e WHERE {{ ?e a onto:{superclass} }}")
+
+    assert result.returncode != 0
+    assert f"{BILLING}/ontology.yaml" in result.stderr
+    assert superclass in result.stderr
+    assert result.stdout == ""
+
+
+# --- 페이지의 class 값 -------------------------------------------------------
+
+OTHER_REPOSITORY_CLASS = "https://onto.invalid/class/shop/Secret"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [OTHER_REPOSITORY_CLASS, INVOICE, "https://onto.invalid/vocab#Component", "onto:Component"],
+    ids=["다른_저장소의_클래스_IRI", "자기_저장소의_클래스_IRI", "공통_어휘의_클래스_IRI", "접두사_형식"],
+)
+def test_클래스는_이름으로만_쓴다_IRI로_쓴_값은_어느_클래스도_가리키지_않는다(onto_cli, value):
+    """다른 저장소가 선언한 클래스의 전체 IRI를 `class:`에 써서 이름만으로는 못 끌어 쓰는 제한을 우회할 수 없다."""
+    root = onto_cli.root(
+        {
+            "billing": repo(
+                "billing",
+                page("component/sneaky", None, title="몰래 쓴 클래스", **{"class": value}),
+                classes={"Invoice": {"subClassOf": "Component"}},
+            ),
+            "shop": repo("shop", classes={"Secret": {"subClassOf": "Component"}}),
+        }
+    )
+
+    result = onto_cli.run(root, "build")
+    typed = onto_cli.query(root, 'SELECT (STR(?c) AS ?class) WHERE { ?e dcterms:title "몰래 쓴 클래스" ; a ?c }')
+
+    assert result.returncode == 0, result.stderr
+    assert onto_cli.query(root, 'SELECT ?e WHERE { ?e a onto:Component ; dcterms:title "몰래 쓴 클래스" }') == []
+    assert onto_cli.query(root, f'SELECT ?e WHERE {{ ?e a <{value}> ; dcterms:title "몰래 쓴 클래스" }}') == []
+    assert typed and all(c.startswith("https://onto.invalid/unresolved/") for (c,) in typed)  # 풀리지 않은 클래스로 남아 알아볼 수 있다
+
+
+# --- 클래스 선언의 출처 ------------------------------------------------------
+
+
+def test_엔티티의_출처를_묻는_질의에_클래스_선언은_섞이지_않는다(onto_cli):
+    root = onto_cli.root(
+        billing_with(
+            {"Invoice": {"subClassOf": "Component"}},
+            page("component/invoice-service", "Invoice", title="청구서 서비스"),
+        )
+    )
+
+    entities = onto_cli.query(root, 'SELECT ?e WHERE { ?e onto:repository "billing" } ORDER BY ?e')
+    declared = onto_cli.query(root, 'SELECT (STR(?c) AS ?iri) WHERE { ?c onto:declaredIn "billing" }')
+
+    assert entities == [[file("component/invoice-service")], [f"{BILLING}/ontology.yaml"]]
+    assert declared == [[INVOICE]]
+
+
+# --- YAML이 문자열로 읽지 않는 클래스 이름 -----------------------------------
+
+
+def raw_classes(*lines: str):
+    """따옴표 없이 손으로 쓴 `ontology.yaml`. 테스트 받침의 JSON 키는 늘 문자열이라 YAML이 값으로 읽는 키를 만들지 못한다."""
+    text = "name: billing\nclasses:\n" + "".join(f"  {line}\n" for line in lines)
+    return {"billing": {f"{ONTOLOGY_DIR}/ontology.yaml": text}}
+
+
+@pytest.mark.parametrize("name", ["No", "Yes", "On", "Off", "True", "Null", "123"])
+def test_YAML이_문자열이_아닌_값으로_읽는_클래스_이름은_따옴표를_요구하며_알린다(onto_cli, name):
+    root = onto_cli.root(raw_classes(f"{name}:", "  subClassOf: Component"))
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode != 0
+    assert f"{BILLING}/ontology.yaml" in result.stderr
+    assert "문자열" in result.stderr and "따옴표" in result.stderr
+    assert not onto_cli.graph_file.exists()
+
+
+def test_따옴표로_감싼_클래스_이름은_그_이름_그대로_선언된다(onto_cli):
+    root = onto_cli.root(raw_classes('"No":', "  subClassOf: Component"))
+
+    result = onto_cli.run(root, "build")
+    rows = onto_cli.query(root, "SELECT (STR(?c) AS ?iri) WHERE { ?c a owl:Class ; onto:declaredIn 'billing' }")
+
+    assert result.returncode == 0, result.stderr
+    assert rows == [["https://onto.invalid/class/billing/No"]]

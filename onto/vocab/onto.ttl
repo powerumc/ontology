@@ -118,3 +118,11 @@ onto:repository a owl:DatatypeProperty ;
     rdfs:label "repository"@en ;
     rdfs:range xsd:string ;
     rdfs:comment "이 엔티티가 온 지식 저장소의 이름. 컴파일이 적으며 페이지에는 쓰지 않는다."@ko .
+
+# 지식 저장소가 선언한 하위 클래스(ontology.yaml의 classes)에 컴파일이 적는다. 엔티티의 출처인 onto:repository와 구분해,
+# 엔티티를 지식 저장소로 묻는 질의에 클래스 선언이 섞이지 않게 한다.
+
+onto:declaredIn a owl:DatatypeProperty ;
+    rdfs:label "declaredIn"@en ;
+    rdfs:range xsd:string ;
+    rdfs:comment "이 클래스를 선언한 지식 저장소의 이름. 컴파일이 적으며 엔티티가 아니라 지식 저장소가 선언한 하위 클래스에만 붙는다."@ko .
