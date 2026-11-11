@@ -210,3 +210,29 @@ def test_just_onto_query는_서브모듈로_붙은_여러_저장소를_합쳐_�
     assert part_of.returncode == 0, part_of.stderr
     assert parse_table(part_of.stdout) == [["s", "o"], [gateway, api], [gateway, shop], [api, shop]]
     assert parse_table(has_part.stdout) == [["o"], [gateway], [api]]  # 정렬은 IRI 순이라 billing이 shop보다 앞선다
+
+
+def test_just_onto_validate는_문제를_보고하고_오류가_있으면_0이_아닌_종료_코드로_끝난다(sandbox):
+    root = root_with_billing(
+        sandbox, page("component/gateway", "Component", title="게이트웨이", partOf="project", owner="kim"), title="결제"
+    )
+
+    result = sandbox.just("onto", "validate", cwd=root)
+
+    assert result.returncode == 1
+    assert result.stdout.splitlines() and all(len(line.split("\t")) == 5 for line in result.stdout.splitlines())
+    assert result.stdout.split("\t")[:4] == ["오류", "billing", f"{PAGES}/component/gateway.md", "undefined-key"]
+    assert "error: Recipe" not in result.stderr  # just가 레시피 실패를 따로 덧붙이지 않는다
+
+
+def test_just_onto_validate는_문제가_없으면_아무것도_보고하지_않고_파일을_만들지_않는다(sandbox):
+    root = root_with_billing(
+        sandbox, page("component/gateway", "Component", title="게이트웨이", partOf="project"), title="결제"
+    )
+
+    result = sandbox.just("onto", "validate", cwd=root)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert not (root / GRAPH).parent.exists()
+    assert sandbox.git("status", "--porcelain", cwd=root).stdout == ""

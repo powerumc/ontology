@@ -4,11 +4,11 @@ import argparse
 import logging
 import sys
 
-from .commands import build, query
+from .commands import build, query, validate
 from .errors import OntoError
 
 # 새 명령은 모듈을 만들어 여기에 더한다(규약은 commands/__init__.py).
-COMMANDS = (build, query)
+COMMANDS = (build, query, validate)
 
 
 def make_parser() -> argparse.ArgumentParser:

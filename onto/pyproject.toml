@@ -9,6 +9,7 @@ requires-python = ">=3.11"
 dependencies = [
     "rdflib>=7.6",   # RDF 그래프와 SPARQL, JSON-LD
     "pyyaml>=6",     # 페이지의 frontmatter와 ontology.yaml
+    "pyshacl>=0.30", # 구조 제약(SHACL) 검사. 추론은 쓰지 않는다(inference="none")
 ]
 
 [build-system]
