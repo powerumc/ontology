@@ -161,6 +161,7 @@ def compile_workspace(workspace: Workspace) -> Compiled:
     warnings: list[str] = []
     notices: list[str] = []
     records: list[RepositoryRecord] = []
+    reads: list[_RepositoryRead] = []
 
     for repository in workspace.repositories():
         if not (repository.path / ONTOLOGY_YAML).is_file():
@@ -171,15 +172,24 @@ def compile_workspace(workspace: Workspace) -> Compiled:
             continue
         read = _read_repository(workspace, repository, context, common_classes)
         records.append(read.record)
+        reads.append(read)
+
+    duplicates = _duplicate_names(records)
+    # 다른 저장소의 `name`을 베낀 저장소의 엔티티는 그래프에 올리지 않는다. 엔티티의 IRI가 `name`으로 만들어져 두 저장소의 엔티티가
+    # 하나로 합쳐지고, 그러면 한쪽의 제목이 다른 쪽 페이지의 문제(값이 둘인 `title` 등)로 보고되어 고칠 곳이 흐려진다.
+    # 고칠 곳은 베낀 쪽의 `name`이고 그것은 `duplicate-repository-name`이 알린다.
+    copiers = {problem.file for problem in duplicates}
+    for read in reads:
         problems += read.problems
         if read.record.name is not None:
             names.append(read.record.name)
-        nodes += read.nodes
-        files.update(read.files)
-        source_files.update(read.source_files)
+        if read.record.yaml_file not in copiers:
+            nodes += read.nodes
+            files.update(read.files)
+            source_files.update(read.source_files)
         notices += read.notices
 
-    problems += _duplicate_names(records)
+    problems += duplicates
     raw.parse(data=json.dumps({"@context": context, "@graph": nodes}), format="json-ld", base=UNRESOLVED_BASE)
     return Compiled(canonical(raw), files, names, warnings, problems, records, source_files, notices)
 

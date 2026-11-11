@@ -117,11 +117,12 @@ def test_다른_지식_저장소는_그대로_둔다(sandbox):
 
 
 def test_방금_등록하고_커밋하지_않은_저장소를_제거하면_등록_전_상태로_돌아간다(sandbox):
+    """등록은 최신화가 만든 파일(`.gitignore`, 온톨로지 층)을 지식 저장소에 미커밋으로 남기므로 강제 옵션이 필요하다."""
     root = sandbox.root()
     before = sandbox.snapshot(root.work)
     assert _add(sandbox, root, sandbox.knowledge_remote("billing").url).returncode == 0
 
-    result = _remove(sandbox, root, "billing")
+    result = _remove(sandbox, root, "billing", "--force")
 
     assert result.returncode == 0, result.stderr
     assert sandbox.snapshot(root.work) == before
@@ -170,7 +171,7 @@ def test_방금_등록하고_제거한_이름도_다시_등록할_수_있다(san
     root = sandbox.root()
     billing = sandbox.knowledge_remote("billing")
     assert _add(sandbox, root, billing.url).returncode == 0
-    assert _remove(sandbox, root, "billing").returncode == 0
+    assert _remove(sandbox, root, "billing", "--force").returncode == 0  # 등록이 남긴 미커밋 파일을 버린다
 
     result = _add(sandbox, root, billing.url)
 
@@ -430,17 +431,17 @@ def test_강제_옵션은_이름_앞에_와도_된다(sandbox):
 
 
 def test_방금_등록한_저장소에_최신화가_만든_파일이_있어도_강제로_바로_뗄_수_있다(sandbox):
-    """등록 직후에는 최신화(#12)가 만든 파일 때문에 미커밋 변경이 있다. 잘못 붙인 저장소를 바로 떼려면 강제 옵션이 필요하다."""
+    """등록 직후에는 최신화가 만든 파일(`.gitignore`, `docs/ontology/`) 때문에 미커밋 변경이 있다. 잘못 붙인 저장소를 바로 떼려면 강제 옵션이 필요하다."""
     root = sandbox.root()
     before = sandbox.snapshot(root.work)
     assert _add(sandbox, root, sandbox.knowledge_remote("billing").url).returncode == 0
     sub = _sub(root)
-    (sub / "CLAUDE.md").write_text("# 최신화가 쓴 블록\n", encoding="utf-8")
-    (sub / "docs" / "ontology").mkdir(parents=True)
-    (sub / "docs" / "ontology" / "ontology.yaml").write_text("name: billing\n", encoding="utf-8")
+    assert (sub / ".onto" / "Justfile").is_file() and (sub / "docs" / "ontology" / "ontology.yaml").is_file()
 
     refused = _remove(sandbox, root, "billing")
     assert refused.returncode != 0 and _sub(root).exists()
+    assert ".gitignore" in refused.stderr and "docs/ontology/" in refused.stderr  # 거부 사유로 최신화가 만든 파일이 보인다
+    assert ".onto/" not in refused.stderr  # 루트 관리 파일은 무시되는 파일이라 알릴 것도 없다
 
     forced = _remove(sandbox, root, "billing", "--force")
 

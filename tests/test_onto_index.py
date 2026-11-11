@@ -76,7 +76,7 @@ def test_build는_각_지식_저장소의_온톨로지_층에_페이지를_클�
 
 
 def test_하위_클래스의_페이지는_공통_클래스의_묶음에_들고_하위_클래스_이름이_붙는다(onto_cli):
-    root = sample(onto_cli, 
+    root = sample(onto_cli,
         {
             "billing": repo(
                 "billing",
@@ -102,7 +102,7 @@ def test_하위_클래스의_페이지는_공통_클래스의_묶음에_들고_�
 
 
 def test_클래스가_없거나_풀리지_않는_페이지도_인덱스에서_빠지지_않고_분류되지_않음에_든다(onto_cli):
-    root = sample(onto_cli, 
+    root = sample(onto_cli,
         {
             "billing": repo(
                 "billing",
@@ -128,7 +128,7 @@ def test_클래스가_없거나_풀리지_않는_페이지도_인덱스에서_�
 
 
 def test_클래스_묶음은_공통_클래스_순서로_나오고_항목은_식별자_순이다(onto_cli):
-    root = sample(onto_cli, 
+    root = sample(onto_cli,
         {
             "billing": repo(
                 "billing",
@@ -166,7 +166,7 @@ def test_클래스_묶음은_공통_클래스_순서로_나오고_항목은_식�
 
 
 def test_설명이_여러_줄이면_한_줄로_줄이고_제목의_대괄호는_링크를_깨지_않게_막는다(onto_cli):
-    root = sample(onto_cli, 
+    root = sample(onto_cli,
         {
             "billing": repo(
                 "billing",
@@ -216,7 +216,7 @@ def test_인덱스의_링크는_인덱스_기준_상대_경로이고_모두_지�
 
 
 def test_인덱스에는_루트_저장소나_다른_지식_저장소에_관한_내용이_없다(onto_cli):
-    root = sample(onto_cli, 
+    root = sample(onto_cli,
         {
             "billing": repo(
                 "billing",
@@ -443,7 +443,7 @@ def test_스크립트_검사는_어긋난_인덱스를_고치지_않는다(onto_
 
 
 def test_build는_모든_지식_저장소를_모은_전체_인덱스를_도구_디렉토리의_산출물로_만든다(onto_cli):
-    root = sample(onto_cli, 
+    root = sample(onto_cli,
         {
             **BILLING,
             "shop": repo("shop", page("component/api", "Component", title="상점 API", partOf="project"), title="상점"),
@@ -505,6 +505,7 @@ def test_인덱스가_없는_지식_저장소는_어긋난_인덱스로_잡고_�
     assert result.returncode == 1
     assert [finding[:4] for finding in findings] == [mismatch()]
     assert "인덱스가 없다" in findings[0][4]
+    assert not (root / "projects" / "billing" / INDEX).exists()  # 스크립트 검사는 인덱스를 만들지 않는다
 
 
 def test_페이지가_하나도_없는_지식_저장소도_인덱스가_없으면_잡는다(onto_cli):
@@ -711,6 +712,15 @@ def test_저장소의_name이_겹치면_스크립트_검사가_name을_베낀_�
     assert ("오류", "aaa", yaml_of("aaa"), "duplicate-repository-name") in [finding[:4] for finding in findings]
     assert "index-mismatch" not in [finding[3] for finding in findings]  # 섞인 그래프로 만든 인덱스를 기준으로 삼지 않는다
     assert all(finding[1] != "shop" or finding[3] != "duplicate-repository-name" for finding in findings)  # 고칠 곳은 베낀 쪽이다
+
+
+def test_저장소의_name이_겹쳐도_이름을_베끼지_않은_저장소의_페이지에는_엮인_문제를_보고하지_않는다(onto_cli):
+    """두 저장소의 엔티티가 한 그래프에서 합쳐져 제목이 둘이 되어도, 고칠 필요 없는 쪽(`shop`)에는 아무것도 보고하지 않는다."""
+    root = clashing(onto_cli)
+
+    _, findings = validate(onto_cli, root)
+
+    assert [finding for finding in findings if finding[1] == "shop"] == []
 
 
 def test_이름이_겹치는_저장소를_고치면_각자_자기_페이지만_인덱스에_싣는다(onto_cli):

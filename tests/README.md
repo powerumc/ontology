@@ -81,6 +81,22 @@ def test_예(onto_cli):
 - `test_onto_status.py`: `status`가 새 문서와 바뀐 문서를 지식 저장소별로 보여 주는 것(보고는 문서 하나에 탭 다섯 칸), 넘긴 문서(페이지가 지금 내용을 근거로 삼았으면 넘긴 목록의 옛 항목은 무시), 대상 범위(규칙의 글롭과 제외 경로, 온톨로지 층·숨김 경로·심볼릭 링크는 항상 제외), 아무 파일도 고치지 않는 것, 깨진 `rules`를 기본값으로 대신하지 않는 것. `just onto status`는 마지막 테스트 하나만 거친다.
 - 읽을 수 없는 파일의 문제로 `build`·`query`·`status`가 멈추는 조건(그 항목이 오류일 때만)과 `validate`와의 동치는 `test_onto_rules.py`의 `test_validate가_0으로_끝나면…`이 확인한다.
 
+### 최신화(`test_onto_sync.py`)
+
+`just onto sync [이름]`은 루트 저장소의 `onto/`를 지식 저장소의 `.onto/`로 복사한다. 루트 저장소(`sandbox.root()`)에 지식 저장소를 서브모듈로 붙이고(`root.register(sandbox.knowledge_remote(…))`) `sandbox.just("onto", "sync", …, cwd=root.work)`를 부르는 가장 높은 이음매에서 본다. 이 저장소의 `Justfile`을 직접 가리키지 않는다.
+
+- 테스트는 루트의 기능을 `root.work / "onto"`에서 고쳐 시험한다. 복사하는 것은 루트가 **추적하는** `onto/` 파일이라, 새 파일은 `git add`해야 복사된다(없어진 파일은 `git rm`하거나 작업 트리에서 지운다).
+- `.onto/.sync-record.json`은 마지막 최신화가 파일마다 쓴 내용의 기록이고, 손으로 고친 파일을 가려내는 데 쓴다. 루트에서 온 파일이 아니라 `copied`에서 뺀다.
+- 다시 쓰지 않았는지는 수정 시각으로 본다. 파일의 시각을 `os.utime`으로 먼 과거로 돌려 두고 다시 실행해 시각이 그대로인지 비교한다.
+- 지식 저장소 안에서 `just -f .onto/Justfile …`을 부르면 도구가 `.onto/` 안에 가상환경과 `__pycache__`를 만든다. 작업 트리를 앞뒤로 비교하는 테스트는 이를 빼고 비교한다.
+- `.onto/.sync-record.json`을 손으로 꾸며(`.onto/` 밖이나 `..`, 절대 경로가 든 기록) 기록이 저장소 밖의 파일을 지우지 못하는 것을 본다. 최신화의 인덱스 생성 기준은 `build`와 같다(규칙에서 오류인 읽기 문제가 있을 때만 못 만든다).
+- 출력의 순서는 `sh -c 'just … 2>&1'`로 두 출력을 한 파이프에 모아 본다. 두 파이프로 따로 받으면 순서를 알 수 없다.
+- `just repo add`가 등록 직후 최신화를 자동으로 실행하는 것은 `test_repo_add.py`가 본다. 그래서 등록하면 지식 저장소에 미커밋 파일(`.gitignore`, `docs/ontology/`)이 생기고, 방금 등록한 저장소를 바로 떼려면 `repo remove --force`가 필요하다(`test_repo_remove.py`).
+
+### 템플릿과 규약 문서(`test_onto_templates.py`)
+
+`onto/template/`의 견본과 규약 문서가 보여 주는 예는 도구에 돌려 확인한다(`onto_cli`). 견본의 키(`derivedFrom` 포함)가 모두 그 클래스의 페이지가 쓸 수 있는 것인지, 규약 문서의 페이지 예와 하위 클래스 선언이 받아들여지는지를 스크립트 검사가 판단한다. 견본을 더하거나 고치면 이 테스트가 걸러 낸다. 예의 근거 문서는 테스트가 만들고 해시는 git의 정의(`sha1("blob <바이트 수>\0" + 내용)`)로 계산해 자리표시 해시를 바꿔 넣는다. 규약 문서가 해시를 구하는 법(`status`의 값을 옮겨 적는다, 해시는 따옴표로 감싼다)은 글자로 확인한다.
+
 ### 공유 범위(`test_onto_scope.py`)
 
 공유 범위 검사 항목 넷(`invalid-scope`, `scope-violation`, `path-reference`, `outside-link`)을 `onto_cli`로 본다. 모두 루트 전용이라 지식 저장소의 `rules`가 끄거나 심각도를 바꾸려 하면 `invalid-rules` 오류이고, 그래도 문제는 루트 기본 규칙의 심각도로 보고된다(이 파일이 항목마다 확인한다). 공유 범위는 `repo("billing", …, scope="team:payments")`처럼 `ontology.yaml`의 `scope`로 적는다. 적지 않은 지식 저장소는 `private`으로 본다.
