@@ -49,6 +49,7 @@ def test_예(onto_cli):
 ```
 
 - `onto_cli.root({저장소명: {지식 저장소 안의 경로: 내용}})`: `projects/<저장소명>/…` 모양의 임시 디렉토리. git 저장소가 아니다. 도구는 현재 디렉토리를 루트 저장소로 본다.
+- `onto_cli.repository(저장소명, {지식 저장소 안의 경로: 내용})`: 지식 저장소 하나의 견본 디렉토리(파일이 저장소 루트에 놓인다. 루트 저장소는 없다). `onto_cli.run(…, scope=REPOSITORY)`(`support.onto_cli.REPOSITORY`)로 실행하면 지식 저장소 안에서 `just -f .onto/Justfile`로 부른 것과 같다. 복사된 `Justfile`이 지식 저장소 안에서 도구에 `--scope repository`를 넘기기 때문이다. `run`, `build`, `query`가 `scope`를 받는다. 루트나 다른 지식 저장소를 읽지 않는 것은 `onto_cli.root`의 `projects/<저장소>/` 아래 저장소를 `chmod 000`으로 읽을 수 없게 한 채 그 안에서 돌려 본다.
 - `repo(이름, 페이지…)`, `page(식별자, 클래스, 제목=…, partOf=[…])`, `ontology_yaml(이름, …)`: 견본 파일을 만든다. 값은 JSON으로 적어 YAML이 된다. `repo`의 키워드 인자는 `ontology.yaml`의 키가 된다(예: `repo("billing", title="결제", classes={"Invoice": {"subClassOf": "Component"}})`). 다른 지식 저장소의 엔티티는 `partOf=["shop:component/api"]`처럼 `<저장소 이름>:<식별자>`로 가리킨다.
 - 도구는 이 저장소의 추적 `onto/` 파일의 사본에서 돈다. 가상환경은 테스트 세션마다 한 번 만든다. 의존성을 처음 내려받을 때만 네트워크가 필요하다.
 - `onto_cli.query`와 `build`가 보는 그래프는 추론(하위 클래스, 역관계, 추이 관계)이 끝난 것이다. 정렬하지 않은 질의의 행 순서는 rdflib이 정하고 실행마다 다를 수 있으니, 행의 순서를 비교하는 테스트는 `ORDER BY`를 쓴다.
@@ -92,6 +93,15 @@ def test_예(onto_cli):
 - `.onto/.sync-record.json`을 손으로 꾸며(`.onto/` 밖이나 `..`, 절대 경로가 든 기록) 기록이 저장소 밖의 파일을 지우지 못하는 것을 본다. 최신화의 인덱스 생성 기준은 `build`와 같다(규칙에서 오류인 읽기 문제가 있을 때만 못 만든다).
 - 출력의 순서는 `sh -c 'just … 2>&1'`로 두 출력을 한 파이프에 모아 본다. 두 파이프로 따로 받으면 순서를 알 수 없다.
 - `just repo add`가 등록 직후 최신화를 자동으로 실행하는 것은 `test_repo_add.py`가 본다. 그래서 등록하면 지식 저장소에 미커밋 파일(`.gitignore`, `docs/ontology/`)이 생기고, 방금 등록한 저장소를 바로 떼려면 `repo remove --force`가 필요하다(`test_repo_remove.py`).
+
+### 지식 저장소 안에서의 실행(`test_onto_repository_scope.py`, `test_onto_repository_just.py`)
+
+루트 저장소에 붙은 지식 저장소 안에서 `just -f .onto/Justfile build|validate|query|status`를 실행하면 그 저장소의 지식만 다룬다. 두 이음매로 나눠 본다.
+
+- `test_onto_repository_just.py`(가장 높은 이음매): 루트 저장소(`sandbox.root()`)에 지식 저장소를 `just repo add`로 붙이고(등록하면 최신화가 `.onto/`를 복사한다) 그 안에서 복사된 `Justfile`을 직접 가리켜 실행한다. Justfile이 모듈로 불렸는지 `-f`로 불렸는지(`justfile_directory()`와 `source_directory()`가 같은지)를 가려 도구에 범위를 넘기는 연결, 저장소의 하위 디렉토리에서 불러도 그 저장소가 기준인 것, 루트와 같은 파일을 쓰는 것, 루트 저장소의 실행 결과가 그대로인 것, 지식 저장소의 `Justfile`을 만들거나 고치지 않는 것을 본다. 지식 저장소 안에서 `just -f .onto/Justfile …`을 부르면 `.onto/` 안에 가상환경과 산출물이 생기므로 작업 트리를 비교하는 테스트는 이를 빼고 비교한다.
+- `test_onto_repository_scope.py`(도구의 명령줄 진입점): 지식 저장소 하나의 견본(`onto_cli.repository`)을 `--scope repository`로 실행한다. 경로가 저장소 기준인 것, 교차 참조(다른 저장소를 가리키는 `<저장소>:<식별자>`)와 여러 저장소에 걸친 검사를 건너뛰고 건너뛰었다고 알리는 것, 같은 저장소 안의 참조는 검사하는 것, 읽을 수 없는 파일의 규칙, `status`·`rules`·`sync`, 루트 저장소와 다른 지식 저장소를 읽지 않는 것을 본다.
+
+`checks.catalog`의 검사 항목은 `across_repositories=True`로 여러 저장소에 걸친 항목을 표시한다(교차 참조 `unregistered-repository`, 저장소 간 중복, `name` 겹침. 공유 범위 검사도 이렇게 적는다). 지식 저장소 안의 `validate`는 이 항목들을 돌리지 않는다.
 
 ### 템플릿과 규약 문서(`test_onto_templates.py`)
 

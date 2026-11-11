@@ -1,7 +1,6 @@
 """규칙을 읽는 명령이 같이 쓰는 것: 루트 기본 규칙을 읽고, 틀렸으면 파일과 키를 알리는 오류로 바꾼다."""
 
 from ..checks import applied_rules, load_root_rules, split_problems
-from ..checks.model import repository_of
 from ..compiler import Compiled
 from ..errors import OntoError
 from ..paths import RULES_FILE
@@ -31,7 +30,7 @@ def ensure_valid(workspace: Workspace, compiled: Compiled) -> RuleSet:
         raise OntoError(*(str(problem) for problem in blocking))
     notes = []
     for problem in skipped:
-        enabled = applied.of(repository_of(problem.file)).checks[problem.check].enabled
+        enabled = applied.of(compiled.repository_of(problem.file)).checks[problem.check].enabled
         why = "규칙에서 꺼 둔" if not enabled else "규칙에서 경고로 정한"
         notes.append(f"{problem} ({why} 검사 항목 `{problem.check}`의 문제라 건너뛰었다)")
     warn(notes)

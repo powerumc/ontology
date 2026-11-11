@@ -2,14 +2,14 @@
 
 import argparse
 import json
-from pathlib import Path
 
 from ..checks import rule_set
 from ..errors import OntoError
 from ..keys import RULES_KEY
 from ..ontology_yaml import OntologyYamlError, read_ontology_yaml, undefined_keys_message
-from ..workspace import ONTOLOGY_YAML, Workspace
+from ..workspace import ONTOLOGY_YAML
 from ._rules import root_rules
+from ._workspace import open_workspace
 
 NAME = "rules"
 HELP = (
@@ -23,7 +23,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
-    workspace = Workspace(Path.cwd())
+    workspace = open_workspace(args)
     rules = root_rules(workspace)
     if args.repository is not None:
         known = {repository.directory: repository for repository in workspace.repositories()}

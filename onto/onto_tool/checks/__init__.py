@@ -3,6 +3,9 @@
 검사 항목은 `catalog`에 이름으로 정의되어 있고, 같은 패키지의 모듈이 항목을 돌려 `Issue`를 찾는다.
 `validate`가 문제마다 규칙(`rules.yaml`, 지식 저장소가 덮어쓰면 그 값)이 정한 켬/끔과 심각도를 붙여 보고할 목록을 만든다.
 어떤 파일도 고치지 않는다.
+
+지식 저장소 안에서 돌리면(`workspace.Scope.REPOSITORY`) 그 저장소만 검사한다. 여러 지식 저장소에 걸친 검사 항목(`Check.across_repositories`: 교차 참조,
+공유 범위, 저장소 간 중복)은 건너뛴다. 교차 참조의 대상은 다른 저장소에 있어 이 저장소만으로는 알 수 없기 때문이다. 루트 저장소가 전체를 합쳐 검사한다.
 """
 
 from collections.abc import Collection
@@ -11,11 +14,13 @@ from pathlib import Path
 from .. import rules
 from ..compiler import Compiled, Problem
 from ..rules import RuleSet, Rules
+from ..workspace import Scope
 from . import duplicates, freshness, frontmatter, indexes, layout, orphans, overrides, problems, references, repositories, structure
 from .catalog import BY_NAME, CHECKS
-from .model import Check, Finding, Severity, repository_of
+from .model import Check, Finding, Severity
 
 __all__ = [
+    "ACROSS_REPOSITORIES_CHECKS",
     "BY_NAME",
     "CHECKS",
     "Check",
@@ -33,6 +38,9 @@ _MODULES = (problems, repositories, overrides, frontmatter, layout, indexes, ref
 
 # 지식 저장소의 규칙이 덮어쓸 수 없는 검사 항목
 ROOT_ONLY_CHECKS: Collection[str] = tuple(check.name for check in CHECKS if check.root_only)
+
+# 여러 지식 저장소에 걸친 검사 항목. 지식 저장소 안에서는 건너뛴다.
+ACROSS_REPOSITORIES_CHECKS: tuple[str, ...] = tuple(check.name for check in CHECKS if check.across_repositories)
 
 
 def load_root_rules(path: Path) -> Rules:
@@ -61,7 +69,7 @@ def split_problems(compiled: Compiled, applied: RuleSet) -> tuple[list[Problem],
     blocking: list[Problem] = []
     skipped: list[Problem] = []
     for problem in compiled.problems:
-        rule = applied.of(repository_of(problem.file)).checks[problem.check]
+        rule = applied.of(compiled.repository_of(problem.file)).checks[problem.check]
         (blocking if rule.stops_build else skipped).append(problem)
     return blocking, skipped
 
@@ -71,12 +79,15 @@ def validate(compiled: Compiled, root_rules: Rules) -> list[Finding]:
 
     문제의 켬/끔과 심각도는 그 문제가 있는 지식 저장소의 규칙을 따른다. 저장소의 `ontology.yaml`이 덮어쓰지 않은 값은
     `root_rules`다. 꺼진 항목의 문제는 보고하지 않는다. 문제는 지식 저장소, 페이지, 검사 항목, 설명 순으로 정렬한다.
+    지식 저장소 안에서는 여러 지식 저장소에 걸친 검사 항목(`ACROSS_REPOSITORIES_CHECKS`)의 문제를 보고하지 않는다.
     """
     applied = applied_rules(compiled, root_rules)
     findings: set[Finding] = set()
     for module in _MODULES:
         for issue in module.find(compiled, applied):
-            repository = repository_of(issue.file)
+            if compiled.scope is Scope.REPOSITORY and issue.check.across_repositories:
+                continue
+            repository = compiled.repository_of(issue.file)
             rule = applied.of(repository).checks[issue.check.name]
             if rule.enabled:
                 findings.add(Finding(Severity.from_rule(rule.severity), repository, issue.file, issue.check.name, issue.message))

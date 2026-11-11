@@ -6,6 +6,7 @@ import sys
 
 from .commands import build, query, rules, status, sync, validate
 from .errors import OntoError
+from .workspace import Scope
 
 # 새 명령은 모듈을 만들어 여기에 더한다(규약은 commands/__init__.py).
 COMMANDS = (build, query, rules, status, sync, validate)
@@ -13,6 +14,16 @@ COMMANDS = (build, query, rules, status, sync, validate)
 
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="onto", description="모듈형 온톨로지 도구")
+    parser.add_argument(
+        "--scope",
+        type=Scope,
+        choices=list(Scope),
+        default=Scope.ROOT,
+        help=(
+            "다루는 범위. root(기본)는 루트 저장소에서 `projects/` 아래 모든 지식 저장소를 합쳐 다루고, "
+            "repository는 지식 저장소 안에서 그 저장소만 다룬다. 복사된 Justfile이 부른 방식에 따라 정해 넘긴다. 명령 앞에 쓴다"
+        ),
+    )
     subcommands = parser.add_subparsers(dest="command", required=True, metavar="명령")
     for command in COMMANDS:
         subparser = subcommands.add_parser(command.NAME, help=command.HELP, description=command.HELP)

@@ -5,6 +5,9 @@
 여기의 항목을 가리켜 문제를 보고한다. 이름은 규칙 파일이 항목을 가리키는 키가 되고 보고에도 나온다.
 루트 전용 항목(지식 저장소의 규칙이 끄거나 심각도를 바꿀 수 없는 것)은 `root_only=True`로 적는다. 공유 범위 검사, 규칙을 담은
 `ontology.yaml` 자체의 문제를 보고하는 항목, 지식 저장소 사이의 `name` 겹침이 그렇다.
+여러 지식 저장소에 걸친 항목(교차 참조, 공유 범위, 저장소 간 중복)은 `across_repositories=True`로 적는다. 지식 저장소 안에서 돌릴 때는
+그 저장소만 다루므로 이 항목들을 건너뛰고(`checks.validate`) 건너뛰었다고 알린다. 루트 전용인 것과는 별개다. 루트 전용이지만 한 저장소의
+문제를 보고하는 항목(`invalid-ontology-yaml`, `invalid-class-declaration`)은 지식 저장소 안에서도 돈다.
 """
 
 from .. import compiler
@@ -41,13 +44,17 @@ RELATION_RANGE = Check("relation-range", "관계가 가리킬 수 없는 클래�
 UNDEFINED_KEY = Check("undefined-key", "페이지에 정의되지 않은 frontmatter 키가 있다")
 REVERSE_RELATION = Check("reverse-relation", "역방향 관계(hasPart, implementedBy, governedBy, supersededBy)를 페이지에 직접 썼다")
 BROKEN_REFERENCE = Check("broken-reference", "관계가 가리키는 엔티티가 없다(같은 지식 저장소와 교차 참조)")
-UNREGISTERED_REPOSITORY = Check("unregistered-repository", "교차 참조가 등록되지 않은 지식 저장소를 가리킨다")
+UNREGISTERED_REPOSITORY = Check(
+    "unregistered-repository", "교차 참조가 등록되지 않은 지식 저장소를 가리킨다", across_repositories=True
+)
 ORPHAN_PAGE = Check("orphan-page", "다른 엔티티와의 관계가 들어오는 것도 나가는 것도 없는 페이지다(derivedFrom은 세지 않는다)")
 
 # --- 중복 ---------------------------------------------------------------------------
 DUPLICATE_ENTITY = Check("duplicate-entity", "같은 지식 저장소 안에 같은 클래스에서 이름(제목, 별칭)이 같은 엔티티가 있다")
 DUPLICATE_ENTITY_ACROSS_REPOSITORIES = Check(
-    "duplicate-entity-across-repositories", "다른 지식 저장소에 같은 클래스에서 이름(제목, 별칭)이 같은 엔티티가 있다"
+    "duplicate-entity-across-repositories",
+    "다른 지식 저장소에 같은 클래스에서 이름(제목, 별칭)이 같은 엔티티가 있다",
+    across_repositories=True,
 )
 
 # --- 지식 저장소 ---------------------------------------------------------------------
@@ -56,6 +63,7 @@ DUPLICATE_REPOSITORY_NAME = Check(
     compiler.DUPLICATE_REPOSITORY_NAME,
     "여러 지식 저장소가 같은 name을 쓴다(엔티티가 하나로 합쳐지므로 build와 query도 멈춘다)",
     root_only=True,
+    across_repositories=True,
 )
 MISSING_ONTOLOGY_LAYER = Check("missing-ontology-layer", "등록된 지식 저장소에 온톨로지 층(ontology.yaml)이 없어 검사하지 못했다")
 INVALID_RULES = Check(

@@ -23,6 +23,8 @@ from support.sandbox import SOURCE_REPO, Sandbox, copy_tracked_files
 TOOL_COMMAND = ("python", "-P", "-X", "utf8", "-m", "onto_tool")
 # 루트 기본 규칙. 도구 디렉토리 안에 있다(지식 저장소에서는 `.onto/rules.yaml`).
 RULES_FILE = "rules.yaml"
+# 도구의 `--scope` 값. 지식 저장소 안에서 `just -f .onto/Justfile`이 넘기는 범위다(기본은 루트 저장소).
+REPOSITORY = "repository"
 
 
 def copy_onto(sandbox: Sandbox, dest: Path) -> Path:
@@ -126,22 +128,46 @@ class OntoCli:
             shutil.rmtree(self.build_dir, ignore_errors=True)
         return root
 
+    def repository(self, name: str, files: dict[str, str] | None = None, *, indexed: bool = True) -> Path:
+        """지식 저장소 하나의 견본 디렉토리를 만든다. 파일은 저장소의 루트에 놓인다. 루트 저장소는 없다.
+
+        `files`는 `{지식 저장소 안의 파일 경로: 내용}`이다(`repo(...)`가 만든 묶음). 디렉토리 이름이 지식 저장소의 이름(서브모듈 디렉토리 이름)이다.
+        이 디렉토리에서 도구를 `scope=REPOSITORY`로 실행하면 지식 저장소 안에서 `just -f .onto/Justfile`로 부른 것과 같다.
+        `root()`처럼 기본으로 `build`를 한 번 실행해 인덱스를 갖춘다(`indexed=False`면 갖추지 않는다).
+        """
+        self._roots += 1
+        path = self._sandbox.new_dir("samples", f"repo-{self._roots}") / name
+        for rel, text in (files or {}).items():
+            target = path / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        path.mkdir(parents=True, exist_ok=True)
+        if indexed and files:
+            self.run(path, "build", scope=REPOSITORY)
+            shutil.rmtree(self.build_dir, ignore_errors=True)
+        return path
+
     def run(
-        self, root: Path, *args: str, env: dict[str, str] | None = None
+        self, root: Path, *args: str, env: dict[str, str] | None = None, scope: str | None = None
     ) -> subprocess.CompletedProcess[str]:
-        """`root`를 현재 디렉토리로 삼아 도구를 실행한다. 종료 코드를 보는 테스트가 많아 예외를 던지지 않는다."""
-        command = ["uv", "run", "--locked", "--quiet", "--project", self._tool_dir, *TOOL_COMMAND, *args]
+        """`root`를 현재 디렉토리로 삼아 도구를 실행한다. 종료 코드를 보는 테스트가 많아 예외를 던지지 않는다.
+
+        `scope`를 주면(`REPOSITORY`) 그 범위로 실행한다. `just -f .onto/Justfile`이 지식 저장소 안에서 도구에 넘기는 값이다.
+        생략하면 도구의 기본(루트 저장소)이다.
+        """
+        options = ["--scope", scope] if scope is not None else []
+        command = ["uv", "run", "--locked", "--quiet", "--project", self._tool_dir, *TOOL_COMMAND, *options, *args]
         return self._sandbox.run(command, cwd=root, check=False, env=env)
 
-    def build(self, root: Path) -> bytes:
+    def build(self, root: Path, *, scope: str | None = None) -> bytes:
         """`build`를 실행하고 컴파일된 그래프 파일의 내용을 돌려준다. 실패하면 예외를 던진다."""
-        result = self.run(root, "build")
+        result = self.run(root, "build", scope=scope)
         assert result.returncode == 0, result.stderr
         return self.graph_file.read_bytes()
 
-    def query(self, root: Path, sparql: str) -> list[list[str]]:
+    def query(self, root: Path, sparql: str, *, scope: str | None = None) -> list[list[str]]:
         """SPARQL SELECT 질의를 실행하고 결과를 행 목록(머리 행 제외)으로 돌려준다. 실패하면 예외를 던진다."""
-        result = self.run(root, "query", sparql)
+        result = self.run(root, "query", sparql, scope=scope)
         assert result.returncode == 0, result.stderr
         return parse_table(result.stdout)[1:]
 

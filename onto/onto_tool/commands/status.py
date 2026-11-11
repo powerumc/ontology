@@ -2,13 +2,12 @@
 
 import argparse
 import sys
-from pathlib import Path
 
 from ..compiler import compile_workspace
 from ..status import CHANGED, NEW, collect
-from ..workspace import Workspace
 from ._output import warn
 from ._rules import ensure_valid
+from ._workspace import open_workspace
 
 NAME = "status"
 HELP = (
@@ -29,7 +28,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
-    workspace = Workspace(Path.cwd())
+    workspace = open_workspace(args)
     compiled = compile_workspace(workspace)
     warn(compiled.warnings)
     warn(compiled.notices)
