@@ -24,7 +24,7 @@ uv run pytest tests/test_setup.py  # 파일 하나
 
 `sandbox` 픽스처가 테스트마다 새 임시 디렉토리와 격리된 git 환경을 준다.
 
-- `sandbox.root()`: 루트 저장소와 bare 원격. `.register(원격, name=, branch=)`, `.point_at(이름, 커밋)`, `.clone()`
+- `sandbox.root()`: 루트 저장소와 bare 원격. `.register(원격, name=, branch=)`, `.point_at(이름, 커밋)`, `.clone()`, `.leave_gitmodules_unmerged(원격)`(인덱스의 `.gitmodules`를 병합 충돌 상태로 만든다)
 - `sandbox.knowledge_remote(이름)`: 가짜 지식 저장소와 bare 원격. `.commit(branch=)`, `.set_default_branch(브랜치)`
 - `sandbox.just(...)`, `sandbox.git(...)`: 명령 실행. `just(without=("uv",))`는 PATH에서 도구를 뺀다
 - `sandbox.head(저장소)`, `sandbox.branch(저장소)`

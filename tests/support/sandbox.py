@@ -375,6 +375,26 @@ class RootRepo:
         git("push", "origin", "main", cwd=self.work)
         return git("rev-parse", f"HEAD:projects/{name}", cwd=self.work).stdout.strip()
 
+    def leave_gitmodules_unmerged(self, other: KnowledgeRemote) -> None:
+        """작업 사본의 인덱스에서 `.gitmodules`를 병합 충돌 상태(스테이지 2·3)로 만든다. 커밋하지 않는다.
+
+        두 브랜치가 따로 지식 저장소를 붙였다가 병합하면 생기는 상태다. `other`를 옆 브랜치에서 붙여 병합하고,
+        작업 트리의 충돌 표시는 양쪽 내용을 이어 붙여 지우지만 `git add`는 하지 않는다. 현재 브랜치에는 다른 저장소가
+        이미 등록되어 있어야 한다.
+        """
+        git = self._sandbox.git
+        main = self._sandbox.branch(self.work)
+        assert main is not None
+        first = git("rev-list", "--max-parents=0", "HEAD", cwd=self.work).stdout.split()[0]  # 등록이 하나도 없던 커밋
+        git("checkout", "-b", "side", first, cwd=self.work)
+        git("submodule", "add", other.url, f"projects/{other.name}", cwd=self.work)
+        git("commit", "-m", f"add {other.name} on side", cwd=self.work)
+        git("checkout", main, cwd=self.work)
+        git("merge", "side", cwd=self.work, check=False)
+        ours = git("show", ":2:.gitmodules", cwd=self.work).stdout
+        theirs = git("show", ":3:.gitmodules", cwd=self.work).stdout
+        (self.work / ".gitmodules").write_text(ours + theirs, encoding="utf-8")
+
     def clone(self) -> Path:
         """원격에서 새로 클론한다. 서브모듈은 초기화하지 않는다. 새 기기에서 받은 직후의 상태다."""
         self._clones += 1
