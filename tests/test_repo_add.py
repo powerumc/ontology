@@ -564,25 +564,76 @@ def test_선언한_name은_지정한_추적_브랜치의_것을_본다(sandbox):
     assert _recorded_branch(sandbox, root, "pay") == "dev"
 
 
-UNDECLARED = {
-    "온톨로지_층이_없다": {"README.md": "# docs\n"},
+def test_온톨로지_층이_없는_저장소는_알릴_것_없이_어떤_이름으로도_붙일_수_있다(sandbox):
+    root = sandbox.root()
+    remote = sandbox.knowledge_remote("billing", files={"README.md": "# docs\n"})
+
+    result = _add(sandbox, root, remote.url, "pay")
+
+    assert result.returncode == 0, result.stderr
+    assert "확인하지 못했" not in result.stderr and "선언했는데" not in result.stderr  # 선언이 없는 것은 정상이다
+    assert (root.work / "projects" / "pay").is_dir()
+
+
+UNREADABLE = {
     "name이_없다": _declaring("x", "scope: private\n"),
     "읽을_수_없는_yaml": _declaring("x", "name: [열리지 않은 목록\n"),
     "name이_문자열이_아니다": _declaring("x", "name: 5\n"),
 }
 
 
-@pytest.mark.parametrize("files", UNDECLARED.values(), ids=UNDECLARED.keys())
-def test_name을_선언하지_않았거나_읽을_수_없는_저장소는_어떤_이름으로도_붙일_수_있다(sandbox, files):
+@pytest.mark.parametrize("files", UNREADABLE.values(), ids=UNREADABLE.keys())
+def test_선언한_name을_읽을_수_없으면_확인하지_못했다고_이유와_함께_알리고_등록은_계속한다(sandbox, files):
     """읽을 수 없는 `ontology.yaml`은 등록한 뒤 최신화가 건너뛰고 알린다. 이름이 다르다는 이유로 거부하지는 않는다."""
     root = sandbox.root()
     remote = sandbox.knowledge_remote("billing", files=files)
 
     result = _add(sandbox, root, remote.url, "pay")
 
+    assert "선언한 name을 확인하지 못했" in result.stderr and "ontology.yaml을 읽을 수 없" in result.stderr
+    assert "등록은 계속합니다" in result.stderr and "repository-name-mismatch" in result.stderr  # 어떻게 되는지 알린다
     assert "선언했는데" not in result.stderr
     assert (root.work / "projects" / "pay").is_dir()
     assert _staged(sandbox, root) == {".gitmodules", "projects/pay"}
+
+
+def test_선언한_name을_읽는_도구를_실행하지_못하면_확인하지_못했다고_알리고_등록은_계속한다(sandbox):
+    root = sandbox.root()
+    (root.work / "onto" / "onto_tool" / "ontology_yaml.py").unlink()  # 도구가 깨져 있다
+    remote = sandbox.knowledge_remote("billing", files=_declaring("billing"))
+
+    result = _add(sandbox, root, remote.url, "pay")
+
+    assert "선언한 name을 확인하지 못했" in result.stderr and "도구를 실행하지 못했" in result.stderr
+    assert "선언했는데" not in result.stderr  # 확인하지 못했으므로 거부하지 않는다
+    assert (root.work / "projects" / "pay").is_dir()
+    assert _staged(sandbox, root) == {".gitmodules", "projects/pay"}
+
+
+def test_임시_디렉토리를_만들지_못해_선언한_name을_확인하지_못해도_알리고_등록은_계속한다(sandbox):
+    root = sandbox.root()
+    remote = sandbox.knowledge_remote("billing", files=_declaring("billing"))
+    stubs = sandbox.new_dir("stubs", "mktemp")
+    (stubs / "mktemp").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")  # 디스크가 가득 찼거나 쓸 수 없는 경우
+    (stubs / "mktemp").chmod(0o755)
+    environment = {**sandbox.env, "PATH": f"{stubs}{os.pathsep}{sandbox.env['PATH']}"}
+
+    result = sandbox.run(["just", "repo", "add", remote.url, "pay"], cwd=root.work, env=environment, check=False)
+
+    assert "선언한 name을 확인하지 못했" in result.stderr and "임시 디렉토리" in result.stderr
+    assert (root.work / "projects" / "pay").is_dir()
+
+
+def test_선언한_name을_확인하는_동안_만든_임시_디렉토리는_남지_않는다(sandbox):
+    root = sandbox.root()
+    remote = sandbox.knowledge_remote("billing", files=_declaring("billing"))
+    tmp = sandbox.new_dir("tmp", "probe")
+    environment = {**sandbox.env, "TMPDIR": str(tmp)}
+
+    sandbox.run(["just", "repo", "add", remote.url, "pay"], cwd=root.work, env=environment, check=False)
+    sandbox.run(["just", "repo", "add", remote.url, "billing"], cwd=root.work, env=environment, check=False)
+
+    assert [path.name for path in tmp.iterdir() if path.name.startswith("tmp.")] == []  # `mktemp -d`가 만든 디렉토리
 
 
 def test_선언한_name이_디렉토리_이름으로_쓸_수_없으면_그_이유와_저장소의_name을_고치라고_알린다(sandbox):

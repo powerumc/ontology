@@ -15,6 +15,7 @@ default:
 # 이름을 생략하면 URL의 저장소 이름을, 브랜치를 생략하면 원격의 기본 브랜치를 쓴다.
 # 붙이는 저장소가 이미 `docs/ontology/ontology.yaml`에 `name`을 선언했으면 등록 이름이 그 `name`과 같아야 한다. 다르면 등록하기 전에 거부하고 선언한 이름을 알린다
 # (`name`은 서브모듈 디렉토리 이름과 같아야 하고, 다르면 스크립트 검사가 `repository-name-mismatch` 오류로 잡아 푸시 관문이 막는다).
+# 선언한 `name`을 확인하지 못하면(원격에서 받지 못했다, 파일을 읽을 수 없다) 그렇다고 알리고 등록은 계속한다. 확인하려고 추적 브랜치의 끝을 한 번 더 얕게 받는다.
 # 등록은 루트 저장소에 스테이징까지만 한다. 커밋은 사용자가 한다. 복사한 파일은 지식 저장소의 작업 트리에 남고 커밋하지 않는다.
 
 # 지식 저장소를 projects/<이름>/에 서브모듈로 붙인다: just repo add <url> [이름] [브랜치]
@@ -93,19 +94,54 @@ add url name='' branch='':
         esac
     }
 
-    # 붙일 저장소가 `docs/ontology/ontology.yaml`에 선언한 `name`을 출력한다. 선언하지 않았거나 읽을 수 없으면 아무것도 출력하지 않는다.
-    # 등록하기 전이라 저장소가 아직 없으므로, 추적 브랜치의 끝만 임시 디렉토리에 얕게 받아(체크아웃하지 않는다) 그 파일을 읽고 지운다.
+    # 선언한 `name`을 확인하지 못했다고 알린다. 알리기만 하고 등록은 계속한다. 확인하지 못한 것이 거부할 이유는 아니고, 이름이 다르면 나중에
+    # 스크립트 검사가 `repository-name-mismatch` 오류로 알린다. 사용자가 검사를 했다고 믿지 않게 말해 둔다.
+    cannot_check() {
+        echo "주의: 붙이려는 저장소가 ontology.yaml에 선언한 name을 확인하지 못했습니다($1). 등록은 계속합니다. 선언한 name이 등록 이름과 다르면 나중에 just onto validate가 repository-name-mismatch 오류로 알립니다." >&2
+    }
+
+    # 붙일 저장소가 `docs/ontology/ontology.yaml`에 선언한 `name`을 출력한다. 선언하지 않았으면(파일이 없다) 아무것도 출력하지 않는다.
+    # 확인하지 못하면(받지 못했다, 파일을 읽을 수 없다, 읽는 도구를 실행하지 못했다) 그렇다고 알리고 아무것도 출력하지 않는다(`cannot_check`).
+    # 등록하기 전이라 저장소가 아직 없으므로, 추적 브랜치의 끝만 임시 디렉토리에 얕게 받아(체크아웃하지 않고 파일 내용은 필요한 것 하나만 받는다. 지원하지 않는
+    # 서버는 파일 내용도 함께 받는다) 그 파일을 읽고 지운다. 중단해도 임시 디렉토리가 남지 않게 한다.
     # 파일은 온톨로지 도구와 같은 읽기(`read_ontology_yaml`)로 읽는다. YAML의 따옴표, 주석, 흐름 목록을 셸로 따로 해석하지 않는다.
-    # 읽지 못하면 선언이 없는 것으로 본다. 그런 파일은 등록한 뒤 스크립트 검사가 알린다.
     declared_name() {
-        probe=$(mktemp -d) || return 0
-        if git clone --quiet --depth 1 --no-checkout --branch "$2" -- "$1" "$probe/repo" >/dev/null 2>&1 &&
-            git -C "$probe/repo" show HEAD:docs/ontology/ontology.yaml >"$probe/ontology.yaml" 2>/dev/null; then
-            uv run --locked --quiet --project onto python -P -X utf8 -c \
-                'import sys; from pathlib import Path; from onto_tool.ontology_yaml import read_ontology_yaml; print(read_ontology_yaml(Path(sys.argv[1]))["name"])' \
-                "$probe/ontology.yaml" 2>/dev/null || true
+        probe=$(mktemp -d 2>/dev/null) || {
+            cannot_check "임시 디렉토리를 만들지 못했습니다"
+            return 0
+        }
+        trap 'rm -rf "$probe"' EXIT
+        trap 'exit 130' INT TERM HUP
+        if ! err=$(git clone --quiet --depth 1 --no-checkout --filter=blob:none --no-tags --branch "$2" -- "$1" "$probe/repo" 2>&1); then
+            cannot_check "원격에서 받지 못했습니다: $(printf '%s\n' "$err" | tail -n 1)"
+            return 0
         fi
-        rm -rf "$probe"
+        # 파일이 없는 것은 선언하지 않은 것이다. 알릴 것이 아니다.
+        if [ -z "$(git -C "$probe/repo" ls-tree HEAD -- docs/ontology/ontology.yaml 2>/dev/null)" ]; then
+            return 0
+        fi
+        if ! git -C "$probe/repo" show HEAD:docs/ontology/ontology.yaml >"$probe/ontology.yaml" 2>/dev/null; then
+            cannot_check "ontology.yaml을 받지 못했습니다"
+            return 0
+        fi
+        # 읽는 스크립트. 종료 코드 3은 파일의 문제(이유는 표준 오류의 마지막 줄)이고, 그 밖의 실패는 도구를 실행하지 못한 것이다.
+        printf '%s\n' \
+            'import sys' \
+            'from pathlib import Path' \
+            'from onto_tool.ontology_yaml import OntologyYamlError, read_ontology_yaml' \
+            'try:' \
+            '    print(read_ontology_yaml(Path(sys.argv[1]))["name"])' \
+            'except OntologyYamlError as exc:' \
+            '    print(exc, file=sys.stderr)' \
+            '    sys.exit(3)' >"$probe/read.py"
+        status=0
+        found=$(uv run --locked --quiet --project onto python -P -X utf8 "$probe/read.py" "$probe/ontology.yaml" 2>"$probe/err") || status=$?
+        case $status in
+            0) printf '%s\n' "$found" ;;
+            3) cannot_check "ontology.yaml을 읽을 수 없습니다: $(tail -n 1 "$probe/err")" ;;
+            *) cannot_check "name을 읽는 도구를 실행하지 못했습니다: $(tail -n 1 "$probe/err")" ;;
+        esac
+        return 0
     }
 
     url=$1
