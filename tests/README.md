@@ -17,8 +17,11 @@ uv run pytest -k 추적_브랜치        # 이름으로 고르기
 `sandbox` 픽스처가 테스트마다 새 임시 디렉토리와 격리된 git 환경을 준다.
 
 - `sandbox.root()`: 루트 저장소와 bare 원격. `.register(원격, name=, branch=)`, `.point_at(이름, 커밋)`, `.clone()`
-- `sandbox.knowledge_remote(이름)`: 가짜 지식 저장소와 bare 원격. `.commit(branch=)`
+- `sandbox.knowledge_remote(이름)`: 가짜 지식 저장소와 bare 원격. `.commit(branch=)`, `.set_default_branch(브랜치)`
 - `sandbox.just(...)`, `sandbox.git(...)`: 명령 실행. `just(without=("uv",))`는 PATH에서 도구를 뺀다
 - `sandbox.head(저장소)`, `sandbox.branch(저장소)`
+- `sandbox.snapshot(저장소)`: HEAD, 인덱스, 작업 트리 상태, `.gitmodules`, 서브모듈 설정, `.git/modules`를 모은 값. 명령을 부르기 전후로 비교해 "아무것도 바꾸지 않는다"를 확인한다
+
+`ssh`·`https` 주소가 필요한 테스트는 `git config --global url.<로컬 원격>.insteadOf <주소>`로 그 주소를 로컬 원격에 잇는다. 전역 설정은 임시 파일이라 테스트마다 따로다.
 
 지키는 약속: 네트워크를 쓰지 않는다(로컬 파일 전송만 허용). 전역 git 설정을 읽지도 바꾸지도 않는다. 임시 디렉토리 밖에서는 명령을 실행하지 않고, 이 저장소의 `Justfile`을 직접 가리켜 실행하지 않는다(등록 명령이 이 작업 사본에 서브모듈을 만든다). 이 저장소의 가상환경이 샌드박스로 새지 않는다.

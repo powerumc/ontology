@@ -119,6 +119,29 @@ class Sandbox:
         result = self.git("symbolic-ref", "--quiet", "--short", "HEAD", cwd=repo, check=False)
         return result.stdout.strip() if result.returncode == 0 else None
 
+    def snapshot(self, repo: Path) -> dict[str, object]:
+        """저장소가 바뀐 흔적을 모은다. 앞뒤의 스냅샷이 같으면 그 사이에 아무것도 바뀌지 않은 것이다.
+
+        HEAD, 인덱스, 작업 트리 상태(추적하지 않는 파일 포함), `.gitmodules`, 로컬 서브모듈 설정,
+        `.git/modules` 안의 서브모듈 저장소, `projects/`의 항목을 본다. 서브모듈 안의 상태는 보지 않는다.
+        """
+        git_dir = Path(self.git("rev-parse", "--absolute-git-dir", cwd=repo).stdout.strip())
+        gitmodules = repo / ".gitmodules"
+        modules_dir = git_dir / "modules"
+        return {
+            "head": self.head(repo),
+            "index": self.git("ls-files", "--stage", cwd=repo).stdout,
+            "status": self.git("status", "--porcelain", "--untracked-files=all", cwd=repo, check=False).stdout,
+            "gitmodules": gitmodules.read_text(encoding="utf-8") if gitmodules.exists() else None,
+            "config": self.git("config", "--local", "--get-regexp", r"^submodule\.", cwd=repo, check=False).stdout,
+            "modules": sorted(  # 서브모듈 저장소마다 HEAD와 objects가 함께 있다
+                str(p.parent.relative_to(git_dir))
+                for p in modules_dir.rglob("HEAD")
+                if (p.parent / "objects").is_dir()
+            ),
+            "projects": sorted(p.name for p in (repo / "projects").iterdir()) if (repo / "projects").exists() else None,
+        }
+
     def just(
         self,
         *args: str | Path,
@@ -242,6 +265,10 @@ class KnowledgeRemote:
         sandbox.git("add", "-A", cwd=self.seed)
         sandbox.git("commit", "-m", "init", cwd=self.seed)
         sandbox.git("push", "origin", "main", cwd=self.seed)
+
+    def set_default_branch(self, branch: str) -> None:
+        """원격의 기본 브랜치(HEAD가 가리키는 브랜치)를 바꾼다. 그 브랜치는 이미 있어야 한다."""
+        self._sandbox.git("symbolic-ref", "HEAD", f"refs/heads/{branch}", cwd=self.url)
 
     def commit(self, *, branch: str = "main") -> str:
         """`branch`에 커밋 하나를 쌓아 원격에 푸시하고 그 해시를 돌려준다.
