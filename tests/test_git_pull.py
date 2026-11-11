@@ -562,8 +562,13 @@ def _forget_remote_head(sandbox, sub):
     sandbox.git("remote", "set-head", "origin", "-d", cwd=sub)
 
 
-def test_추적_브랜치를_받기_전의_origin_HEAD로_알아내지_않아_작업_브랜치를_올리지_않는다(sandbox):
-    """기록된 추적 브랜치가 없으면 원격의 기본 브랜치가 추적 브랜치다. fetch가 `origin/HEAD`를 되살려 주므로 fetch 뒤에 정한다."""
+def test_기록된_추적_브랜치가_없고_origin_HEAD가_지워졌어도_작업_브랜치를_올리지_않는다(sandbox):
+    """기록된 추적 브랜치가 없으면 원격의 기본 브랜치(`origin/HEAD`)가 추적 브랜치다. 그것이 없을 때 루트처럼 현재 브랜치를 올리면 안 된다.
+
+    fetch가 `origin/HEAD`를 다시 만들어 주는지는 git 버전과 설정(`remote.<이름>.followRemoteHEAD`)에 달려 있다.
+    다시 만들면 "추적 브랜치가 아니라 feature에 있다", 만들지 않으면 "추적 브랜치를 알 수 없다"로 건너뛴다.
+    어느 쪽이든 올리지 않고 fetch만 하는 것이 약속이므로, 이유의 문구가 아니라 그 결과를 확인한다.
+    """
     root = sandbox.root()
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)  # -b 없이 등록해 .gitmodules에 추적 브랜치가 없다
@@ -571,15 +576,16 @@ def test_추적_브랜치를_받기_전의_origin_HEAD로_알아내지_않아_�
     sub = _sub(clone)
     sandbox.git("checkout", "-b", "feature", cwd=sub)
     feature_head = sandbox.head(sub)
-    billing.commit(branch="feature")  # 원격의 feature가 앞서 있다
+    latest = billing.commit(branch="feature")  # 원격의 feature가 앞서 있다
     _forget_remote_head(sandbox, sub)
 
     result = _pull(sandbox, clone)
 
     assert result.returncode == 0, result.stderr
-    assert sandbox.branch(sub) == "feature" and sandbox.head(sub) == feature_head
+    assert sandbox.branch(sub) == "feature" and sandbox.head(sub) == feature_head  # 올리지 않았다
+    assert _remote_tip(sandbox, sub, "feature") == latest  # fetch는 했다
     state, line = _outcomes(result)["projects/billing"]
-    assert state == "건너뜀" and "feature" in line and "main" in line and "fetch만" in line
+    assert state == "건너뜀" and "fetch만" in line
 
 
 def test_추적_브랜치를_끝내_알_수_없으면_현재_브랜치를_올리지_않고_fetch만_하고_건너뛴다(sandbox):
