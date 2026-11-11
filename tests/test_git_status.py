@@ -2,6 +2,8 @@
 
 import os
 
+import pytest
+
 ROOT = "루트 저장소"
 
 
@@ -147,6 +149,21 @@ def test_루트의_서브모듈_포인터_변경은_루트의_미커밋_변경�
     assert "미커밋 없음" in _line(result, "projects/billing")  # 서브모듈 안의 변경이 아니다
     notice = next(line for line in result.stdout.splitlines() if "서브모듈 포인터" in line)
     assert "projects/billing" in notice and "projects/docs" not in notice
+
+
+@pytest.mark.parametrize(("key", "value"), [(None, None), ("status.renames", "true"), ("status.renames", "false"), ("diff.renames", "false")])
+def test_이름을_바꾼_파일의_미커밋_변경은_사용자의_이름_바꾸기_탐지_설정과_무관하게_센다(sandbox, key, value):
+    """이름을 바꾸면 옛 경로의 삭제와 새 경로의 추가로 센다. 탐지 설정에 따라 1개와 2개로 갈리면 같은 상태가 사람마다 다르게 보인다."""
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    clone = root.set_up_clone()
+    sandbox.git("mv", "README.md", "RENAMED.md", cwd=_sub(clone))
+    if key is not None:
+        sandbox.git("config", "--global", key, value, cwd=clone)
+
+    result = _status(sandbox, clone)
+
+    assert "미커밋 2개" in _line(result, "projects/billing")
 
 
 def test_서브모듈_안의_변경은_루트의_미커밋_변경으로_세지_않는다(sandbox):

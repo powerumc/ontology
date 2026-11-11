@@ -327,6 +327,7 @@ def test_초기화하지_않은_지식_저장소의_포인터가_원격의_것�
     newer = billing.commit()
     sandbox.git("update-index", "--cacheinfo", f"160000,{newer},projects/billing", cwd=clone)
     sandbox.git("commit", "-m", "포인터만 옮김", cwd=clone)  # 가리키는 저장소가 없어 확인할 수 없다
+    recorded_in = sandbox.head(clone)
     root_tip = _tip(sandbox, root.origin)
 
     result = _push(sandbox, clone)
@@ -335,6 +336,7 @@ def test_초기화하지_않은_지식_저장소의_포인터가_원격의_것�
     assert _tip(sandbox, root.origin) == root_tip
     state, line = _outcomes(result)[ROOT]
     assert state == "실패" and "projects/billing" in line and "초기화" in line
+    assert recorded_in[:7] in line and "just setup" in line and "고쳐 쓰" in line  # 기록한 루트 커밋과 할 일
 
 
 # --- 커밋한 것만 올린다 -----------------------------------------------------------------------
@@ -564,7 +566,7 @@ def test_함께_올라가는_중간_루트_커밋이_원격에_없는_서브모�
     clone = root.set_up_clone()
     sub = _sub(clone)
     replaced = _local_commit(sandbox, sub)
-    _commit_pointers(sandbox, clone, "billing")  # 루트가 곧 사라질 커밋을 가리킨다
+    recorded_in = _commit_pointers(sandbox, clone, "billing")  # 루트가 곧 사라질 커밋을 가리킨다
     (sub / "local.md").write_text("# 고쳐 씀\n", encoding="utf-8")
     sandbox.git("commit", "-a", "--amend", "-m", "고쳐 씀", cwd=sub)
     amended = sandbox.head(sub)
@@ -578,10 +580,16 @@ def test_함께_올라가는_중간_루트_커밋이_원격에_없는_서브모�
     assert _tip(sandbox, root.origin) == root_tip
     state, line = _outcomes(result)[ROOT]
     assert state == "실패" and replaced[:7] in line and amended[:7] not in line
+    assert recorded_in[:7] in line  # 그 포인터를 기록한 루트 커밋
+    assert "원격에 올리거나" in line and "고쳐 쓰" in line  # 할 일
 
 
-def test_병합_커밋이_충돌을_풀며_기록한_서브모듈_커밋도_원격에_없으면_루트_저장소를_올리지_않는다(sandbox):
-    """병합 커밋은 부모와 비교하지 않으면 diff에 나오지 않는다. 충돌을 풀며 새 포인터를 적은 병합 커밋을 놓치지 않는다."""
+@pytest.mark.parametrize("diff_merges", [None, "first-parent", "combined", "dense-combined"])
+def test_병합_커밋이_충돌을_풀며_기록한_서브모듈_커밋도_원격에_없으면_루트_저장소를_올리지_않는다(sandbox, diff_merges):
+    """병합 커밋은 부모와 비교하지 않으면 diff에 나오지 않는다. 충돌을 풀며 새 포인터를 적은 병합 커밋을 놓치지 않는다.
+
+    `log.diffMerges`가 결합 형식이면 병합 커밋의 raw 줄이 부모 하나의 형식(열의 위치)과 달라지는데, 이 설정에 기대지 않는다.
+    """
     root = sandbox.root()
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
@@ -597,12 +605,38 @@ def test_병합_커밋이_충돌을_풀며_기록한_서브모듈_커밋도_원�
     sandbox.git("merge", "--no-commit", "--no-ff", "side", cwd=clone)
     sandbox.git("update-index", "--cacheinfo", f"160000,{unpushed},projects/billing", cwd=clone)
     sandbox.git("commit", "-m", "병합하며 포인터를 옮김", cwd=clone)
+    merge = sandbox.head(clone)
+    if diff_merges is not None:
+        sandbox.git("config", "--global", "log.diffMerges", diff_merges, cwd=clone)
     root_tip = _tip(sandbox, root.origin)
 
     result = _push(sandbox, clone)
 
     assert result.returncode != 0
     assert _tip(sandbox, root.origin) == root_tip
+    state, line = _outcomes(result)[ROOT]
+    assert state == "실패" and unpushed[:7] in line and merge[:7] in line  # 그 포인터를 기록한 병합 커밋을 알려 준다
+
+
+def test_log_showRoot가_꺼져_있어도_부모_없는_첫_루트_커밋이_기록한_서브모듈_커밋을_확인한다(sandbox):
+    """원격에 같은 이름의 브랜치가 없는 고아 브랜치는 올라가는 범위에 부모 없는 커밋이 있다. 설정이 그 커밋의 diff를 숨기지 못한다."""
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    root.register(billing)
+    clone = root.set_up_clone()
+    sub = _sub(clone)
+    sandbox.git("checkout", "-b", "feature", cwd=sub)
+    unpushed = _local_commit(sandbox, sub)
+    sandbox.git("config", "--global", "log.showRoot", "false", cwd=clone)
+    sandbox.git("checkout", "--orphan", "fresh", cwd=clone)  # 인덱스는 그대로라 모든 파일이 부모 없는 첫 커밋에 들어간다
+    sandbox.git("add", "projects/billing", cwd=clone)  # 첫 커밋이 올리지 않은 커밋을 가리킨다
+    sandbox.git("commit", "-m", "첫 커밋", cwd=clone)
+    sandbox.git("checkout", "main", cwd=sub)  # 그 커밋은 이번 푸시가 올리지 않는다
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode != 0
+    assert _tip(sandbox, root.origin, "fresh") is None
     state, line = _outcomes(result)[ROOT]
     assert state == "실패" and unpushed[:7] in line
 
@@ -631,10 +665,11 @@ def test_푸시하지_않은_커밋_수를_세지_못한_지식_저장소가_있
     root.register(billing)
     clone = root.set_up_clone()
     sub = _sub(clone)
-    _local_commit(sandbox, sub)
-    git_dir = sandbox.git("rev-parse", "--absolute-git-dir", cwd=sub).stdout.strip()
-    with open(f"{git_dir}/refs/remotes/origin/main", "w", encoding="utf-8") as f:  # 없는 객체를 가리키는 원격 추적 참조: rev-list가 실패한다
-        f.write("1" * 40 + "\n")
+    broken = _local_commit(sandbox, sub)
+    # 방금 만든 커밋의 객체 파일을 지운다. HEAD는 있는데 커밋을 읽을 수 없어 rev-list가 실패한다. 참조 저장 형식(files, reftable)과 무관하다.
+    object_file = sub / sandbox.git("rev-parse", "--git-path", f"objects/{broken[:2]}/{broken[2:]}", cwd=sub).stdout.strip()
+    assert object_file.is_file(), "방금 만든 커밋은 느슨한 객체여야 한다"
+    object_file.unlink()
     root_head = _local_commit(sandbox, clone, "NOTES.md")  # 루트 커밋은 포인터를 바꾸지 않으므로 포인터 검사가 막아 주지 않는다
     root_tip = _tip(sandbox, root.origin)
 
@@ -642,8 +677,10 @@ def test_푸시하지_않은_커밋_수를_세지_못한_지식_저장소가_있
 
     assert result.returncode != 0
     assert _tip(sandbox, root.origin) == root_tip != root_head
+    assert _tip(sandbox, billing.url) != broken
     outcomes = _outcomes(result)
-    assert outcomes["projects/billing"][0] == "실패"
+    state, line = outcomes["projects/billing"]
+    assert state == "실패" and "세지 못했다" in line
     state, line = outcomes[ROOT]
     assert state == "건너뜀" and "projects/billing" in line
 
@@ -671,6 +708,20 @@ def test_건너뛴_저장소에_푸시하지_않은_커밋이_남으면_종료_�
     left = _left_behind(result)
     assert set(left) == {"projects/billing", ROOT}  # 올릴 것이 없는 docs는 알리지 않는다
     assert "2" in left["projects/billing"] and "1" in left[ROOT]
+
+
+def test_origin이_없어_건너뛴_저장소도_커밋이_원격에_없다고_요약_끝에서_알린다(sandbox):
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    clone = root.set_up_clone()
+    sandbox.git("remote", "remove", "origin", cwd=_sub(clone))
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode == 0, result.stderr
+    state, line = _outcomes(result)["projects/billing"]
+    assert state == "건너뜀" and "origin" in line
+    assert set(_left_behind(result)) == {"projects/billing"}
 
 
 def test_올리지_않은_커밋이_남은_건너뜀이_없으면_그런_알림을_하지_않는다(sandbox):

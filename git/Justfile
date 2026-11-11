@@ -262,6 +262,10 @@ push:
         fi
         if ! git -C "$po_path" remote get-url origin >/dev/null 2>&1; then
             record skipped "$po_label" "origin 원격이 없다"
+            # 원격이 없으니 이 저장소의 커밋은 모두 원격에 없다(개수는 알 수 없다)
+            if git -C "$po_path" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+                leftover="$leftover$po_label: origin 원격이 없어 커밋이 모두 원격에 없다$NL"
+            fi
             return 0
         fi
         if ! git -C "$po_path" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
