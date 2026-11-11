@@ -24,7 +24,7 @@ uv run pytest tests/test_setup.py  # 파일 하나
 
 `sandbox` 픽스처가 테스트마다 새 임시 디렉토리와 격리된 git 환경을 준다.
 
-- `sandbox.root()`: 루트 저장소와 bare 원격. `.register(원격, name=, branch=)`, `.point_at(이름, 커밋)`, `.commit({경로: 내용})`(소유자의 작업 사본에서 커밋하고 푸시), `.clone()`(서브모듈은 초기화하지 않음), `.set_up_clone()`(클론하고 `just setup`까지), `.leave_gitmodules_unmerged(원격)`(인덱스의 `.gitmodules`를 병합 충돌 상태로 만든다)
+- `sandbox.root()`: 루트 저장소와 bare 원격. `.register(원격, name=, branch=)`, `.point_at(이름, 커밋)`, `.commit({경로: 내용})`(소유자의 작업 사본에서 커밋하고 푸시), `.clone()`(서브모듈은 초기화하지 않음), `.set_up_clone()`(클론하고 `just setup`까지. setup은 온톨로지 층이 있는 지식 저장소를 최신화하므로 그런 저장소에는 `.onto/`와 스킬 사본이 생기고, 온톨로지 층이 없는 기본 견본(`knowledge_remote`)은 그대로다), `.leave_gitmodules_unmerged(원격)`(인덱스의 `.gitmodules`를 병합 충돌 상태로 만든다)
 - `sandbox.knowledge_remote(이름)`: 가짜 지식 저장소와 bare 원격. `.commit(branch=, files={경로: 내용})`(`files`를 생략하면 새 메모 파일을 더한다), `.set_default_branch(브랜치)`
 - `sandbox.just(...)`, `sandbox.git(...)`: 명령 실행. `just(without=("uv",))`는 PATH에서 도구를 뺀다
 - `sandbox.head(저장소)`, `sandbox.branch(저장소)`
@@ -64,7 +64,7 @@ def test_예(onto_cli):
 
 ### 규칙(`test_onto_rules.py`)
 
-루트 기본 규칙(`onto/rules.yaml`)은 도구 사본 안의 파일이고 테스트 세션이 공유한다. `onto_cli.set_root_check(이름, enabled=…, severity=…)`와 `onto_cli.replace_in_root_rules(옛, 새)`가 그 파일을 고치고, 테스트가 끝나면 `onto_cli`가 원래대로 되돌린다. 지식 저장소의 덮어쓰기는 `repo("billing", …, rules={"checks": {"orphan-page": {"enabled": False}}})`처럼 `ontology.yaml`의 `rules`로 적는다. `rules` 명령(`onto_cli.run(root, "rules", "billing")`)이 적용되는 규칙을 JSON으로 보여 주므로, 검사에 쓰이지 않는 값(`sources`, `push-gate`, `language`의 일부)의 병합도 여기서 확인한다. 식별자 형식(`language.identifier-pattern`)은 사용자가 쓴 정규 표현식이라, 맞지 않는 긴 식별자에서 지수 시간으로 되돌아가는 모양(`([a-z]+-?)+`)은 규칙 오류로 거부하고 그 저장소만 루트 기본 형식으로 검사한다. 끝나지 않는 입력은 `onto_cli.run(…, timeout=…)`의 시간 상한으로 가린다.
+루트 기본 규칙(`onto/rules.yaml`)은 도구 사본 안의 파일이고 테스트 세션이 공유한다. `onto_cli.set_root_check(이름, enabled=…, severity=…)`와 `onto_cli.replace_in_root_rules(옛, 새)`가 그 파일을 고치고, 테스트가 끝나면 `onto_cli`가 원래대로 되돌린다. 지식 저장소의 덮어쓰기는 `repo("billing", …, rules={"checks": {"orphan-page": {"enabled": False}}})`처럼 `ontology.yaml`의 `rules`로 적는다. `rules` 명령(`onto_cli.run(root, "rules", "billing")`)이 적용되는 규칙을 JSON으로 보여 주므로, 검사에 쓰이지 않는 값(`sources`, `push-gate`, `language`의 일부)의 병합도 여기서 확인한다. 식별자 형식(`language.identifier-pattern`)은 루트 전용이다. 사용자가 쓴 정규 표현식이라 지식 저장소 하나가 지수 시간으로 되돌아가는 모양(`([a-z]+-?)+`)을 적으면 루트의 검사가 끝나지 않으므로, 지식 저장소의 `rules`가 적으면 그 저장소만 `invalid-rules`로 보고하고 루트 기본 형식으로 검사한다. 식별자 형식을 바꾸는 테스트는 `onto_cli.replace_in_root_rules`로 루트 기본 규칙을 고친다. 끝나지 않는 입력은 `onto_cli.run(…, timeout=…)`의 시간 상한으로 가린다(시간이 넘으면 도구의 프로세스 그룹을 죽인다).
 
 ### 인덱스(`test_onto_index.py`)
 
@@ -157,8 +157,8 @@ def test_예(onto_cli):
 
 ### 사용법 문서(`test_docs.py`)
 
-`README.md`, `CLAUDE.md`, 스킬, 규약 문서가 실제 명령과 어긋나지 않는지 본다. 문서에 적힌 `just` 명령이 있는 모듈과 레시피인지(루트의 `just <모듈> <레시피>`와 지식 저장소 안의 `just -f .onto/Justfile <레시피>`), 스킬이 `<onto> <명령>`으로 부르는 명령을 지식 저장소 안에서도 쓸 수 있는지, 루트의 모든 레시피가 `README.md`에 적혀 있는지, 스킬 세 개가 frontmatter(`name`, `description`)와 명령 접두어 두 개, 개인 지식 저장소 안내, 커밋 메시지 규약(`onto(ingest):`, `onto(lint):`)을 갖췄는지, 루트 `CLAUDE.md`가 짧고 기존 `## Agent skills` 블록을 지키는지다. 레시피 목록은 임시 루트 저장소의 `just --summary`에서 얻는다. 문서의 글(LLM의 동작)은 보지 않는다.
+`README.md`, `CLAUDE.md`, 스킬, 규약 문서가 실제 명령과 어긋나지 않는지 본다. 문서에 적힌 `just` 명령이 있는 모듈과 레시피인지(루트의 `just <모듈> <레시피>`와 지식 저장소 안의 `just -f .onto/Justfile <레시피>`), 스킬이 `<onto> <명령>`으로 부르는 명령을 지식 저장소 안에서도 쓸 수 있는지, 루트의 모든 레시피가 `README.md`에 적혀 있는지, 스킬 세 개가 frontmatter(`name`, `description`)와 명령 접두어 두 개를 갖췄는지, `README.md`에 커밋 메시지 규약(`onto(ingest):`, `onto(lint):`)이 있는지, 루트 `CLAUDE.md`가 짧고 기존 `## Agent skills` 블록을 지키는지다. 레시피 목록은 임시 루트 저장소의 `just --summary`에서 얻는다. 스킬 문서의 글(LLM의 동작)은 보지 않는다. 문구는 고쳐 써도 뜻이 같으면 되므로 표현을 고정하는 단언을 두지 않는다.
 
 ### 흐름(`test_flow.py`)
 
-가짜 지식 저장소를 상대로 `just repo add`(등록과 최신화), `onto status`(새 문서와 해시), 페이지 쓰기(에이전트의 일을 테스트가 흉내 낸다), `onto build`와 `validate`(인덱스와 깨끗한 검사), `onto query`(결과의 엔티티가 곧 페이지 경로), 지식 저장소 안의 명령, 원본 문서가 바뀐 뒤의 낡음, 커밋, `just git push`(푸시 관문을 켠 채), `just repo remove`를 한 테스트로 잇는다. 해시의 기대값은 도구의 계산이 아니라 `git hash-object`가 낸 값이다. 푸시 관문 때문에 지식 저장소는 인덱스까지 커밋해야 통과한다.
+가짜 지식 저장소를 상대로 `just repo add`(등록과 최신화), `onto status`(새 문서와 해시), 페이지 쓰기(에이전트의 일을 테스트가 흉내 낸다), `onto build`와 `validate`(인덱스와 깨끗한 검사), `onto query`(결과의 엔티티가 곧 페이지 경로), 지식 저장소 안의 명령, 원본 문서가 바뀐 뒤의 낡음, 커밋, `just git push`(푸시 관문을 켠 채), `just repo remove`를 한 테스트로 잇는다. 해시의 기대값은 도구의 계산이 아니라 `git hash-object`가 낸 값이다. 푸시 관문은 커밋된 내용이 아니라 작업 트리를 검사하므로 인덱스를 커밋하지 않아도 통과한다. 흐름이 인덱스까지 직접 커밋하는 것은 사용자가 밟는 순서를 따른 것이다. 끝의 제거는 팀 파일이 없는 저장소에서 무시되는 파일(`.claude/`)을 알리지 않는지도 본다.

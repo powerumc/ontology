@@ -10,7 +10,7 @@ description: 지식 저장소의 온톨로지를 SPARQL로 질의해 프로젝�
 ## 작업 위치
 
 - 최상위에 `.onto/Justfile`이 있으면 **지식 저장소 안**이다. 이 저장소의 지식만 질의한다. 명령은 `just -f .onto/Justfile <명령>`이다.
-- 최상위에 `onto/Justfile`과 `projects/`가 있으면 **루트 저장소**다. `projects/` 아래에 붙은 지식 저장소 전체를 합쳐 질의한다(여러 프로젝트를 가로지르는 질문은 여기서 한다). 명령은 `just onto <명령>`이다.
+- 최상위에 `onto/Justfile`이 있으면 **루트 저장소**다. `projects/` 아래에 붙은 지식 저장소 전체를 합쳐 질의한다(여러 프로젝트를 가로지르는 질문은 여기서 한다). 명령은 `just onto <명령>`이다. `projects/`가 없거나 비어 있으면 붙인 지식 저장소가 없는 것이다. `just repo add <주소>`로 붙인 뒤에 한다고 알린다.
 - 아래에서 `<onto>`는 그 명령 접두어(`just onto` 또는 `just -f .onto/Justfile`)다.
 - 둘 다 없으면 복사된 기능이 없는 클론이다. 이 스킬을 쓸 수 없다. `docs/ontology/index.md`에서 페이지로 찾아 읽는다.
 
@@ -69,7 +69,7 @@ projects/billing/docs/ontology/component/gateway.md	결제 게이트웨이
 - 첫 줄은 변수 이름이고 그 뒤로 한 줄에 행 하나, 칸은 탭으로 나뉜다.
 - 루트 저장소에서는 루트 기준 경로(`projects/billing/docs/ontology/…`)이고, 지식 저장소 안에서는 그 저장소 기준 경로(`docs/ontology/…`)다.
 - `Project` 엔티티는 `ontology.yaml`의 경로로, `Source` 엔티티는 원본 문서의 경로로 나온다. 엔티티가 아닌 값(문자열, 날짜, 그 밖의 IRI)은 그대로 나온다.
-- 페이지에서 근거 원본으로 가려면 `derivedFrom`을 따라간다: `SELECT ?e ?p WHERE { ?e onto:derivedFrom ?s . ?s onto:sourcePath ?p }`.
+- 페이지에서 근거 원본으로 가려면 `derivedFrom`이 가리키는 `Source` 엔티티를 고른다: `SELECT ?e ?s WHERE { ?e onto:derivedFrom ?s }`. 두 칸 모두 그대로 열 수 있는 경로다(`?s`는 루트에서 `projects/billing/docs/design.md`, 지식 저장소 안에서 `docs/design.md`). `onto:sourcePath`는 지식 저장소 루트 기준 경로라 루트에서는 그대로 열 수 없다.
 - 답에는 근거가 된 페이지 경로를 함께 적는다. 중요한 주장은 페이지의 `derivedFrom`이 가리키는 원본 문서에서 확인한다.
 
 ## 자주 쓰는 질의

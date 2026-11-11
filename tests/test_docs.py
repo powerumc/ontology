@@ -1,10 +1,11 @@
 """사용법 문서와 스킬 문서가 실제 명령과 어긋나지 않는지 본다.
 
-스킬 문서의 내용(LLM이 읽는 글)은 자동 테스트에서 뺀다. 여기서는 기계적으로 가릴 수 있는 것만 본다.
+스킬 문서의 내용(LLM이 읽는 글)은 자동 테스트에서 뺀다. 문구는 고쳐 써도 뜻이 같으면 되므로 글의 표현은 보지 않고, 기계적으로 가릴 수 있는 것만 본다.
 
 - 문서에 적힌 `just` 명령이 실제로 있는 모듈과 레시피다. 루트 저장소(`just <모듈> <레시피>`)와 지식 저장소 안(`just -f .onto/Justfile <레시피>`) 모두다.
+- 스킬이 `<onto> <명령>`으로 부르는 명령을 지식 저장소 안에서도 쓸 수 있다.
 - 루트의 모든 레시피가 `README.md`에 적혀 있다.
-- 스킬 세 개가 `name`, `description`을 가진 frontmatter로 시작하고, 루트와 지식 저장소 안의 명령 접두어, 개인 지식 저장소 안내, 커밋 메시지 규약을 담는다.
+- 스킬 세 개가 `name`, `description`을 가진 frontmatter로 시작하고 두 명령 접두어를 적는다.
 - 루트 `CLAUDE.md`가 스킬과 사용법을 가리키고 기존 `## Agent skills` 블록을 지킨다.
 
 문서는 이 저장소의 작업 사본에서 읽기만 하고, 명령의 목록은 임시 디렉토리의 루트 저장소(이 저장소의 추적 파일을 복사한 것)에서 `just --summary`로 얻는다.
@@ -119,45 +120,10 @@ def test_스킬은_name과_description이_있는_frontmatter로_시작한다(nam
 
 
 @pytest.mark.parametrize("name", SKILLS)
-def test_스킬은_루트와_지식_저장소_안에서_쓰는_명령_접두어를_모두_안내한다(name):
+def test_스킬은_루트와_지식_저장소_안에서_쓰는_명령_접두어를_모두_적는다(name):
     document = text(SKILL_FILES[name])
 
     assert "just onto" in document and "just -f .onto/Justfile" in document
-    assert "루트 저장소" in document and "지식 저장소 안" in document
-
-
-@pytest.mark.parametrize("name", SKILLS)
-def test_스킬은_여러_프로젝트를_비교하는_지식은_개인_지식_저장소에_둔다고_안내한다(name):
-    document = text(SKILL_FILES[name])
-
-    assert "개인 지식 저장소" in document and "비교·종합" in document
-
-
-def test_ingest_스킬은_절차와_지킬_것을_담는다():
-    document = text(SKILL_FILES["onto-ingest"])
-
-    for step in ("status", "build", "validate", "derivedFrom", "skipped.yaml"):
-        assert step in document
-    assert "원본 문서는 읽기 전용" in document and "커밋하지 않고" in document and "지식 저장소 단위" in document
-    assert "onto(ingest):" in document
-
-
-def test_lint_스킬은_스크립트_검사를_먼저_하고_고치기_전에_보고한다():
-    document = text(SKILL_FILES["onto-lint"])
-
-    steps = ("1. **스크립트 검사.**", "2. **판단이 필요한 검사.**", "3. **보고하고 멈춘다.**", "4. **승인받은 것만 고친다.**")
-    assert [document.index(step) for step in steps] == sorted(document.index(step) for step in steps)  # 스크립트 검사 다음에 판단 검사, 그다음 보고, 마지막이 수정
-    assert "고치기 전에 사용자에게 보고한다" in document
-    assert "onto(lint):" in document
-
-
-def test_query_스킬은_질의하는_법과_클래스와_관계_목록과_결과에서_페이지로_가는_법을_담는다():
-    document = text(SKILL_FILES["onto-query"])
-
-    assert "query '" in document and "SELECT" in document
-    for term in ("onto:Component", "onto:Policy", "onto:partOf", "onto:dependsOn", "onto:governs", "onto:implements", "onto:supersedes", "onto:about", "onto:derivedFrom"):
-        assert term in document
-    assert "## 결과에서 페이지로 가는 법" in document and "파일 경로" in document
 
 
 def test_README에_커밋_메시지_규약이_있다():

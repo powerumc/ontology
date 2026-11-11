@@ -10,7 +10,7 @@ description: 지식 저장소의 원본 문서를 읽어 온톨로지 층(docs/o
 ## 작업 위치
 
 - 최상위에 `.onto/Justfile`이 있으면 **지식 저장소 안**이다. 이 저장소의 지식만 다룬다. 명령은 `just -f .onto/Justfile <명령>`, 규약 문서는 `.onto/template/conventions.md`다.
-- 최상위에 `onto/Justfile`과 `projects/`가 있으면 **루트 저장소**다. `projects/` 아래에 붙은 지식 저장소 전체를 다룬다. 명령은 `just onto <명령>`, 규약 문서는 `onto/template/conventions.md`다.
+- 최상위에 `onto/Justfile`이 있으면 **루트 저장소**다. `projects/` 아래에 붙은 지식 저장소 전체를 다룬다. 명령은 `just onto <명령>`, 규약 문서는 `onto/template/conventions.md`다. `projects/`가 없거나 비어 있으면 붙인 지식 저장소가 없는 것이다. `just repo add <주소>`로 붙인 뒤에 한다고 알린다.
 - 아래에서 `<onto>`는 그 명령 접두어(`just onto` 또는 `just -f .onto/Justfile`)이고 `<규약>`은 규약 문서다.
 - 둘 다 없으면 복사된 기능이 없는 클론이다. 이 스킬을 쓸 수 없다. `docs/ontology/index.md`에서 페이지로 찾아 읽는다.
 
@@ -24,7 +24,7 @@ description: 지식 저장소의 원본 문서를 읽어 온톨로지 층(docs/o
 ## 절차
 
 1. **대상 확인.** `<onto> status`를 실행한다. 한 줄에 문서 하나이고 탭으로 나눈 다섯 칸이다: 상태(`새 문서`, `바뀐 문서`), 지식 저장소, 원본 문서(저장소 루트 기준 경로), 현재 해시, 설명. 요청이 저장소나 문서를 정했으면 그 안의 줄만 다룬다. "새로 생겼거나 바뀐 원본 문서가 없다"고 나오면 그렇게 알리고 끝낸다.
-   - 페이지에 적는 해시는 이 출력의 **현재 해시 칸 값**이다. `git hash-object`나 `git rev-parse`로 구하지 않는다(줄바꿈 변환 설정에 따라 값이 달라져 쓰자마자 낡음이 된다).
+   - 페이지에 적는 해시는 이 출력의 **현재 해시 칸 값**이다. `git rev-parse HEAD:<경로>`나 `git hash-object --no-filters`로 구한 값은 줄바꿈 변환 때문에 다를 수 있어 쓰자마자 낡음이 된다.
    - 끝낼 조건: 이번에 읽을 문서의 목록(경로와 현재 해시)이 정해졌다.
 
 2. **규약 읽기.** `<규약>`을 읽는다. 페이지 형식, 키, 클래스와 디렉토리, 식별자, 관계, `derivedFrom`, 언어가 있다. 이 스킬은 규약을 되풀이하지 않는다. 규약대로 쓴다. 클래스별 견본은 규약 문서와 같은 디렉토리의 `<클래스 디렉토리>.md`(`plan.md`, `component.md` …)다.
@@ -32,9 +32,9 @@ description: 지식 저장소의 원본 문서를 읽어 온톨로지 층(docs/o
 
 3. **문서마다 a~f를 한다.**
    - a. **읽기.** 문서 전체를 읽는다. `바뀐 문서`는 설명 칸에 적힌 낡은 페이지도 연다.
-   - b. **기존 엔티티 찾기.** 새 페이지를 쓰기 전에 같은 대상이 이미 있는지 찾는다. `docs/ontology/index.md`를 훑고 제목과 별칭을 질의한다. 이름마다(한글, 영어, 약어) 찾는다.
-     `<onto> query 'SELECT ?e ?t ?a WHERE { ?e dcterms:title ?t . OPTIONAL { ?e skos:altLabel ?a } } ORDER BY ?e'`
-     이미 있으면 새로 만들지 않고 그 페이지를 고친다. 같은 클래스에 같은 이름이 둘이면 `validate`가 오류로 잡는다.
+   - b. **기존 엔티티 찾기.** 새 페이지를 쓰기 전에 같은 대상이 이미 있는지 찾는다. `docs/ontology/index.md`를 훑고, 문서가 다루는 이름마다(한글, 영어, 약어) 제목과 별칭을 이름으로 거른 질의로 찾는다. 전체 목록을 뽑지 않는다. 대상 저장소의 엔티티로 좁힌다.
+     `<onto> query 'SELECT DISTINCT ?e ?t WHERE { ?e onto:repository "<저장소 이름>" . { ?e dcterms:title ?t } UNION { ?e skos:altLabel ?t } FILTER(CONTAINS(LCASE(STR(?t)), "<이름>")) } ORDER BY ?e'`
+     `<이름>`은 소문자로 적는다. 이미 있으면 새로 만들지 않고 그 페이지를 고친다. 같은 클래스에 같은 이름이 둘이면 `validate`가 오류로 잡는다.
    - c. **페이지 쓰기.** 대상마다 `docs/ontology/<클래스 디렉토리>/<식별자>.md`를 만들거나 고친다. 페이지마다 관계를 하나 이상 적고 한·영 별칭을 둔다. 다른 저장소의 엔티티는 교차 참조(`<저장소 이름>:<식별자>`)로만 가리키고 파일 경로는 쓰지 않는다.
    - d. **근거 기록.** 페이지의 `derivedFrom`에 근거 문서를 항목으로 적는다. `path`는 `status`의 원본 문서 칸, `hash`는 현재 해시 칸이고 따옴표로 감싼다. 근거가 여럿이면 항목을 여럿 적는다.
    - e. **기록할 것이 없는 문서.** 읽었지만 페이지로 정리할 것이 없으면 `docs/ontology/skipped.yaml`에 같은 모양(`path`, `hash`)의 항목으로 적는다. 파일이 없으면 만든다. 넘긴 문서는 내용이 바뀌기 전까지 새 문서로 나오지 않는다.

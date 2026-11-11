@@ -405,8 +405,17 @@ remove *args:
     if [ -n "$wt_gitdir" ]; then
         dirty=$(git -C "$path" -c core.quotePath=false status --porcelain --untracked-files=all) || unreadable=1
         # 무시되는 파일은 거부 사유가 아니다. 루트 관리 파일(.onto/, 스킬 사본)은 알릴 것도 없다.
+        # `--directory`는 내용이 모두 무시되는 디렉토리를 한 줄로 접는다. 스킬 사본만 든 부모(`.claude/`, `.claude/skills/`)도 접힌 줄로 나오는데 그 안은 모두 루트 관리 파일이라
+        # 알릴 것이 없다. 다만 팀이 무시하는 파일(`.claude/settings.local.json`)이 함께 있으면 git이 그것까지 `.claude/` 한 줄로 접으므로, 줄을 버리지 않고
+        # 그 안을 파일 단위로 다시 나열해 루트 관리 파일을 거른 나머지를 알린다.
         ignored=$(git -C "$path" -c core.quotePath=false ls-files --others --ignored --exclude-standard --directory |
-            grep -v -e '^\.onto/' -e '^\.claude/skills/onto-' || true)
+            grep -v -e '^\.onto/' -e '^\.claude/skills/onto-' |
+            grep -v -x -e '\.claude/' -e '\.claude/skills/' || true)
+        inside_claude=$(git -C "$path" -c core.quotePath=false ls-files --others --ignored --exclude-standard -- .claude |
+            grep -v -e '^\.claude/skills/onto-' || true)
+        if [ -n "$inside_claude" ]; then
+            ignored="${ignored:+$ignored$nl}$inside_claude"
+        fi
     elif [ -d "$path" ] && [ -n "$(ls -A "$path")" ] && [ "$unreadable" = 0 ]; then
         stray=1  # 서브모듈이 초기화되지 않았는데 사용자의 파일이 들어 있다
     fi

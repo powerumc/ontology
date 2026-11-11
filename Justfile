@@ -11,6 +11,9 @@ default:
 
 # setup: 도구를 확인하고, 등록된 서브모듈을 초기화해 각각 추적 브랜치에 체크아웃한다.
 # 추적 브랜치는 루트가 기록한 커밋에 둔다. 원격의 최신으로 올리지 않는다.
+# 그 뒤 온톨로지 층(docs/ontology/ontology.yaml)이 있는 지식 저장소는 `just onto sync <이름>`으로 최신화한다. 복사된 기능(.onto/, 스킬 사본)은 지식 저장소의 커밋에
+# 들어가지 않으므로 새 기기에서 클론한 저장소에는 없다. 최신화는 커밋하지 않고, 온톨로지 층이 없는 저장소는 만들지 않는다(그런 저장소는 `just onto sync`나 `just repo add`가 구성한다).
+# 최신화가 실패해도 서브모듈 설정은 그대로 두고, 최신화하지 못한 저장소를 알리며 0이 아닌 종료 코드로 끝난다.
 
 # 새로 클론한 루트 저장소를 작업할 수 있는 상태로 만든다. 도구를 확인하고 서브모듈을 추적 브랜치에 체크아웃한다.
 [no-exit-message]
@@ -90,6 +93,9 @@ setup:
     }
 
     failed=""
+    knowledge=""
+    nl=$(printf '\nx')
+    nl=${nl%x}
     if [ -f .gitmodules ]; then
         # 종료 코드 1은 항목이 없다는 뜻이고, 그 밖은 .gitmodules를 읽지 못한 것이다(예: 충돌 표시가 남은 경우).
         status=0
@@ -108,12 +114,44 @@ setup:
             if ! setup_submodule "$name" "$path" </dev/null; then
                 echo "오류: $path: 서브모듈을 설정하지 못했다" >&2
                 failed="$failed $path"
+            else
+                # 최신화할 지식 저장소: `projects/<이름>/`에 초기화되어 있고 온톨로지 층이 있다. 줄바꿈으로 구분해 이름에 공백이 있어도 쪼개지지 않게 한다.
+                case $path in
+                    projects/.*|projects/*/*) ;;
+                    projects/*)
+                        if [ -e "$path/.git" ] && [ -f "$path/docs/ontology/ontology.yaml" ]; then
+                            knowledge="$knowledge${path#projects/}$nl"
+                        fi
+                        ;;
+                esac
             fi
         done <<EOF
     $keys
     EOF
     fi
+
+    # --- 복사된 기능의 최신화 ---
+    # 서브모듈 설정이 일부 실패했어도 설정된 저장소는 최신화한다. 최신화가 실패해도 위의 결과는 그대로이고, 실패한 저장소는 끝에 알린다.
+    sync_failed=""
+    if [ -n "$knowledge" ]; then
+        while IFS= read -r repo_name; do
+            [ -n "$repo_name" ] || continue
+            echo "projects/$repo_name: 복사된 기능을 최신화한다(just onto sync $repo_name)"
+            if ! "{{just_executable()}}" --justfile "{{justfile()}}" onto sync "$repo_name" </dev/null; then
+                sync_failed="$sync_failed $repo_name"
+            fi
+        done <<EOF
+    $knowledge
+    EOF
+    fi
+
+    status=0
     if [ -n "$failed" ]; then
         echo "설정하지 못한 서브모듈이 있습니다:$failed" >&2
-        exit 1
+        status=1
     fi
+    if [ -n "$sync_failed" ]; then
+        echo "최신화하지 못한 지식 저장소가 있습니다:$sync_failed. 이유는 위의 출력에 있습니다. 고친 뒤 \`just onto sync <이름>\`을 실행하세요" >&2
+        status=1
+    fi
+    exit "$status"

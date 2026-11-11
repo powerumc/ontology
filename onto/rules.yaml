@@ -8,7 +8,7 @@
 #           orphan-page: {enabled: false}
 #         sources:
 #           include: ["docs/**/*.md", "design/**/*.md"]
-# - 루트 전용: `push-gate`, 공유 범위 검사 항목(`invalid-scope`, `scope-violation`, `path-reference`, `outside-link`), 규칙을 담은
+# - 루트 전용: `push-gate`, `language.identifier-pattern`, 공유 범위 검사 항목(`invalid-scope`, `scope-violation`, `path-reference`, `outside-link`), 규칙을 담은
 #   `ontology.yaml` 자체의 문제를 보고하는 항목(`invalid-ontology-yaml`, `invalid-class-declaration`)과 지식 저장소 사이의 `name` 겹침
 #   (`duplicate-repository-name`)은 지식 저장소가 덮어쓸 수 없다. 덮어쓰려 하면 `invalid-rules` 오류로 알린다.
 # - 모르는 키는 오류다. 이 파일에 모르는 키가 있으면 도구가 파일과 키 이름을 알리며 멈춘다. 지식 저장소의 `rules`에 있으면
@@ -100,8 +100,9 @@ duplicates:
 # 언어 규칙.
 # - `identifier-pattern`: 식별자의 경로 조각(`/`로 나눈 조각 하나) 전체가 맞아야 하는 정규 표현식이다. 기본은 영어 소문자, 숫자, 하이픈이고,
 #   스크립트 검사의 `invalid-identifier`가 쓴다. `:`나 앞뒤 공백을 허용하는 형식은 거부한다(교차 참조 `<저장소 이름>:<식별자>`가 깨진다).
-#   맞지 않는 긴 식별자에서 지수 시간으로 되돌아가는 모양(`([a-z]+-?)+`, `(a|aa)+`)도 거부한다. 그런 형식은 스크립트 검사가 끝나지 않게 해 루트의 검사와
-#   푸시 관문을 멈춘다. 지식 저장소의 `rules`가 그런 형식을 적으면 그 저장소만 `invalid-rules` 오류로 보고하고 루트 기본 형식으로 검사한다.
+#   루트 전용이다. 식별자는 교차 참조의 문법이기도 해서 저장소마다 다를 이유가 약하고, 사용자가 쓴 정규 표현식이라 맞지 않는 긴 식별자에서 지수 시간으로 되돌아가는
+#   모양(`([a-z]+-?)+`, `(a|aa)+`)이면 스크립트 검사가 끝나지 않는다. 지식 저장소 하나의 규칙이 루트의 검사와 푸시 관문을 모든 사람에게서 멈추지 못하게,
+#   지식 저장소의 `rules`가 적으면 그 저장소만 `invalid-rules` 오류로 보고하고 루트 기본 형식으로 검사한다. 이 파일에는 그런 모양을 적지 않는다(적으면 이 파일의 소유자만 겪는다).
 # - `body`: 페이지의 제목과 본문을 쓰는 언어. `source`는 원본 문서의 언어를 따른다. `ko`, `en`, `pt-BR` 같은 언어 코드를 적으면 항상 그 언어로 쓴다.
 # - `aliases`: 페이지의 `aliases`에 별칭을 두는 언어 코드의 목록. 한·영 별칭을 둔다.
 # 식별자, 파일명, frontmatter 키, 클래스 이름은 영어로 쓴다. 이 중 `body`와 `aliases`는 에이전트 스킬과 규약 문서가 읽는다.

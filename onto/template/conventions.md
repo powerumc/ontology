@@ -190,7 +190,7 @@ rules:
     orphan-page: {enabled: false}                  # 검사 항목을 끄거나 심각도(error, warning)를 바꾼다
 ```
 
-모르는 키는 오류다. `rules`로 푸시 관문과 공유 범위 검사는 바꿀 수 없다.
+모르는 키는 오류다. `rules`로 푸시 관문, 식별자 형식(`language.identifier-pattern`), 공유 범위 검사는 바꿀 수 없다. 식별자 형식은 루트 기본 규칙 하나다.
 
 ## 확인
 

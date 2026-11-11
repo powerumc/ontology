@@ -143,6 +143,7 @@ def test_등록부터_제거까지_명령을_처음부터_끝까지_잇는다(sa
     # --- 제거: 푸시까지 마친 저장소는 강제 옵션 없이 흔적까지 완전히 떠난다 ---
     removed = just("repo", "remove", "billing")
     assert removed.returncode == 0, removed.stderr
+    assert ".claude" not in removed.stdout + removed.stderr and "무시되는 파일" not in removed.stdout + removed.stderr  # 복사된 스킬은 되살릴 수 없는 파일로 알리지 않는다
     assert not sub.exists()
     assert not (root.work / ".git" / "modules" / "projects" / "billing").exists()
     assert git("ls-files", "--stage", "--", "projects/billing").stdout == ""  # 서브모듈 등록이 사라졌다

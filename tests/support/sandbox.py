@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -124,21 +125,31 @@ class Sandbox:
         env: dict[str, str] | None = None,
         timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        """임시 디렉토리 안에서 명령을 실행한다. 출력은 텍스트로 모은다. `timeout`(초)을 넘기면 명령을 죽이고 `subprocess.TimeoutExpired`를 던진다."""
+        """임시 디렉토리 안에서 명령을 실행한다. 출력은 텍스트로 모은다.
+
+        `timeout`(초)을 넘기면 명령과 그 자손을 모두 죽이고 `subprocess.TimeoutExpired`를 던진다. `subprocess.run(timeout=…)`은 직접 자식(예: `uv run`)만 죽여서
+        그 아래의 도구 프로세스가 CPU를 쓰며 남는다. 그래서 시간 상한을 준 명령은 새 프로세스 그룹에서 띄워 그룹째 죽인다.
+        """
         cwd = Path(cwd).resolve()
         argv = [str(a) for a in args]
         for path in [cwd, *(cwd / p for p in _path_arguments(argv))]:  # 절대 경로 앞에서는 cwd가 무시된다
             if not path.resolve().is_relative_to(self.base):
                 raise AssertionError(f"임시 디렉토리 밖에서는 실행하지 않는다: {path}")
-        return subprocess.run(
-            argv,
-            cwd=cwd,
-            env=self.env if env is None else env,
-            capture_output=True,
-            text=True,
-            check=check,
-            timeout=timeout,
-        )
+        run_env = self.env if env is None else env
+        if timeout is None:
+            return subprocess.run(argv, cwd=cwd, env=run_env, capture_output=True, text=True, check=check)
+        with subprocess.Popen(
+            argv, cwd=cwd, env=run_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+        ) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except BaseException:  # 시간 초과, 키보드 인터럽트: 자손까지 남기지 않는다
+                _kill_group(process)
+                process.communicate()
+                raise
+        if check and process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, argv, stdout, stderr)
+        return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
     def git(self, *args: str | Path, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
         return self.run(["git", *args], cwd=cwd, check=check)
@@ -237,6 +248,14 @@ class Sandbox:
         도구의 가상환경은 만들어진다. 아끼는 것은 검사 한 번이다.
         """
         return RootRepo(self, name, source, push_gate=push_gate)
+
+
+def _kill_group(process: subprocess.Popen[str]) -> None:
+    """`process`가 이끄는 프로세스 그룹(`start_new_session`으로 띄운 것)을 모두 죽인다. 이미 끝났으면 아무것도 하지 않는다."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 def _which_or_fail(tool: str) -> str:

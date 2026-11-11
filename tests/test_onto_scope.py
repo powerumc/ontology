@@ -419,13 +419,12 @@ def test_파일_경로가_아닌_틀린_참조는_이전처럼_깨진_참조로_
 
 
 def test_식별자_형식이_점을_허용하는_저장소에서는_가리키는_엔티티가_있으면_확장자_모양도_식별자다(onto_cli):
-    dotted = {"language": {"identifier-pattern": "[a-z0-9.-]+"}}
+    onto_cli.replace_in_root_rules('identifier-pattern: "[a-z0-9-]+"', 'identifier-pattern: "[a-z0-9.-]+"')
     repos = {
         "billing": repo(
             "billing",
             page("component/core.v2", "Component", title="코어 2", partOf="project"),
             page("component/gateway", "Component", title="게이트웨이", partOf="project", dependsOn=["component/core.v2", "component/missing.v2"]),
-            rules=dotted,
         )
     }
 

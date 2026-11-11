@@ -372,6 +372,30 @@ def test_무시되는_파일만_있으면_제거를_막지_않는다(sandbox):
     assert not _sub(root).exists()
     assert ".onto" not in result.stdout + result.stderr  # 루트 관리 파일은 알릴 필요가 없다
     assert "onto-ingest" not in result.stdout + result.stderr
+    assert ".claude" not in result.stdout + result.stderr  # 스킬 사본만 든 부모 디렉토리(`.claude/`, `.claude/skills/`)도 알릴 필요가 없다
+    assert "무시되는 파일" not in result.stdout + result.stderr and "참고" not in result.stdout + result.stderr
+
+
+def test_스킬_사본의_부모_디렉토리에_팀이_무시하는_파일이_있으면_그_파일만_알린다(sandbox):
+    """git은 팀이 무시하는 `.claude/settings.local.json`까지 `.claude/` 한 줄로 접는다. 그 줄을 버리면 되살릴 수 없는 팀의 파일이 알림에서 사라진다."""
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    sub = _sub(root)
+    _ignore(sandbox, sub, ".onto/", ".claude/skills/onto-*/", ".claude/settings.local.json")
+    (sub / ".onto").mkdir()
+    (sub / ".onto" / "Justfile").write_text("# 복사된 기능\n", encoding="utf-8")
+    (sub / ".claude" / "skills" / "onto-ingest").mkdir(parents=True)
+    (sub / ".claude" / "skills" / "onto-ingest" / "SKILL.md").write_text("# 복사된 스킬\n", encoding="utf-8")
+    (sub / ".claude" / "settings.local.json").write_text("{}\n", encoding="utf-8")
+    assert sandbox.git("status", "--porcelain", cwd=sub).stdout == ""
+
+    result = _remove(sandbox, root, "billing")
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, result.stderr
+    assert ".claude/settings.local.json" in output and "무시" in output  # 팀의 파일은 알린다
+    assert "onto-ingest" not in output and ".onto" not in output  # 루트 관리 파일은 여전히 알리지 않는다
+    assert ".claude/skills/" not in output
 
 
 def test_거부할_때는_이유와_강제_옵션이_있다는_것을_알린다(sandbox):

@@ -5,6 +5,7 @@ import shutil
 
 import pytest
 
+from support.onto_cli import ONTOLOGY_DIR, page, repo
 from support.sandbox import REQUIRED_TOOLS
 
 
@@ -27,6 +28,7 @@ def test_서브모듈이_하나도_없는_루트_저장소에서도_성공한다
 
     assert result.returncode == 0, result.stderr
     assert not (clone / "projects").exists()
+    assert "최신화" not in result.stdout + result.stderr  # 최신화할 지식 저장소가 없으면 `onto sync`를 부르지 않는다
 
 
 def test_새로_클론한_뒤_setup하면_서브모듈이_초기화되고_추적_브랜치에_체크아웃된다(sandbox):
@@ -256,3 +258,129 @@ def test_이름에_공백이_든_서브모듈도_설정한다(sandbox):
     assert sandbox.branch(spaced) == "main"
     assert sandbox.head(spaced) == recorded
     assert sandbox.branch(clone / "projects" / "docs") == "main"
+
+
+# --- 복사된 기능의 최신화 ---------------------------------------------------------------
+# 복사된 기능(`.onto/`와 스킬 사본)은 지식 저장소의 커밋에 들어가지 않아서 새 기기에서 클론한 저장소에는 없다. setup이 온톨로지 층이 있는 지식 저장소를 최신화한다.
+
+SKILLS = ("onto-ingest", "onto-query", "onto-lint")
+
+
+def _configured(name: str) -> dict[str, str]:
+    """온톨로지 층(`docs/ontology/ontology.yaml`)이 있는 지식 저장소의 파일."""
+    return repo(name, page("component/gateway", "Component", title="게이트웨이", partOf="project"))
+
+
+def _committed_after_sync(sandbox, name: str = "billing"):
+    """등록하고 최신화한 지식 저장소를 사용자가 커밋해 올린 루트. 최신화가 만든 `.gitignore`, 지침 파일, 인덱스를 지식 저장소가 커밋하고 루트가 그 커밋을 가리킨다.
+
+    `(루트, 지식 저장소의 원격, 루트가 기록한 커밋)`을 돌려준다. 복사된 기능은 커밋하지 않았으므로 새로 클론한 저장소에는 없다.
+    """
+    root = sandbox.root()
+    remote = sandbox.knowledge_remote(name, files=_configured(name))
+    root.register(remote)
+    first = root.set_up_clone()
+    sub = first / "projects" / name
+    assert (sub / ".onto" / "Justfile").is_file()  # 최신화는 이 작업 사본에서 했다
+    sandbox.git("add", "-A", cwd=sub)
+    sandbox.git("commit", "-m", "onto: 최신화가 만든 파일을 커밋한다", cwd=sub)
+    sandbox.git("push", "origin", "main", cwd=sub)
+    return root, remote, root.point_at(name, sandbox.head(sub))
+
+
+def test_새_기기에서_클론하고_setup하면_온톨로지_층이_있는_지식_저장소에_복사된_기능과_스킬이_생긴다(sandbox):
+    root, _, recorded = _committed_after_sync(sandbox)
+    clone = root.clone()
+    root_head = sandbox.head(clone)
+
+    result = sandbox.just("setup", cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    sub = clone / "projects" / "billing"
+    assert (sub / ".onto" / "Justfile").is_file()
+    assert all((sub / ".claude" / "skills" / name / "SKILL.md").is_file() for name in SKILLS)
+    assert sandbox.branch(sub) == "main" and sandbox.head(sub) == recorded  # 서브모듈 설정은 그대로다
+    assert sandbox.head(clone) == root_head  # 커밋하지 않는다
+    assert sandbox.git("status", "--porcelain", cwd=clone).stdout == ""  # 서브모듈 포인터가 달라지지 않는다
+    assert sandbox.git("status", "--porcelain", "--untracked-files=all", cwd=sub).stdout == ""  # 복사된 기능은 지식 저장소의 git 상태에 나타나지 않는다
+    assert "just onto sync billing" in result.stdout  # 무엇을 했는지 알린다
+    # 지식 저장소 안에서 복사된 기능으로 그 저장소를 다룰 수 있다
+    for command in ("build", "validate", "status"):
+        inside = sandbox.just("-f", ".onto/Justfile", command, cwd=sub)
+        assert inside.returncode == 0, f"{command}: {inside.stdout}{inside.stderr}"
+
+
+def test_복사된_기능을_최신화한_뒤에도_setup을_다시_실행하면_결과가_같다(sandbox):
+    root, _, _ = _committed_after_sync(sandbox)
+    clone = root.clone()
+
+    first = sandbox.just("setup", cwd=clone)
+    after_first = _snapshot(sandbox, clone)
+    sub = clone / "projects" / "billing"
+    copied = {path.relative_to(sub).as_posix(): path.read_bytes() for path in sorted(sub.rglob("*")) if path.is_file() and ".git" not in path.relative_to(sub).parts[:1]}
+    second = sandbox.just("setup", cwd=clone)
+
+    assert first.returncode == 0 and second.returncode == 0, first.stderr + second.stderr
+    assert _snapshot(sandbox, clone) == after_first
+    assert {path.relative_to(sub).as_posix(): path.read_bytes() for path in sorted(sub.rglob("*")) if path.is_file() and ".git" not in path.relative_to(sub).parts[:1]} == copied
+    assert "바뀐 것이 없다" in second.stdout  # 두 번째 최신화는 아무것도 바꾸지 않는다
+
+
+def test_온톨로지_층이_없는_지식_저장소는_setup이_최신화하지_않는다(sandbox):
+    """온톨로지 층의 뼈대는 `just repo add`나 `just onto sync`가 구성한다. setup이 팀의 저장소에 없던 파일을 만들지 않는다."""
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    clone = root.clone()
+
+    result = sandbox.just("setup", cwd=clone)
+
+    sub = clone / "projects" / "billing"
+    assert result.returncode == 0, result.stderr
+    assert not (sub / ".onto").exists() and not (sub / ".claude").exists() and not (sub / ONTOLOGY_DIR).exists()
+    assert sandbox.git("status", "--porcelain", "--untracked-files=all", cwd=sub).stdout == ""
+    assert "최신화" not in result.stdout + result.stderr
+
+
+def test_최신화에_실패해도_서브모듈_설정은_그대로이고_실패한_저장소를_알리며_0이_아닌_종료_코드로_끝난다(sandbox):
+    root = sandbox.root()
+    stray = {**_configured("billing"), ".onto/stray.txt": "누가 커밋했다\n"}  # 지식 저장소가 `.onto/`를 이미 추적한다: 최신화가 사람이 확인할 것으로 알리고 1로 끝난다
+    recorded = root.register(sandbox.knowledge_remote("billing", files=stray))
+    root.register(sandbox.knowledge_remote("docs", files=_configured("docs")))
+    clone = root.clone()
+
+    result = sandbox.just("setup", cwd=clone)
+
+    assert result.returncode != 0
+    assert "최신화하지 못한 지식 저장소가 있습니다: billing" in result.stderr and "just onto sync" in result.stderr
+    assert "docs" not in result.stderr.split("최신화하지 못한")[-1]  # 성공한 저장소는 실패로 알리지 않는다
+    billing, docs = clone / "projects" / "billing", clone / "projects" / "docs"
+    assert sandbox.branch(billing) == "main" and sandbox.head(billing) == recorded  # 설정은 유지된다
+    assert sandbox.branch(docs) == "main"
+    assert (billing / ".onto" / "Justfile").is_file() and (docs / ".onto" / "Justfile").is_file()  # 나머지 저장소도 최신화한다
+
+
+def test_서브모듈을_설정하지_못해도_설정된_저장소는_최신화한다(sandbox):
+    root = sandbox.root()
+    broken = sandbox.knowledge_remote("broken", files=_configured("broken"))
+    root.register(broken)
+    root.register(sandbox.knowledge_remote("billing", files=_configured("billing")))
+    clone = root.clone()
+    shutil.rmtree(broken.url)
+
+    result = sandbox.just("setup", cwd=clone)
+
+    assert result.returncode != 0
+    assert "projects/broken" in result.stderr
+    assert (clone / "projects" / "billing" / ".onto" / "Justfile").is_file()
+    assert "최신화하지 못한" not in result.stderr  # 최신화는 실패하지 않았다
+
+
+def test_이름에_공백이_든_지식_저장소도_최신화한다(sandbox):
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing", files=_configured("my repo")), name="my repo")
+    clone = root.clone()
+
+    result = sandbox.just("setup", cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    assert (clone / "projects" / "my repo" / ".onto" / "Justfile").is_file()

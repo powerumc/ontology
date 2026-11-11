@@ -452,20 +452,38 @@ def test_언어_규칙의_식별자_형식을_루트_기본_규칙으로_바꾸�
     assert validate(onto_cli, root)[1] == []
 
 
-def test_언어_규칙의_식별자_형식을_지식_저장소가_덮어쓰면_그_저장소에만_적용된다(onto_cli):
+def test_식별자_형식은_루트_전용이라_지식_저장소가_덮어쓰려_하면_오류로_거부하고_루트_기본_형식으로_검사한다(onto_cli):
+    """식별자 형식은 교차 참조의 문법이기도 하고 사용자가 쓴 정규 표현식이라, 지식 저장소 하나가 루트의 검사를 멈추지 못하게 루트만 정한다."""
     lenient = {"language": {"identifier-pattern": "[a-z0-9_-]+"}}
     repos = {
         "billing": repo("billing", underscore_page(), rules=lenient),
         "shop": repo("shop", page("plan/launch_plan", "Plan", title="출시 계획", about="project")),
     }
 
-    findings = found(onto_cli, onto_cli.root(repos))
+    result, findings = validate(onto_cli, onto_cli.root(repos))
 
-    assert findings == [(ERROR, "shop", file("plan/launch_plan", "shop"), "invalid-identifier")]
+    assert sorted(f[:4] for f in findings) == [
+        (ERROR, "billing", yaml_file(), "invalid-rules"),
+        (ERROR, "billing", file("plan/auth_redesign"), "invalid-identifier"),  # 덮어쓰기는 버려지고 루트 기본 형식으로 검사한다
+        (ERROR, "shop", file("plan/launch_plan", "shop"), "invalid-identifier"),
+    ]
+    invalid = next(f for f in findings if f[3] == "invalid-rules")
+    assert "`rules.language.identifier-pattern`" in invalid[4] and "루트 전용" in invalid[4]
+    assert result.returncode == 1
+
+
+def test_규칙_명령은_식별자_형식을_덮어쓰려는_저장소를_오류로_끝낸다(onto_cli):
+    root = onto_cli.root({"billing": repo("billing", rules={"language": {"identifier-pattern": "[a-z0-9_-]+"}})})
+
+    result = onto_cli.run(root, "rules", "billing")
+
+    assert result.returncode == 1
+    assert yaml_file() in result.stderr and "rules.language.identifier-pattern" in result.stderr and "루트 전용" in result.stderr
 
 
 def test_식별자_오류의_설명은_적용된_식별자_형식을_알린다(onto_cli):
-    root = onto_cli.root({"billing": repo("billing", underscore_page(), rules={"language": {"identifier-pattern": "[a-z0-9]+"}})})
+    onto_cli.replace_in_root_rules('identifier-pattern: "[a-z0-9-]+"', 'identifier-pattern: "[a-z0-9]+"')
+    root = onto_cli.root({"billing": repo("billing", underscore_page())})
 
     message = next(f[4] for f in validate(onto_cli, root)[1] if f[3] == "invalid-identifier")
 
@@ -474,8 +492,8 @@ def test_식별자_오류의_설명은_적용된_식별자_형식을_알린다(o
 
 def test_식별자_형식이_대문자를_허용하는_저장소에서도_다른_디렉토리의_페이지는_디렉토리_오류가_남는다(onto_cli):
     """`Plan/`이 식별자 형식에 어긋나지 않으면 식별자 항목이 대신 보고하지 않으므로, 클래스별 디렉토리 항목이 보고한다."""
-    anywhere = {"language": {"identifier-pattern": "[A-Za-z0-9-]+"}}
-    root = onto_cli.root({"billing": repo("billing", page("Plan/lower", "Plan", title="계획", about="project"), rules=anywhere)})
+    onto_cli.replace_in_root_rules('identifier-pattern: "[a-z0-9-]+"', 'identifier-pattern: "[A-Za-z0-9-]+"')
+    root = onto_cli.root({"billing": repo("billing", page("Plan/lower", "Plan", title="계획", about="project"))})
 
     assert [f[3] for f in validate(onto_cli, root)[1]] == ["misplaced-page"]
 
@@ -650,13 +668,11 @@ def test_식별자_형식을_끈_저장소의_대문자_디렉토리_페이지�
 @pytest.mark.parametrize("pattern", [".+", "[a-z0-9:-]+", "[a-z0-9 -]+", "\\S+"], ids=["아무_글자", "콜론", "공백", "공백이_아닌_글자"])
 def test_참조_문법을_깨는_식별자_형식은_규칙_오류로_거부한다(onto_cli, pattern):
     """`:`는 교차 참조의 경계이고 참조는 앞뒤 공백을 뗀다. 이를 허용하는 형식에서는 식별자가 참조로 가리킬 수 없는 페이지가 생긴다."""
-    root = onto_cli.root({"billing": repo("billing", rules={"language": {"identifier-pattern": pattern}})})
+    onto_cli.replace_in_root_rules('identifier-pattern: "[a-z0-9-]+"', f"identifier-pattern: {json.dumps(pattern)}")
 
-    result, findings = validate(onto_cli, root)
+    result = onto_cli.run(onto_cli.root({}), "rules")
 
-    assert [f[:4] for f in findings] == [(ERROR, "billing", yaml_file(), "invalid-rules")]
-    assert "`rules.language.identifier-pattern`" in findings[0][4] and ":" in findings[0][4]
-    assert result.returncode == 1
+    assert result.returncode == 1 and "`language.identifier-pattern`" in result.stderr and ":" in result.stderr
 
 
 def test_루트_기본_규칙의_식별자_형식도_참조_문법을_깨면_오류로_끝난다(onto_cli):
@@ -673,40 +689,29 @@ def test_루트_기본_규칙의_식별자_형식도_참조_문법을_깨면_오
     ids=["밑줄", "대문자", "소문자", "하이픈으로_이은_낱말", "길이_제한", "낱말과_하이픈의_반복", "선택적인_점_조각"],
 )
 def test_참조_문법을_깨지_않는_식별자_형식은_받아들인다(onto_cli, pattern):
-    root = onto_cli.root({"billing": repo("billing", rules={"language": {"identifier-pattern": pattern}})})
+    onto_cli.replace_in_root_rules('identifier-pattern: "[a-z0-9-]+"', f"identifier-pattern: {json.dumps(pattern)}")
+    root = onto_cli.root({"billing": repo("billing")})
 
     assert validate(onto_cli, root)[1] == []
 
 
 # 식별자 형식은 사용자가 쓴 정규 표현식이다. 맞지 않는 긴 식별자에서 지수 시간으로 되돌아가는 모양이면 `validate`가 끝나지 않아, 지식 저장소 하나의 규칙이
-# 루트의 검사와 푸시 관문을 모든 사람에게서 멈춘다. 그런 형식은 규칙 오류로 거부하고 그 저장소만 루트 기본 형식으로 검사한다.
+# 루트의 검사와 푸시 관문을 모든 사람에게서 멈춘다. 그래서 식별자 형식은 루트 전용이고, 지식 저장소가 적으면 그 저장소만 오류로 보고하고 루트 기본 형식으로 검사한다.
 BACKTRACKING_PATTERNS = {
     "중첩된_반복": "([a-z]+-?)+",
+    "접두어가_붙은_중첩된_반복": "(adr|rfc)-([a-z0-9]+-?)+",
     "반복의_반복": "([a-z0-9]+)*",
-    "겹치는_선택지": "(a|aa|[a-z-])+",
-    "글자_모임의_반복": "([a-z]*-?)*",
-    "이중_중첩": "(([a-z]+)+-?)",
+    "글자_모임의_반복": "ab(c+)+",
 }
-SLOW_IDENTIFIER = "a" * 48 + "Z"  # 대문자가 들어 있어 형식에 맞지 않는다
+SLOW_IDENTIFIER = "adr-" + "a" * 48 + "_x"  # 밑줄이 들어 있어 어느 형식에도 맞지 않는다
 
 
 @pytest.mark.parametrize("pattern", BACKTRACKING_PATTERNS.values(), ids=BACKTRACKING_PATTERNS.keys())
-def test_지수_시간으로_되돌아갈_수_있는_식별자_형식은_규칙_오류로_거부한다(onto_cli, pattern):
-    root = onto_cli.root({"billing": repo("billing", rules={"language": {"identifier-pattern": pattern}})})
-
-    result = onto_cli.run(root, "validate", timeout=60)
-    findings = [tuple(line.split("\t")) for line in result.stdout.splitlines()]
-
-    assert [f[:4] for f in findings] == [(ERROR, "billing", yaml_file(), "invalid-rules")]
-    assert "`rules.language.identifier-pattern`" in findings[0][4] and "지수 시간" in findings[0][4]
-    assert result.returncode == 1
-
-
-def test_지수_시간_식별자_형식을_쓴_저장소도_끝나고_그_저장소만_루트_기본_형식으로_검사한다(onto_cli):
-    """맞지 않는 긴 식별자는 모양이 위험한 형식에서 끝나지 않는다. 형식을 거부하므로 그 저장소는 루트 기본 형식으로 검사하고 다른 저장소는 영향이 없다."""
+def test_지수_시간으로_되돌아갈_수_있는_식별자_형식을_지식_저장소가_적어도_검사는_끝나고_그_저장소만_오류가_된다(onto_cli, pattern):
+    """모양이 어떻든 지식 저장소의 식별자 형식은 쓰이지 않는다. 맞지 않는 긴 식별자가 있어도 루트 기본 형식으로 곧 끝난다."""
     slow = page(f"component/{SLOW_IDENTIFIER}", "Component", title="긴 식별자", partOf="project")
     repos = {
-        "billing": repo("billing", slow, rules={"language": {"identifier-pattern": "([a-z]+-?)+"}}),
+        "billing": repo("billing", slow, rules={"language": {"identifier-pattern": pattern}}),
         "shop": repo("shop", page("component/api", "Component", title="API", partOf="project")),
     }
 
@@ -715,14 +720,6 @@ def test_지수_시간_식별자_형식을_쓴_저장소도_끝나고_그_저장
 
     assert sorted((f[1], f[3]) for f in findings) == [("billing", "invalid-identifier"), ("billing", "invalid-rules")]
     assert result.returncode == 1
-
-
-def test_루트_기본_규칙의_식별자_형식이_지수_시간으로_되돌아가는_모양이면_오류로_끝난다(onto_cli):
-    onto_cli.replace_in_root_rules('identifier-pattern: "[a-z0-9-]+"', 'identifier-pattern: "([a-z]+-?)+"')
-
-    result = onto_cli.run(onto_cli.root({}), "rules", timeout=60)
-
-    assert result.returncode == 1 and "`language.identifier-pattern`" in result.stderr and "지수 시간" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -973,8 +970,8 @@ def test_identifier_pattern을_파일_이름에_맞게_바꾼_저장소에서도
 )
 def test_식별자_형식이_견본_조각을_빠져나가도_콜론이나_앞뒤_공백이_든_경로_조각은_식별자_오류로_보고한다(onto_cli, pattern, identifier):
     """참조는 `:`를 저장소 이름과의 경계로 읽고 앞뒤 공백을 뗀다. 그런 조각은 형식이 허용해도 참조로 가리킬 수 없다."""
-    rules = {"language": {"identifier-pattern": pattern}}
-    root = onto_cli.root({"billing": repo("billing", page(identifier, "Component", title="C", partOf="project"), rules=rules)})
+    onto_cli.replace_in_root_rules('identifier-pattern: "[a-z0-9-]+"', f"identifier-pattern: {json.dumps(pattern)}")
+    root = onto_cli.root({"billing": repo("billing", page(identifier, "Component", title="C", partOf="project"))})
 
     result, findings = validate(onto_cli, root)
 

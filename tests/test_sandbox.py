@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -240,3 +241,31 @@ def test_온톨로지_도구_사본은_병렬_실행의_워커마다_따로_있�
     worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
 
     assert any(part.startswith(f"onto-tool-{worker}") for part in onto_tool_dir.parts)
+
+
+def test_시간_상한을_넘으면_명령의_자손_프로세스까지_죽인다(sandbox):
+    """`subprocess.run(timeout=…)`은 직접 자식만 죽인다. 그 아래에서 도는 도구가 CPU를 쓰며 남아 다른 테스트를 느리게 하면 안 된다."""
+    pidfile = sandbox.base / "grandchild.pid"
+    script = f"sleep 300 & echo $! > '{pidfile}'; wait"
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        sandbox.run(["sh", "-c", script], cwd=sandbox.base, timeout=1)
+
+    grandchild = int(pidfile.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            os.kill(grandchild, 0)
+        except ProcessLookupError:
+            return  # 죽었다
+        time.sleep(0.1)
+    os.kill(grandchild, 9)  # 테스트가 프로세스를 남기지 않게 치운다
+    pytest.fail("시간 상한을 넘긴 명령의 자손 프로세스가 남아 있다")
+
+
+def test_시간_상한_안에_끝난_명령은_결과를_그대로_돌려준다(sandbox):
+    result = sandbox.run(["sh", "-c", "echo 안녕; echo 오류 >&2; exit 3"], cwd=sandbox.base, check=False, timeout=30)
+
+    assert (result.returncode, result.stdout, result.stderr) == (3, "안녕\n", "오류\n")
+    with pytest.raises(subprocess.CalledProcessError):
+        sandbox.run(["sh", "-c", "exit 4"], cwd=sandbox.base, timeout=30)
