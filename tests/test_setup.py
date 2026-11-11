@@ -170,3 +170,79 @@ def test_초기화하지_못한_서브모듈이_있어도_나머지를_설정하
     assert result.returncode != 0
     assert "projects/broken" in result.stderr
     assert sandbox.branch(clone / "projects" / "billing") == "main"
+
+
+def test_기록된_커밋에서_detached된_서브모듈의_로컬_브랜치에_푸시하지_않은_커밋이_있으면_브랜치를_되돌리지_않는다(sandbox):
+    """서브모듈에서 커밋한 뒤 `git submodule update`를 하면 HEAD가 기록된 커밋으로 detached된다."""
+    root = sandbox.root()
+    recorded = root.register(sandbox.knowledge_remote("billing"))
+    clone = root.clone()
+    assert sandbox.just("setup", cwd=clone).returncode == 0
+    sub = clone / "projects" / "billing"
+    (sub / "local.md").write_text("# 로컬 작업\n", encoding="utf-8")
+    sandbox.git("add", "local.md", cwd=sub)
+    sandbox.git("commit", "-m", "local work", cwd=sub)
+    local_tip = sandbox.head(sub)
+    sandbox.git("submodule", "update", "--", "projects/billing", cwd=clone)
+    assert sandbox.head(sub) == recorded and sandbox.branch(sub) is None
+
+    result = sandbox.just("setup", cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    assert sandbox.git("rev-parse", "main", cwd=sub).stdout.strip() == local_tip  # 로컬 커밋을 잃지 않았다
+    assert sandbox.branch(sub) is None
+    assert "projects/billing" in result.stdout + result.stderr  # 보고한다
+
+
+def test_인자_없이_just만_부르면_명령_목록을_보여_주고_setup을_실행하지_않는다(sandbox):
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    clone = root.clone()
+
+    result = sandbox.just(cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    assert "setup" in result.stdout
+    assert not (clone / "projects" / "billing" / "README.md").exists()  # 서브모듈을 초기화하지 않았다
+
+
+def test_gitmodules를_읽지_못하면_성공으로_넘기지_않고_0이_아닌_종료_코드로_끝난다(sandbox):
+    """동시에 저장소를 붙이다 `.gitmodules`에 충돌 표시가 남은 경우."""
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    clone = root.clone()
+    (clone / ".gitmodules").write_text("<<<<<<< HEAD\n[submodule \"projects/billing\"]\n=======\n>>>>>>> other\n", encoding="utf-8")
+
+    result = sandbox.just("setup", cwd=clone)
+
+    assert result.returncode != 0
+    assert ".gitmodules" in result.stderr
+
+
+def test_gitmodules에는_있지만_루트에_기록된_커밋이_없는_항목은_건너뛰고_보고한다(sandbox):
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    root.register(sandbox.knowledge_remote("docs"))
+    clone = root.clone()
+    sandbox.git("rm", "--cached", "projects/billing", cwd=clone)  # gitlink만 사라지고 .gitmodules 항목이 남는다
+
+    result = sandbox.just("setup", cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    assert "projects/billing" in result.stderr  # 보고한다
+    assert sandbox.branch(clone / "projects" / "docs") == "main"  # 나머지는 설정한다
+
+
+def test_이름에_공백이_든_서브모듈도_설정한다(sandbox):
+    root = sandbox.root()
+    recorded = root.register(sandbox.knowledge_remote("billing"), name="my repo")
+    root.register(sandbox.knowledge_remote("docs"))
+    clone = root.clone()
+
+    result = sandbox.just("setup", cwd=clone)
+
+    assert result.returncode == 0, result.stderr
+    spaced = clone / "projects" / "my repo"
+    assert sandbox.branch(spaced) == "main"
+    assert sandbox.head(spaced) == recorded
+    assert sandbox.branch(clone / "projects" / "docs") == "main"

@@ -2,12 +2,17 @@
 
 테스트 받침이 지키는 약속:
 
-- 네트워크를 쓰지 않는다. 원격은 모두 임시 디렉토리의 로컬 bare 저장소다.
+- 네트워크를 쓰지 않는다. 원격은 모두 임시 디렉토리의 로컬 bare 저장소이고, 로컬 파일 전송 말고는
+  전부 거부한다(실수로 쓴 https·ssh 주소가 접속을 시도하지 않고 바로 실패한다).
 - 사용자의 전역 git 설정을 읽지도 바꾸지도 않는다. 전역 설정 자리에 임시 파일을 끼운다.
 - 로컬 경로를 원격으로 하는 서브모듈 전송은 최근 git이 기본으로 막는다. 이 환경 안에서만 허용한다.
 - 루트 저장소는 이 저장소의 추적 파일을 임시 디렉토리로 복사해 만든다.
   이 저장소의 `Justfile`을 직접 가리켜 실행하면 등록 명령이 이 작업 사본에 서브모듈을 만들기 때문이다.
-- 임시 디렉토리 밖에서는 명령을 실행하지 않는다.
+- 임시 디렉토리 밖에서는 명령을 실행하지 않는다. 실행 위치(`cwd`)뿐 아니라 `git -C`, `--git-dir`,
+  `--work-tree`, `just --justfile`, `--working-directory`가 가리키는 경로도 검사한다.
+  임시 디렉토리 자체를 이 저장소 안에 만드는 것도 거부한다.
+- 이 저장소의 가상환경(`uv run`이 남기는 `VIRTUAL_ENV`와 PATH 항목)이 샌드박스에 새지 않는다.
+  샌드박스에서 `python3`를 직접 부르는 명령이 이 저장소의 의존성으로 도는 일을 막는다.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 # 이 저장소의 작업 사본. 추적 파일을 복사하는 원본으로만 쓰고, 여기서 명령을 실행하지 않는다.
@@ -31,9 +37,18 @@ _GITCONFIG = """\
 	defaultBranch = main
 [commit]
 	gpgsign = false
+[protocol]
+	allow = never
 [protocol "file"]
 	allow = always
 """
+
+# `uv run`이 실행 중인 환경을 알리려고 남기는 변수. 샌드박스 안의 명령에는 필요 없다.
+_RUNNER_STATE_VARS = ("VIRTUAL_ENV", "UV", "UV_RUN_RECURSION_DEPTH")
+
+# 경로를 받는 명령줄 인자. 실행 위치(`cwd`)와 별개로 명령이 일하는 곳을 바꾼다.
+_GIT_PATH_OPTIONS = ("-C", "--git-dir", "--work-tree")
+_JUST_PATH_OPTIONS = ("--justfile", "-f", "--working-directory", "-d")
 
 
 class Sandbox:
@@ -41,6 +56,9 @@ class Sandbox:
 
     def __init__(self, base: Path) -> None:
         self.base = base.resolve()
+        if self.base.is_relative_to(SOURCE_REPO):
+            # just와 git은 위로 찾아 올라가 이 저장소의 Justfile과 .git을 쓰게 된다.
+            raise AssertionError(f"임시 디렉토리는 이 저장소 밖에 있어야 한다: {self.base}")
         self._counter = 0
 
         config_dir = self.base / "_env"
@@ -48,12 +66,18 @@ class Sandbox:
         gitconfig = config_dir / "gitconfig"
         gitconfig.write_text(_GITCONFIG, encoding="utf-8")
 
-        # 상위 프로세스가 물려준 GIT_*(예: GIT_DIR), JUST_* 는 모두 버린다.
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "JUST_"))}
+        # 상위 프로세스가 물려준 GIT_*(예: GIT_DIR), JUST_* 와 실행 중인 가상환경의 흔적은 모두 버린다.
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(("GIT_", "JUST_")) and k not in _RUNNER_STATE_VARS
+        }
+        env["PATH"] = _path_without_virtualenv(env.get("PATH", ""))
         env.update(
             GIT_CONFIG_GLOBAL=str(gitconfig),  # ~/.gitconfig 와 XDG 전역 설정을 대신한다
             GIT_CONFIG_NOSYSTEM="1",
             XDG_CONFIG_HOME=str(config_dir / "xdg"),  # ~/.config/git/ignore 같은 전역 파일도 읽지 않는다
+            GIT_CEILING_DIRECTORIES=str(self.base),  # 저장소가 없는 샌드박스 디렉토리에서 위의 저장소를 찾지 않는다
             GIT_TERMINAL_PROMPT="0",
         )
         self.env = env
@@ -70,10 +94,12 @@ class Sandbox:
     ) -> subprocess.CompletedProcess[str]:
         """임시 디렉토리 안에서 명령을 실행한다. 출력은 텍스트로 모은다."""
         cwd = Path(cwd).resolve()
-        if not cwd.is_relative_to(self.base):
-            raise AssertionError(f"임시 디렉토리 밖에서는 실행하지 않는다: {cwd}")
+        argv = [str(a) for a in args]
+        for path in [cwd, *(cwd / p for p in _path_arguments(argv))]:  # 절대 경로 앞에서는 cwd가 무시된다
+            if not path.resolve().is_relative_to(self.base):
+                raise AssertionError(f"임시 디렉토리 밖에서는 실행하지 않는다: {path}")
         return subprocess.run(
-            [str(a) for a in args],
+            argv,
             cwd=cwd,
             env=self.env if env is None else env,
             capture_output=True,
@@ -141,15 +167,56 @@ class Sandbox:
         """가짜 지식 저장소와 그 로컬 bare 원격을 만든다. 기본 브랜치는 `main`이다."""
         return KnowledgeRemote(self, name, files)
 
-    def root(self) -> RootRepo:
-        """루트 저장소를 만든다. 이 저장소의 추적 파일을 복사해 커밋하고 bare 원격에 푸시한다."""
-        return RootRepo(self)
+    def root(self, *, name: str = "root", source: Path = SOURCE_REPO) -> RootRepo:
+        """루트 저장소를 만든다. `source`(기본은 이 저장소)의 추적 파일을 복사해 커밋하고 bare 원격에 푸시한다.
+
+        한 테스트에서 둘 이상 만들려면 `name`을 달리 준다.
+        """
+        return RootRepo(self, name, source)
 
 
 def _which_or_fail(tool: str) -> str:
     found = shutil.which(tool)
     if found is None:
         raise RuntimeError(f"테스트에 필요한 도구가 없다: {tool}")
+    return found
+
+
+def _path_without_virtualenv(path: str) -> str:
+    """PATH에서 지금 도는 가상환경의 `bin`을 뺀다. 가상환경 밖에서 돌 때는 그대로 둔다(`/usr/bin`을 뺄 수 없다)."""
+    if sys.prefix == sys.base_prefix:
+        return path
+    venv_bin = (Path(sys.prefix) / "bin").resolve()
+    return os.pathsep.join(p for p in path.split(os.pathsep) if not p or Path(p).resolve() != venv_bin)
+
+
+def _path_arguments(argv: list[str]) -> list[str]:
+    """명령줄에서 명령이 일할 위치를 바꾸는 경로 인자를 찾는다. git은 서브커맨드 앞의 전역 옵션만 본다."""
+    found: list[str] = []
+    tool = Path(argv[0]).name
+    if tool == "git":
+        i = 1
+        while i < len(argv) and argv[i].startswith("-"):
+            name, has_value, value = argv[i].partition("=")
+            if name in _GIT_PATH_OPTIONS:
+                if has_value:
+                    found.append(value)
+                elif i + 1 < len(argv):
+                    found.append(argv[i + 1])
+                    i += 1
+            elif name == "-c" and not has_value:
+                i += 1  # `-c <이름=값>`의 값은 건너뛴다
+            i += 1
+    elif tool == "just":
+        for i, arg in enumerate(argv[1:], start=1):
+            name, has_value, value = arg.partition("=")
+            if name in _JUST_PATH_OPTIONS:
+                if has_value:
+                    found.append(value)
+                elif i + 1 < len(argv):
+                    found.append(argv[i + 1])
+            elif arg[:2] in ("-f", "-d") and not arg.startswith("--") and len(arg) > 2:
+                found.append(arg[2:])  # `-fJustfile`처럼 붙여 쓴 경우
     return found
 
 
@@ -201,15 +268,16 @@ class RootRepo:
     새로 클론한 상태를 만들려면 `clone()`을 쓴다. 서브모듈 등록은 이 임시 저장소에서만 한다.
     """
 
-    def __init__(self, sandbox: Sandbox) -> None:
+    def __init__(self, sandbox: Sandbox, name: str, source: Path) -> None:
         self._sandbox = sandbox
+        self._name = name
         self._clones = 0
-        self.origin = sandbox.new_dir("remotes", "root.git")
-        self.work = sandbox.new_dir("author", "root")
+        self.origin = sandbox.new_dir("remotes", f"{name}.git")
+        self.work = sandbox.new_dir("author", name)
 
         sandbox.git("init", "--bare", "--initial-branch=main", self.origin, cwd=self.origin)
         sandbox.git("init", "--initial-branch=main", cwd=self.work)
-        _copy_tracked_files(sandbox, SOURCE_REPO, self.work)
+        _copy_tracked_files(sandbox, source, self.work)
         sandbox.git("remote", "add", "origin", self.origin, cwd=self.work)
         sandbox.git("add", "-A", cwd=self.work)
         sandbox.git("commit", "-m", "init", cwd=self.work)
@@ -247,7 +315,7 @@ class RootRepo:
     def clone(self) -> Path:
         """원격에서 새로 클론한다. 서브모듈은 초기화하지 않는다. 새 기기에서 받은 직후의 상태다."""
         self._clones += 1
-        dest = self._sandbox.base / "clones" / f"root-{self._clones}"
+        dest = self._sandbox.base / "clones" / f"{self._name}-{self._clones}"
         dest.parent.mkdir(exist_ok=True)
         self._sandbox.git("clone", self.origin, dest, cwd=dest.parent)
         return dest
@@ -259,17 +327,27 @@ def _write(path: Path, text: str) -> None:
 
 
 def _copy_tracked_files(sandbox: Sandbox, src: Path, dest: Path) -> None:
-    """`src` 저장소가 추적하는 파일만 `dest`로 복사한다. 작업 트리의 현재 내용을 복사한다."""
-    # 이 저장소의 작업 사본을 읽을 뿐이므로 임시 디렉토리 검사를 거치지 않고 격리된 환경으로 직접 실행한다.
+    """`src` 저장소가 추적하는 파일을 `dest`로 복사한다. 작업 트리의 현재 내용을 복사한다.
+
+    서브모듈 등록(gitlink와 `.gitmodules`)은 복사하지 않는다. 받아 쓰는 루트는 자기 지식 저장소의
+    등록을 커밋해 두는데(ADR 0007), 이를 가져오면 샌드박스가 실제 원격으로 나가려 한다.
+    샌드박스 루트는 등록이 없는 깨끗한 루트다.
+
+    `git add`하지 않은 새 파일은 추적 파일이 아니라서 복사되지 않는다.
+    """
+    # `src`를 읽기만 하므로 임시 디렉토리 검사를 거치지 않고 격리된 환경으로 직접 실행한다.
     listing = subprocess.run(
-        ["git", "ls-files", "-z"],
+        ["git", "ls-files", "--stage", "-z"],
         cwd=src,
         env=sandbox.env,
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    for rel in filter(None, listing.split("\0")):
+    for entry in filter(None, listing.split("\0")):
+        meta, rel = entry.split("\t", 1)
+        if meta.split()[0] == "160000" or rel == ".gitmodules":
+            continue
         source = src / rel
         if not (source.exists() or source.is_symlink()):
             continue  # 지워졌지만 아직 스테이지하지 않은 파일

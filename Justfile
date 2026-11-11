@@ -4,6 +4,11 @@ mod git
 mod repo
 mod onto
 
+# 인자 없이 `just`만 부르면 명령 목록을 보여 준다. 서브모듈을 바꾸는 `setup`이 기본으로 실행되지 않게 한다.
+[private]
+default:
+    @"{{just_executable()}}" --justfile "{{justfile()}}" --list
+
 # 새로 클론한 루트 저장소를 작업할 수 있는 상태로 만든다.
 # 도구를 확인하고, 등록된 서브모듈을 초기화해 각각 추적 브랜치에 체크아웃한다.
 # 추적 브랜치는 루트가 기록한 커밋에 둔다. 원격의 최신으로 올리지 않는다.
@@ -31,7 +36,10 @@ setup:
 
         # 루트가 기록한 커밋. 인덱스의 gitlink 항목은 "160000 <해시> 0<탭><경로>"이다.
         set -- $(git ls-files --stage -- "$path")
-        [ "${1:-}" = "160000" ] || return 0
+        if [ "${1:-}" != "160000" ]; then
+            echo "주의: $path: .gitmodules에는 있지만 루트에 기록된 커밋이 없어 건너뛰었다" >&2
+            return 0
+        fi
         recorded=$2
 
         if [ ! -e "$path/.git" ]; then
@@ -82,15 +90,27 @@ setup:
 
     failed=""
     if [ -f .gitmodules ]; then
-        for key in $(git config -f .gitmodules --name-only --get-regexp '^submodule\..*\.path$'); do
+        # 종료 코드 1은 항목이 없다는 뜻이고, 그 밖은 .gitmodules를 읽지 못한 것이다(예: 충돌 표시가 남은 경우).
+        status=0
+        keys=$(git config -f .gitmodules --name-only --get-regexp '^submodule\..*\.path$') || status=$?
+        if [ "$status" -gt 1 ]; then
+            echo "오류: .gitmodules를 읽지 못했다" >&2
+            exit 1
+        fi
+        # 이름에 공백이 있어도 쪼개지지 않도록 줄 단위로 읽는다. 서브모듈 안의 명령(ssh 등)이
+        # 반복문의 입력을 먹지 않도록 setup_submodule에는 빈 입력을 준다.
+        while IFS= read -r key; do
+            [ -n "$key" ] || continue
             name=${key#submodule.}
             name=${name%.path}
             path=$(git config -f .gitmodules --get "$key")
-            if ! setup_submodule "$name" "$path"; then
+            if ! setup_submodule "$name" "$path" </dev/null; then
                 echo "오류: $path: 서브모듈을 설정하지 못했다" >&2
                 failed="$failed $path"
             fi
-        done
+        done <<EOF
+    $keys
+    EOF
     fi
     if [ -n "$failed" ]; then
         echo "설정하지 못한 서브모듈이 있습니다:$failed" >&2
