@@ -30,8 +30,10 @@ HTML 태그의 `href`와 `src`(따옴표가 없어도 된다. 태그 밖의 평�
 대상이 있는지는 참조 검사가 본다.
 """
 
+import html
 import posixpath
 import re
+import string
 from urllib.parse import unquote
 
 from .textfile import split_lines
@@ -63,6 +65,13 @@ _HTML_ATTRIBUTE = re.compile(r"""(?P<name>[^\s/>=]++)(?:\s*+=\s*+(?:"(?P<double>
 _LINK_ATTRIBUTES = frozenset({"href", "src", "xlink:href"})
 _SCHEME = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*):")
 _DRIVE = re.compile(r"[A-Za-z]:[\\/]")
+# 조각(`#제목`)이나 질의(`?…`)를 여는 글자. 이스케이프한 것(`\#`)과 숫자 엔티티(`&#38;`)의 `#`은 아니다.
+_QUERY_OR_FRAGMENT = re.compile(r"(?<![\\&])[#?]")
+# 링크 대상 안의 Markdown 백슬래시 이스케이프(문장 부호 앞의 `\`)와 HTML 엔티티. 한 번에 훑어, 이스케이프한 `\&amp;`가 엔티티로 풀리지 않게 한다.
+# `.`, `/`, `\` 앞의 `\`는 풀지 않는다. 그 `\`는 경로 구분자(`..\term\a.md`)로 읽는다.
+_ESCAPABLE = frozenset(string.punctuation)  # Markdown이 백슬래시로 이스케이프할 수 있는 글자
+_ESCAPES = _ESCAPABLE - {".", "/", "\\"}
+_ESCAPE_OR_ENTITY = re.compile(r"\\([" + re.escape(string.punctuation) + r"])|&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]*);")
 
 
 def destinations(body: str) -> list[str]:
@@ -144,9 +153,12 @@ def _inline_destination(text: str, start: int) -> str:
         end = text.find(">", index)
         newline = text.find("\n", index)
         return text[index + 1 : end] if end != -1 and (newline == -1 or end < newline) else ""
-    depth = 0  # 대상 안의 괄호는 짝이 맞으면 대상의 일부다
+    depth = 0  # 대상 안의 괄호는 짝이 맞으면 대상의 일부다. 이스케이프한 괄호(`\\(`)는 세지 않는다
     end = index
     while end < len(text) and not text[end].isspace():
+        if text[end] == "\\" and text[end + 1 : end + 2] in _ESCAPABLE:
+            end += 2
+            continue
         if text[end] == "(":
             depth += 1
         elif text[end] == ")":
@@ -203,9 +215,19 @@ def cross_reference(destination: str) -> tuple[str, str] | None:
     name, separator, rest = target.partition(":")
     if not separator or not name or rest.startswith("//") or _DRIVE.match(target) or name.lower() == "file":
         return None
-    return name.strip(), re.split(r"[#?]", rest, maxsplit=1)[0].strip()
+    return name.strip(), _QUERY_OR_FRAGMENT.split(rest, maxsplit=1)[0].strip()
 
 
 def _path_of(target: str) -> str:
-    """스킴이 없는 링크 대상의 경로 부분. 조각과 질의를 떼고 퍼센트 인코딩을 풀고 `\\`를 `/`로 읽는다. 문서 안의 조각(`#제목`)이면 빈 글자다."""
-    return unquote(re.split(r"[#?]", target, maxsplit=1)[0]).replace("\\", "/")
+    """스킴이 없는 링크 대상의 경로 부분. 조각과 질의를 떼고, Markdown 백슬래시 이스케이프와 HTML 엔티티와 퍼센트 인코딩을 풀고, `\\`를 `/`로 읽는다.
+
+    문서 안의 조각(`#제목`)이면 빈 글자다. `.`, `/`, `\\` 앞의 `\\`는 이스케이프가 아니라 경로 구분자다(웹 브라우저가 `\\`를 `/`로 읽는다).
+    """
+    path = _QUERY_OR_FRAGMENT.split(target, maxsplit=1)[0]
+    return unquote(_ESCAPE_OR_ENTITY.sub(_unescape, path)).replace("\\", "/")
+
+
+def _unescape(match: re.Match[str]) -> str:
+    if match[1] is not None:
+        return match[1] if match[1] in _ESCAPES else match[0]
+    return html.unescape(match[0])

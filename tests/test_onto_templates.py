@@ -188,6 +188,7 @@ def test_규약_문서가_본문_링크의_대상이_없으면_깨진_참조라�
 
     assert "`broken-reference`" in section  # 교차 참조가 가리키는 엔티티와 저장소 안의 상대 링크가 가리키는 파일이 있어야 한다
     assert "교차 참조" in section and "상대 링크" in section
+    assert "대소문자" in section  # 경로의 대소문자는 실제 파일과 같게 쓴다
 
 
 def test_규약_문서가_Project의_dependsOn을_관계_표와_ontology_yaml_절에_적는다():

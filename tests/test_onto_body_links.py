@@ -9,6 +9,8 @@
 - 지식 저장소 안에서 돌리면 다른 저장소를 가리키는 교차 참조는 건너뛰고(그 저장소를 알 수 없다), 상대 링크는 검사한다.
 """
 
+import unicodedata
+
 import pytest
 
 from support.onto_cli import ONTOLOGY_DIR, REPOSITORY, page, repo
@@ -33,7 +35,7 @@ def of_check(findings, *checks: str) -> list[tuple[str, str, str, str]]:
     return [finding[:4] for finding in findings if finding[3] in checks]
 
 
-def billing_files(body: str, *, deep: str = "") -> dict[str, str]:
+def billing_files(body: str, *, deep: str = "", extra: dict[str, str] | None = None) -> dict[str, str]:
     """`billing`: 본문이 `body`인 페이지 `component/gateway`와, 링크 대상이 될 파일들. 모든 페이지가 관계를 가진다."""
     pages = [
         page("component/gateway", "Component", title="결제 게이트웨이", partOf="project", body=body),
@@ -46,6 +48,7 @@ def billing_files(body: str, *, deep: str = "") -> dict[str, str]:
     files["docs/design.md"] = "# 설계\n"
     files["docs/my notes.md"] = "# 메모\n"
     files["docs/설계/결정 기록.md"] = "# 결정 기록\n"
+    files.update(extra or {})
     return files
 
 
@@ -261,6 +264,69 @@ def test_대상_뒤가_비었거나_제목뿐인_참조_정의는_링크로_보�
 
     assert [finding[:4] for finding in findings] == [(ERROR, "billing", GATEWAY, "broken-reference")]
     assert "none.md" in findings[0][4] or "shop:component/missing" in findings[0][4]
+
+
+# 링크의 대상은 Markdown이 읽는 대로 읽는다: 문장 부호 앞의 백슬래시는 이스케이프이고(`my\\_file.md`는 `my_file.md`), HTML 엔티티(`&amp;`, `&#38;`)는
+# 그 글자다. 그대로 경로로 읽으면 있는 파일을 없다고 알린다. 다만 `\\`를 `/`로 읽는 것(`..\\term\\a.md`)은 그대로다.
+ESCAPED_LINKS = {
+    "이스케이프된_밑줄": ("[x](../../my\\_file.md)", "docs/my_file.md"),
+    "이스케이프된_괄호": ("[x](../../paren\\(1\\).md)", "docs/paren(1).md"),
+    "이스케이프된_대괄호와_샵": ("[x](../../a\\[1\\]\\#.md)", "docs/a[1]#.md"),
+    "html_href의_앰퍼샌드_엔티티": ('<a href="../../a&amp;b.md">x</a>', "docs/a&b.md"),
+    "십진_엔티티": ("[x](../../a&#38;b.md)", "docs/a&b.md"),
+    "십육진_엔티티": ("[x](../../a&#x26;b.md)", "docs/a&b.md"),
+}
+
+
+@pytest.mark.parametrize(("body", "name"), ESCAPED_LINKS.values(), ids=ESCAPED_LINKS.keys())
+def test_백슬래시_이스케이프와_html_엔티티를_푼_경로의_파일이_있으면_통과한다(onto_cli, body, name):
+    result, findings = validate(onto_cli, onto_cli.root(samples(body, extra={name: "# 대상\n"})))
+
+    assert findings == []
+    assert result.returncode == 0
+
+
+def test_이스케이프와_엔티티를_푼_경로의_파일이_없으면_푼_경로를_알리며_깨진_참조로_잡는다(onto_cli):
+    findings = validate(onto_cli, onto_cli.root(samples("[x](../../none\\_file.md) [y](../../none&amp;file.md)\n")))[1]
+
+    assert [finding[:4] for finding in findings] == [(ERROR, "billing", GATEWAY, "broken-reference")] * 2
+    assert sorted("`docs/none_file.md`" in finding[4] or "`docs/none&file.md`" in finding[4] for finding in findings) == [True, True]
+
+
+def test_문장_부호가_아닌_글자_앞의_백슬래시는_경로_구분자로_읽는다(onto_cli):
+    result, findings = validate(onto_cli, onto_cli.root(samples("[있다](..\\term\\invoice.md) [없다](..\\term\\none.md)\n")))
+
+    assert [finding[:4] for finding in findings] == [(ERROR, "billing", GATEWAY, "broken-reference")]
+    assert "none.md" in findings[0][4]
+
+
+# 경로의 대소문자는 실제 파일과 같아야 한다. 대소문자를 구분하지 않는 파일 시스템(macOS)에서도 같다. 같은 커밋이 기기에 따라 통과하거나 막히지 않게
+# 원본 문서의 경로(`derivedFrom`)와 같은 방식으로 디렉토리의 실제 이름과 맞춘다. 유니코드는 NFC로 정규화해 비교한다.
+CASE_MISMATCH = {
+    "디렉토리_이름": "[x](../Term/invoice.md)",
+    "파일_이름": "[x](../term/Invoice.md)",
+    "원본_문서": "[x](../../Design.md)",
+    "디렉토리를_가리키는_링크": "[x](../Term/)",
+    "퍼센트_인코딩한_경로": "[x](../../My%20Notes.md)",
+}
+
+
+@pytest.mark.parametrize("body", CASE_MISMATCH.values(), ids=CASE_MISMATCH.keys())
+def test_경로의_대소문자가_실제_파일과_다르면_모든_플랫폼에서_깨진_참조로_잡는다(onto_cli, body):
+    findings = validate(onto_cli, onto_cli.root(samples(body)))[1]
+
+    assert [finding[:4] for finding in findings] == [(ERROR, "billing", GATEWAY, "broken-reference")]
+
+
+def test_파일_시스템에_NFD로_저장된_이름도_NFC로_쓴_링크가_가리키는_것으로_본다(onto_cli):
+    """macOS는 파일 이름을 NFD로 저장한다. 같은 문서를 가리키는 링크가 어느 기기에서 만든 것이든 같은 결과여야 한다."""
+    nfd = unicodedata.normalize("NFD", "docs/자료/기록.md")
+    assert nfd != "docs/자료/기록.md"
+    body = "[x](<../../자료/기록.md>) [y](../../%EC%9E%90%EB%A3%8C/%EA%B8%B0%EB%A1%9D.md)\n"
+
+    result, findings = validate(onto_cli, onto_cli.root(samples(body, extra={nfd: "# 기록\n"})))
+
+    assert findings == []
 
 
 def test_저장소_밖을_가리키는_링크는_깨진_참조가_아니라_저장소_밖_링크로만_보고한다(onto_cli):

@@ -236,13 +236,23 @@ def _git_hashes(repository: Path, paths: list[str]) -> dict[str, str]:
 def _locate(repository: Path, path: str, listings: dict[Path, list[str]]) -> str | None:
     """지식 저장소 안의 원본 문서 `path`가 실제로 있는 경로(저장소 루트 기준, 디렉토리에 있는 이름 그대로)를 돌려준다. 없으면 None이다.
 
+    경로 중간이든 끝이든 심볼릭 링크이면 없는 문서이고, 끝은 일반 파일이어야 한다. 이름을 맞추는 방식은 `locate`와 같다.
+    """
+    return locate(repository, path, listings, document=True)
+
+
+def locate(repository: Path, path: str, listings: dict[Path, list[str]], *, document: bool = False) -> str | None:
+    """지식 저장소 안의 `path`(저장소 루트 기준, `/`로 구분)가 실제로 있는 경로(디렉토리에 있는 이름 그대로)를 돌려준다. 없으면 None이다.
+
     조각마다 디렉토리의 항목과 맞춘다. 대소문자는 구분하고 유니코드는 NFC로 정규화해 비교한다. 그래서 대소문자를 구분하지 않는
-    파일 시스템에서도 같은 결과가 나온다. 경로 중간이든 끝이든 심볼릭 링크이면 없는 문서이고, 끝은 일반 파일이어야 한다.
-    `listings`는 디렉토리 목록을 모아 두는 곳이다.
+    파일 시스템에서도 같은 결과가 나온다. `listings`는 디렉토리 목록을 모아 두는 곳이다. `.`과 빈 조각은 건너뛴다(저장소 루트는 `.`이다).
+
+    `document`가 참이면 원본 문서의 규칙이다. 경로 중간이든 끝이든 심볼릭 링크이면 없는 것이고, 끝은 일반 파일이어야 한다.
+    아니면 본문 링크의 대상의 규칙이다. 끝은 파일이든 디렉토리든 되고, 심볼릭 링크는 가리키는 곳이 있으면 있는 것이다.
     """
     current = repository
     actual: list[str] = []
-    for component in path.split("/"):
+    for component in (part for part in path.split("/") if part not in ("", ".")):
         if current not in listings:
             try:
                 listings[current] = sorted(os.listdir(current))
@@ -253,9 +263,11 @@ def _locate(repository: Path, path: str, listings: dict[Path, list[str]]) -> str
             return None
         current = current / name
         actual.append(name)
-        if current.is_symlink():
+        if document and current.is_symlink():
             return None
-    return "/".join(actual) if current.is_file() else None
+    if not (current.is_file() if document else os.path.exists(current)):
+        return None
+    return "/".join(actual) if actual else "."
 
 
 def _entry_named(component: str, names: list[str]) -> str | None:

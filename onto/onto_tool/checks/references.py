@@ -30,21 +30,24 @@
   온톨로지 층이 없는 저장소나 없는 엔티티는 `broken-reference`다. `mailto:me@example.com` 같은 스킴은 교차 참조가 아니다. 저장소 이름이 등록된 것이면
   식별자의 모양과 상관없이 교차 참조로 본다(클래스 디렉토리의 오타를 깨진 참조로 알린다). 등록된 것이 아니면 식별자의 모양일 때만 교차 참조다.
   파일 경로의 모양(`path-reference`)은 따지지 않는다. 본문의 링크는 경로여도 되기 때문이다.
-- 지식 저장소 안의 상대 링크(`[글](../term/x.md)`)는 가리키는 파일이나 디렉토리가 있어야 한다(`broken-reference`). 저장소 밖을 가리키는 링크(`outside-link`)와
+- 지식 저장소 안의 상대 링크(`[글](../term/x.md)`)는 가리키는 파일이나 디렉토리가 있어야 한다(`broken-reference`). 대상은 Markdown이 읽는 대로 읽고
+  (백슬래시 이스케이프, HTML 엔티티, 퍼센트 인코딩을 푼다), 경로의 대소문자는 디렉토리에 있는 실제 이름과 같아야 한다. 원본 문서의 경로(`sources.locate`)와
+  같은 방식이라 대소문자를 구분하지 않는 파일 시스템(macOS)에서도 결과가 같다. 저장소 밖을 가리키는 링크(`outside-link`)와
   파일이 아닌 주소(`https`, `mailto`), 문서 안의 조각(`#제목`)은 따지지 않는다. 상대 링크는 이 저장소 안의 사실이라 지식 저장소 안에서도 검사하고,
   다른 저장소를 가리키는 교차 참조는 지식 저장소 안에서는 건너뛴다(`unregistered-repository`가 여러 저장소에 걸친 검사다).
 """
 
-import os
 import posixpath
 import re
 from collections.abc import Iterator
+from pathlib import Path
 
 from .. import links
 from ..compiler import PROJECT_IDENTIFIER, Compiled, PageRecord, RepositoryRecord
 from ..iri import entity_iri, resolve_reference
 from ..keys import PAGE_CLASS_DIRECTORIES
 from ..rules import RuleSet
+from ..sources import locate
 from .catalog import BROKEN_REFERENCE, PATH_REFERENCE, UNREGISTERED_REPOSITORY
 from .model import Issue
 
@@ -110,6 +113,7 @@ class _Known:
 
 def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     known = _Known(compiled.records)
+    listings: dict[Path, list[str]] = {}  # 상대 링크의 대상을 찾으려고 읽은 디렉토리의 목록. 같은 디렉토리를 다시 읽지 않는다
     for record in compiled.records:
         if record.name is None:
             continue
@@ -126,10 +130,12 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
                     )
                 else:
                     yield from known.dangling(record, page, where, target)
-            yield from _body_links(compiled, known, record, page)
+            yield from _body_links(compiled, known, listings, record, page)
 
 
-def _body_links(compiled: Compiled, known: _Known, record: RepositoryRecord, page: PageRecord) -> Iterator[Issue]:
+def _body_links(
+    compiled: Compiled, known: _Known, listings: dict[Path, list[str]], record: RepositoryRecord, page: PageRecord
+) -> Iterator[Issue]:
     """페이지 본문의 링크가 가리키는 대상이 있는지 본다: 교차 참조는 엔티티를, 지식 저장소 안의 상대 링크는 파일이나 디렉토리를."""
     directory = posixpath.dirname(page.file.removeprefix(f"{record.path}/"))  # 지식 저장소 루트 기준
     for destination in links.destinations(page.body):
@@ -140,5 +146,5 @@ def _body_links(compiled: Compiled, known: _Known, record: RepositoryRecord, pag
             if name in known.registered or not_a_reference(f"{name}:{identifier}") is None:
                 yield from known.dangling(record, page, where, f"{name}:{identifier}")
         elif compiled.root is not None and (target := links.local_target(directory, destination)) is not None:
-            if not os.path.exists(compiled.root / record.path / target):
+            if locate(compiled.root / record.path, target, listings) is None:
                 yield Issue(BROKEN_REFERENCE, page.file, f"{where}: 가리키는 파일이나 디렉토리가 없다(지식 저장소의 `{target}`)")
