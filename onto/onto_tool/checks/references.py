@@ -49,7 +49,7 @@ def not_a_reference(reference: str) -> str | None:
         return "주소다"
     if reference.startswith(("/", "~", "\\")) or _DRIVE.match(reference) or "\\" in reference:
         return "파일 경로다"
-    identifier = reference.partition(":")[2] if ":" in reference else reference  # 교차 참조의 저장소 이름은 뗀다
+    identifier = (reference.partition(":")[2] if ":" in reference else reference).strip()  # 교차 참조의 저장소 이름은 뗀다. 해석(`resolve_reference`)처럼 앞뒤 공백도 뗀다
     segments = identifier.split("/")
     if any(segment in (".", "..") for segment in segments) or _EXTENSION.search(segments[-1]):
         return "파일 경로다"

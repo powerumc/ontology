@@ -3,6 +3,8 @@
 공유 범위를 지키는 안전장치라 이 모듈의 항목은 모두 루트 전용이다. 지식 저장소의 규칙이 끄거나 심각도를 바꿀 수 없다.
 
 - 교차 참조는 관계의 값(`dependsOn: billing:component/api`)과 페이지 본문의 링크 대상(`[글](billing:component/api)`)이다.
+  `class`의 값 `<저장소 이름>:<나머지>`(`class: billing:Invoice`)도 본다. 그런 값은 클래스를 풀지 못하는 값(`disallowed-class`)이지만 그 항목은 저장소 규칙으로
+  끌 수 있어, 꺼도 저장소 이름이 담긴 채 통과하지 않게 한다.
   제목, 별칭, 본문 평문처럼 참조가 아닌 글에 적힌 저장소 이름은 보지 않는다. 그런 글에 더 좁은 범위의 저장소 이름을 적지 않는 것은 작성자의 몫이다.
 - 범위를 알 수 없는 저장소는 가장 좁은 `private`으로 본다. 적지 않은 저장소, 온톨로지 층이 없거나 `ontology.yaml`을 읽을 수 없는 저장소,
   `scope` 값이 틀린 저장소가 그렇다. 그 저장소의 문제는 저장소 규칙으로 끌 수 있는 항목이나 경고로만 보고되므로, 그것에 기대면
@@ -54,12 +56,21 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
 
 
 def _cross_references(page: PageRecord) -> Iterator[tuple[str, str]]:
-    """페이지의 교차 참조 모양의 값(`<이름>:<나머지>`)을 `(설명에 쓸 자리, 값)`으로. 관계의 값과 본문의 링크 대상이다."""
+    """페이지의 교차 참조 모양의 값(`<이름>:<나머지>`)을 `(설명에 쓸 자리, 값)`으로. 관계의 값, `class`의 값, 본문의 링크 대상이다."""
     for key, target in page.relations():
         if ":" in target:
             yield f"`{key}`의 값 `{target}`", target
+    for class_value in dict.fromkeys(_class_values(page)):
+        if ":" in class_value:
+            yield f"`class`의 값 `{class_value}`", class_value
     for destination in links.destinations(page.body):
         name, separator, rest = destination.strip().partition(":")
         # `http://…`처럼 `//`가 뒤따르는 것은 주소이고 교차 참조가 아니다. 저장소의 이름이 `http`여도 그렇다.
         if separator and name and not rest.startswith("//"):
             yield f"본문의 링크 `{destination}`", destination
+
+
+def _class_values(page: PageRecord) -> list[str]:
+    """페이지의 `class` 값(문자열 하나나 그 목록)에서 문자열만. 문자열이 아닌 값은 값의 종류가 맞지 않다고 컴파일이 이미 알렸다."""
+    value = (page.meta or {}).get("class")
+    return [item for item in (value if isinstance(value, list) else [value]) if isinstance(item, str)]

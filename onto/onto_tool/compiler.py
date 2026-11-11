@@ -33,6 +33,7 @@ from .pages import (
     INDEX_FILE,
     FrontmatterError,
     ValueKindError,
+    find_dangling_page_links,
     find_misnamed_pages,
     find_pages,
     page_values,
@@ -318,6 +319,16 @@ def _read_repository(
     read.record.misnamed_pages = [workspace.relative(path) for path in find_misnamed_pages(repository.ontology_dir)]
     _read_index(repository, read.record)
     repository_root = repository.path.resolve()
+    for path in find_dangling_page_links(repository.ontology_dir):
+        # 가리키는 파일이 없어 읽을 것은 없지만, 링크 파일이 담은 대상(다른 저장소의 이름, 절대 경로)은 지식 저장소를 단독으로 열어도 남는다.
+        if not _inside(path, repository_root):
+            read.problems.append(
+                Problem(
+                    workspace.relative(path),
+                    "페이지 파일이 지식 저장소 밖을 가리키는 심볼릭 링크다(가리키는 파일은 없다). 링크 자체가 다른 저장소의 위치를 담는다. 다른 저장소의 지식은 교차 참조로 가리킨다",
+                    OUTSIDE_LINK,
+                )
+            )
     for identifier, path in find_pages(repository.ontology_dir):
         file = workspace.relative(path)
         if not _inside(path, repository_root):

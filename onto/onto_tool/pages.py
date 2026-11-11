@@ -65,6 +65,23 @@ def find_pages(ontology_dir: Path) -> list[tuple[str, Path]]:
     return sorted(found)
 
 
+def find_dangling_page_links(ontology_dir: Path) -> list[Path]:
+    """페이지 자리(`.md`)의 심볼릭 링크 가운데 가리키는 파일이 없어 페이지로 읽히지 않는 것을 경로 순으로 돌려준다.
+
+    `find_pages`는 일반 파일만 찾으므로 깨진 링크는 조용히 빠진다. 그런데 링크 파일 자체가 가리키는 곳(다른 저장소의 이름이나 절대 경로)을
+    담고 있어, 지식 저장소 밖을 가리키는지는 가리키는 파일이 없어도 따져야 한다. 최상위 `index.md`와 숨김 경로는 뺀다.
+    """
+    return sorted(
+        path
+        for path in ontology_dir.rglob("*")
+        if path.name.endswith(".md")
+        and path.is_symlink()
+        and not path.exists()
+        and not any(part.startswith(".") for part in path.relative_to(ontology_dir).parts)
+        and path.relative_to(ontology_dir).as_posix() != INDEX_FILE
+    )
+
+
 def find_misnamed_pages(ontology_dir: Path) -> list[Path]:
     """페이지처럼 보이지만 확장자가 `.md`가 아니어서 페이지로 읽히지 않는 파일(`.MD`, `.markdown` 등)을 경로 순으로 돌려준다."""
     return sorted(
