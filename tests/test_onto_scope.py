@@ -519,6 +519,10 @@ OUTSIDE_LINKS = {
     "다른_속성_뒤의_html_src": f'<img alt="그림" width=10 src={OUTSIDE}a.png>',
     "여러_줄에_걸친_html_태그": f'<a\n  class="x"\n  href="{OUTSIDE}x.md">x</a>',
     "따옴표_안에_꺾쇠가_든_html_태그": f'<a title="a>b" href="{OUTSIDE}x.md">x</a>',
+    # 따옴표는 `=` 바로 뒤에서만 값을 연다. 따옴표 없는 속성 값 안의 따옴표는 그냥 글자라, 본문의 다음 따옴표까지 태그를 늘리지 않는다.
+    "따옴표_없는_속성_값_안의_아포스트로피": f"<img alt=don't src={OUTSIDE}x.png> 그리고 it's done",
+    "따옴표_없는_속성_값_안의_큰따옴표": f'<a title=5" href={OUTSIDE}x.md>x</a> 그리고 "인용"',
+    "작은따옴표_값_안의_큰따옴표": f"""<a title='"인용" >' href={OUTSIDE}x.md>x</a>""",
     "들여쓴_닫히지_않은_울타리_뒤의_링크": f"예시:\n\n    ```python\n    print(1)\n\n본문 [x]({OUTSIDE}x.md)\n",
     "울타리는_3칸까지_더_들여써도_닫는다": f"```\n코드\n   ```\n\n[x]({OUTSIDE}x.md)\n",
     "코드_안의_주석_표시_사이의_링크": f"주석은 `<!--`로 열고 [x]({OUTSIDE}x.md)를 지나 `-->`로 닫는다.\n",
