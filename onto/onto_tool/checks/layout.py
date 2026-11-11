@@ -14,7 +14,7 @@ from .. import vocab
 from ..compiler import Compiled
 from ..iri import entity_iri
 from ..keys import PAGE_CLASS_DIRECTORIES
-from ..rules import RuleSet
+from ..rules import SEVERITIES, RuleSet
 from .catalog import INVALID_IDENTIFIER, MISNAMED_PAGE, MISPLACED_PAGE
 from ..classes import ClassIndex
 from ..labels import class_label
@@ -28,7 +28,13 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     for record in compiled.records:
         repository_rules = rules.of(record.directory)
         identifier_form = re.compile(repository_rules.language.identifier_pattern)
-        identifier_reported = repository_rules.checks[INVALID_IDENTIFIER.name].enabled
+        identifier_rule = repository_rules.checks[INVALID_IDENTIFIER.name]
+        directory_rule = repository_rules.checks[MISPLACED_PAGE.name]
+        # 식별자 형식 항목이 켜져 있고 디렉토리 항목보다 약하지 않을 때만 디렉토리 항목 대신 보고한다. 약하면(경고로 낮췄다)
+        # 디렉토리 오류가 경고 하나로 내려가므로 둘 다 보고한다.
+        identifier_reports_instead = identifier_rule.enabled and SEVERITIES.index(identifier_rule.severity) <= SEVERITIES.index(
+            directory_rule.severity
+        )
         for file in record.misnamed_pages:
             yield Issue(MISNAMED_PAGE, file, "페이지처럼 보이지만 확장자가 `.md`가 아니라 페이지로 읽히지 않았다")
         if record.name is None:
@@ -46,10 +52,10 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
             actual = page.identifier.partition("/")[0] if "/" in page.identifier else None
             if not expected or expected == {actual}:
                 continue
-            # 대소문자만 다른 디렉토리(`Plan/`)가 식별자 형식에도 어긋나고 그 항목이 켜져 있으면 식별자 형식 항목이 이미 보고한다.
+            # 대소문자만 다른 디렉토리(`Plan/`)가 식별자 형식에도 어긋나면 식별자 형식 항목이 이미 보고한다(위 조건을 만족할 때).
             # 디렉토리 이름 하나를 고치면 둘 다 사라지므로 겹쳐 알리지 않는다. 저장소의 규칙이 그 이름을 식별자로 허용하거나
-            # 식별자 형식 항목을 껐으면 이 항목만 남는다.
-            if identifier_reported and actual is not None and {actual.lower()} == expected and not identifier_form.fullmatch(actual):
+            # 식별자 형식 항목을 껐거나 낮췄으면 이 항목이 남는다.
+            if identifier_reports_instead and actual is not None and {actual.lower()} == expected and not identifier_form.fullmatch(actual):
                 continue
             where = f"`{actual}/` 아래" if actual else "온톨로지 층 최상위"
             if len(expected) > 1:

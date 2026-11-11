@@ -6,6 +6,8 @@
 여러 지식 저장소가 하나의 그래프로 합쳐진다. 관계의 값은 같은 저장소의 식별자이거나, 다른 저장소의 엔티티를 가리키는
 교차 참조(`<저장소 이름>:<식별자>`)이고, 가리키는 엔티티가 있는지는 따지지 않는다. 모든 엔티티에는 온 지식 저장소의 이름을
 `onto:repository`로 적는다. 저장소는 `ontology.yaml`의 `classes`로 자기 하위 클래스를 선언할 수 있다.
+페이지의 `derivedFrom`은 항목(원본 문서의 경로와 해시)마다 `Source` 엔티티가 되어 페이지가 `onto:derivedFrom`으로 가리킨다.
+`Source`는 페이지가 없어 `onto:repository`를 적지 않고, 구조 제약의 대상 엔티티가 아니다. 파일은 `Compiled.source_files`가 알려 준다.
 추론(하위 클래스, 역관계, 추이 관계)은 여기서 하지 않는다. `inference.infer`가 이 그래프에 적용한다.
 인덱스 파일은 만들지 않고 지금 있는 글자만 읽어 둔다(`RepositoryRecord.index_text`). 인덱스는 `index`가 컴파일한 결과에서 만든다.
 """
@@ -21,8 +23,8 @@ from rdflib.namespace import OWL, RDFS
 from . import vocab
 from .errors import OntoError
 from .graphs import canonical
-from .iri import UNRESOLVED_BASE, class_iri, entity_iri, resolve_reference, unresolved_iri
-from .keys import CLASS_DECLARATION_KEYS, CLASSES_KEY, PAGE_KEYS, PROJECT_KEYS, RELATION_KEYS, RULES_KEY
+from .iri import UNRESOLVED_BASE, class_iri, entity_iri, resolve_reference, source_iri, unresolved_iri
+from .keys import CLASS_DECLARATION_KEYS, CLASSES_KEY, PAGE_KEYS, PROJECT_KEYS, RELATION_KEYS, RULES_KEY, SOURCE_KEY
 from .ontology_yaml import OntologyYamlError, read_ontology_yaml, undefined_keys_message
 from .pages import (
     INDEX_FILE,
@@ -34,7 +36,8 @@ from .pages import (
     read_frontmatter,
     scalar_values,
 )
-from .workspace import ONTOLOGY_DIR, ONTOLOGY_YAML, Repository, Workspace
+from .sources import SourceEntry, document_hashes, parse_entries, read_skipped
+from .workspace import ONTOLOGY_DIR, ONTOLOGY_YAML, SKIPPED_YAML, Repository, Workspace
 
 PROJECT_IDENTIFIER = "project"
 # 지식 저장소가 선언하는 클래스의 이름. 공통 어휘의 클래스 이름처럼 영어로 쓰고 대문자로 시작한다.
@@ -79,6 +82,7 @@ class PageRecord:
     identifier: str  # 온톨로지 층 기준 상대 경로에서 확장자를 뺀 것
     file: str  # 루트 저장소 기준 경로
     meta: dict[str, object] | None  # 읽은 frontmatter 그대로(정의되지 않은 키와 값의 종류가 틀린 값도 든다). 읽을 수 없으면 None
+    sources: tuple[SourceEntry, ...] = ()  # `derivedFrom`의 항목. 없거나 모양이 틀렸으면 비어 있다(틀린 것은 문제로 따로 모인다)
 
 
 @dataclass
@@ -97,6 +101,14 @@ class RepositoryRecord:
     index_text: str | None = None  # 지금 인덱스 파일의 글자(줄바꿈은 `\n`으로 통일). 파일이 없거나 읽지 않았으면 None
     # 인덱스 경로를 읽지도 쓰지도 않는 이유. 심볼릭 링크, 일반 파일이 아닌 것, 지식 저장소 밖을 가리키는 경로다. 문제가 없으면 None
     index_problem: str | None = None
+    skipped: list[SourceEntry] = field(default_factory=list)  # 넘긴 문서의 목록(`skipped.yaml`)의 항목. 파일이 없거나 읽을 수 없으면 비어 있다
+    # 페이지와 넘긴 문서의 목록이 가리키는 원본 문서의 경로 -> 지금 작업 트리에 있는 내용의 해시. 없거나 읽을 수 없는 문서는 None이다.
+    document_hashes: dict[str, str | None] = field(default_factory=dict)
+
+    @property
+    def skipped_file(self) -> str:
+        """루트 저장소 기준 넘긴 문서의 목록(`skipped.yaml`)의 경로. 파일이 없어도 있어야 할 자리다."""
+        return f"{self.path}/{SKIPPED_YAML.as_posix()}"
 
 
 @dataclass
@@ -107,25 +119,20 @@ class Compiled:
     warnings: list[str]
     problems: list[Problem] = field(default_factory=list)  # 읽을 수 없는 파일과 이유
     records: list[RepositoryRecord] = field(default_factory=list)  # 지식 저장소 후보마다 하나. 디렉토리 이름 순
-
-    def ensure_valid(self) -> None:
-        """읽을 수 없는 파일이 있으면 모두 모아 `OntoError`로 알린다.
-
-        일부만 컴파일한 그래프를 내놓지 않는 것은 부르는 명령(`build`, `query`)의 정책이다. 그래서 `problems`가 하나라도 있으면
-        규칙(검사 항목의 켬/끔과 심각도)과 무관하게 멈춘다. 모든 문제를 모아 심각도별로 보고하는 검사는 `problems`를 그대로 쓰고,
-        `ontology.yaml`의 문제(`invalid-ontology-yaml`, `invalid-class-declaration`)는 저장소가 규칙으로 조정할 수 없는
-        루트 전용 항목이라, 저장소의 규칙으로 `validate`는 통과하는데 `build`만 멈추는 일이 없다.
-        """
-        if self.problems:
-            raise OntoError(*(str(problem) for problem in self.problems))
+    # `Source` 엔티티 IRI -> 루트 저장소 기준 원본 문서의 경로. 질의 결과에서 `Source`를 원본 문서의 파일로 보여 준다.
+    # `files`에 섞지 않는다: `files`의 키는 페이지가 있는 엔티티(`onto:repository`를 가진 것)이고 검사가 그렇게 읽는다.
+    source_files: dict[str, str] = field(default_factory=dict)
+    notices: list[str] = field(default_factory=list)  # 알릴 것(원본 문서의 해시를 git으로 내지 못했다). 검사 항목이 따로 보고하지 않는다
 
 
 @dataclass
 class _RepositoryRead:
     record: RepositoryRecord
-    nodes: list[dict] = field(default_factory=list)  # 엔티티와, 선언한 하위 클래스
+    nodes: list[dict] = field(default_factory=list)  # 엔티티와, 선언한 하위 클래스와, `Source` 엔티티
     files: dict[str, str] = field(default_factory=dict)
+    source_files: dict[str, str] = field(default_factory=dict)
     problems: list[Problem] = field(default_factory=list)
+    notices: list[str] = field(default_factory=list)  # 알릴 것(원본 문서의 해시를 git으로 내지 못했다). 검사 항목이 따로 보고하지 않는다
 
 
 def compile_workspace(workspace: Workspace) -> Compiled:
@@ -136,9 +143,11 @@ def compile_workspace(workspace: Workspace) -> Compiled:
     common_classes = vocab.common_classes(raw)
     nodes: list[dict] = []
     files: dict[str, str] = {}
+    source_files: dict[str, str] = {}
     names: list[str] = []
     problems: list[Problem] = []
     warnings: list[str] = []
+    notices: list[str] = []
     records: list[RepositoryRecord] = []
     reads: list[_RepositoryRead] = []
 
@@ -165,10 +174,12 @@ def compile_workspace(workspace: Workspace) -> Compiled:
         if read.record.yaml_file not in copiers:
             nodes += read.nodes
             files.update(read.files)
+            source_files.update(read.source_files)
+        notices += read.notices
 
     problems += duplicates
     raw.parse(data=json.dumps({"@context": context, "@graph": nodes}), format="json-ld", base=UNRESOLVED_BASE)
-    return Compiled(canonical(raw), files, names, warnings, problems, records)
+    return Compiled(canonical(raw), files, names, warnings, problems, records, source_files, notices)
 
 
 def _duplicate_names(records: list[RepositoryRecord]) -> list[Problem]:
@@ -246,8 +257,10 @@ def _read_repository(
     read.nodes += declarations.nodes
     read.problems += declarations.problems
 
-    def add(identifier: str, meta: dict[str, object], file: str) -> None:
+    def add(identifier: str, meta: dict[str, object], file: str, sources: tuple[SourceEntry, ...] = ()) -> None:
         node = _node(name, identifier, meta, declared, common_classes.keys())
+        if sources:
+            node[SOURCE_KEY] = [_source(read, name, entry) for entry in sources]
         read.nodes.append(node)
         read.files[node["@id"]] = file
 
@@ -263,6 +276,7 @@ def _read_repository(
         file = workspace.relative(path)
         meta: dict[str, object] | None
         values: dict[str, object] = {}
+        sources: tuple[SourceEntry, ...] = ()
         failure: Problem | None = None
         try:
             meta = read_frontmatter(path)
@@ -274,8 +288,12 @@ def _read_repository(
                 values = page_values(meta)
             except ValueKindError as exc:
                 failure = Problem(file, f"frontmatter를 읽을 수 없다: {exc}", _kind(exc))
+            try:
+                sources = tuple(parse_entries(meta.get(SOURCE_KEY), f"`{SOURCE_KEY}`"))
+            except ValueKindError as exc:
+                failure = failure or Problem(file, f"frontmatter를 읽을 수 없다: {exc}", _kind(exc))
         # 값의 종류가 틀려도 읽은 frontmatter는 남긴다. 같은 페이지의 다른 문제(정의되지 않은 키, 깨진 참조)가 가려지지 않게 한다.
-        read.record.pages.append(PageRecord(identifier, file, meta))
+        read.record.pages.append(PageRecord(identifier, file, meta, sources))
         if identifier == PROJECT_IDENTIFIER:
             # 같은 IRI라서 두 파일이 제목과 클래스가 둘인 엔티티 하나로 조용히 합쳐진다.
             read.problems.append(
@@ -290,10 +308,28 @@ def _read_repository(
             read.problems.append(failure)
             continue
         try:
-            add(identifier, values, file)
+            add(identifier, values, file, sources)
         except FrontmatterError as exc:
             read.problems.append(Problem(file, f"frontmatter를 읽을 수 없다: {exc}", _kind(exc)))
+
+    try:
+        read.record.skipped = read_skipped(repository.path / SKIPPED_YAML)
+    except FrontmatterError as exc:
+        read.problems.append(Problem(read.record.skipped_file, f"넘긴 문서의 목록을 읽을 수 없다: {exc}", _kind(exc)))
+    referenced = {entry.path for page in read.record.pages for entry in page.sources} | {entry.path for entry in read.record.skipped}
+    read.record.document_hashes, notice = document_hashes(repository.path, referenced)
+    if notice:
+        read.notices.append(f"{read.record.path}: {notice}")
     return read
+
+
+def _source(read: _RepositoryRead, repository: str, entry: SourceEntry) -> str:
+    """원본 문서의 기록 하나를 `Source` 엔티티로 싣고 그 IRI를 돌려준다. 같은 경로와 해시는 하나로 합쳐진다."""
+    iri = source_iri(repository, entry.path, entry.hash)
+    if iri not in read.source_files:
+        read.source_files[iri] = f"{read.record.path}/{entry.path}"
+        read.nodes.append({"@id": iri, "class": "Source", "onto:sourcePath": entry.path, "onto:sourceHash": entry.hash})
+    return iri
 
 
 def _kind(exc: FrontmatterError) -> str:

@@ -7,6 +7,7 @@ from pathlib import Path
 from ..checks import Severity, validate
 from ..compiler import compile_workspace
 from ..workspace import Workspace
+from ._output import warn
 from ._rules import root_rules
 
 NAME = "validate"
@@ -27,7 +28,9 @@ def run(args: argparse.Namespace) -> int:
     workspace = Workspace(Path.cwd())
     rules = root_rules(workspace)  # 기본 규칙이 틀렸으면 검사하지 않고 알린다
     # 컴파일의 `warnings`는 검사 항목이 같은 내용을 문제로 보고하므로 따로 출력하지 않는다.
-    findings = validate(compile_workspace(workspace), rules)
+    compiled = compile_workspace(workspace)
+    warn(compiled.notices)
+    findings = validate(compiled, rules)
     for finding in findings:
         print("\t".join((finding.severity.value, finding.repository, finding.file, finding.check, _one_line(finding.message))))
     errors = sum(finding.severity is Severity.ERROR for finding in findings)

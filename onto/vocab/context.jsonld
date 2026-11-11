@@ -25,6 +25,7 @@
     "implements": { "@id": "onto:implements", "@type": "@id" },
     "governs": { "@id": "onto:governs", "@type": "@id" },
     "supersedes": { "@id": "onto:supersedes", "@type": "@id" },
+    "derivedFrom": { "@id": "onto:derivedFrom", "@type": "@id" },
     "about": { "@id": "onto:about", "@type": "@id" }
   }
 }

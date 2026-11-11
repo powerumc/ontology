@@ -42,6 +42,14 @@ class CheckRule:
     enabled: bool
     severity: str  # `error` 또는 `warning`
 
+    @property
+    def stops_build(self) -> bool:
+        """이 검사 항목이 보고하는 읽을 수 없는 파일 때문에 `build`, `query`, `status`가 멈추는가. 켜져 있고 오류일 때만이다.
+
+        `validate`가 오류로 보는 것과 같은 조건이다. 그래서 `validate`가 0으로 끝나면 읽을 수 없는 파일 때문에 `build`가 멈추지 않는다.
+        """
+        return self.enabled and self.severity == "error"
+
 
 @dataclass(frozen=True)
 class Sources:

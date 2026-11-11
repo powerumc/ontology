@@ -3,18 +3,19 @@
 컴파일은 정의된 키만 그래프로 옮기고 나머지를 조용히 버린다. 그래서 그래프가 아니라 페이지에서 읽은 frontmatter 원문을 본다.
 식별자 형식도 같다. 공백이나 한글이 든 경로의 페이지는 그래프에 올라가지만 알아보기 어려운 IRI가 되므로, 파일 경로에서 따진다.
 식별자의 경로 조각이 맞아야 하는 형식은 언어 규칙의 `identifier-pattern`이다. 지식 저장소의 규칙이 덮어쓴 형식은 그 저장소에만 적용된다.
+형식이 무엇이든 `:`가 들었거나 앞뒤에 공백이 있는 조각은 참조로 가리킬 수 없어(`iri.resolve_reference`) 따로 오류로 알린다.
 """
 
 import re
 from collections.abc import Iterator
 
 from ..compiler import Compiled, PageRecord
-from ..keys import PAGE_KEYS, PAGE_PROPERTY_KEYS, RELATION_KEYS, REVERSE_RELATION_KEYS
+from ..keys import PAGE_KEYS, PAGE_PROPERTY_KEYS, RELATION_KEYS, REVERSE_RELATION_KEYS, SOURCE_KEY
 from ..rules import RuleSet
 from .catalog import INVALID_IDENTIFIER, REVERSE_RELATION, UNDEFINED_KEY
 from .model import Issue
 
-DEFINED_KEYS = (*PAGE_PROPERTY_KEYS, *RELATION_KEYS)
+DEFINED_KEYS = (*PAGE_PROPERTY_KEYS, *RELATION_KEYS, SOURCE_KEY)
 
 
 def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
@@ -27,13 +28,24 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
 
 def _identifier(page: PageRecord, pattern: str) -> Iterator[Issue]:
     form = re.compile(pattern)
-    bad = [segment for segment in page.identifier.split("/") if not form.fullmatch(segment)]
+    segments = page.identifier.split("/")
+    bad = [segment for segment in segments if not form.fullmatch(segment)]
     if bad:
         shown = ", ".join(f"`{segment}`" for segment in bad)
         yield Issue(
             INVALID_IDENTIFIER,
             page.file,
             f"식별자 `{page.identifier}`의 경로 조각 {shown}가 식별자 형식 `{pattern}`에 맞지 않는다",
+        )
+    # 형식에 맞는 조각 가운데 참조로 가리킬 수 없는 것. 형식이 `:`나 앞뒤 공백을 허용해도 참조는 `:`를 저장소 이름과의 경계로 읽고 앞뒤 공백을 뗀다.
+    unreferenceable = [segment for segment in segments if segment not in bad and (":" in segment or segment != segment.strip())]
+    if unreferenceable:
+        shown = ", ".join(f"`{segment}`" for segment in unreferenceable)
+        yield Issue(
+            INVALID_IDENTIFIER,
+            page.file,
+            f"식별자 `{page.identifier}`의 경로 조각 {shown}에 `:`나 앞뒤 공백이 있어 참조로 가리킬 수 없다"
+            "(`:`는 교차 참조의 저장소 이름과 식별자 경계이고, 참조는 앞뒤 공백을 뗀다)",
         )
 
 

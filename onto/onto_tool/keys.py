@@ -18,10 +18,15 @@ frontmatter 키와 RDF의 대응은 `vocab/context.jsonld`가 정한다. 여기 
 
 # 페이지 frontmatter
 PAGE_PROPERTY_KEYS = ("class", "title", "description", "date", "aliases")
-# 엔티티를 식별자(같은 지식 저장소)나 `<저장소 이름>:<식별자>`(교차 참조)로 가리키는 키. `derivedFrom`은 값의 형태가 달라
-# 출처를 다루는 티켓이 더한다.
+# 엔티티를 식별자(같은 지식 저장소)나 `<저장소 이름>:<식별자>`(교차 참조)로 가리키는 키. `derivedFrom`은 값의 형태가 달라 여기 없다.
 RELATION_KEYS = ("partOf", "dependsOn", "implements", "governs", "supersedes", "about")
-PAGE_KEYS = frozenset((*PAGE_PROPERTY_KEYS, *RELATION_KEYS))
+# 페이지가 근거로 삼은 원본 문서. 값은 `{path, hash}` 항목(또는 그 목록)이고, 컴파일이 항목마다 `Source` 엔티티를 만들어 가리킨다.
+# 다른 엔티티와의 관계가 아니라서 `RELATION_KEYS`에 두지 않는다. 그래서 고아 페이지와 깨진 참조를 따지는 검사가 세지 않는다.
+# 항목의 `path`는 지식 저장소 루트 기준 원본 문서의 경로, `hash`는 그 문서의 git 해시(40자리 소문자 16진수)다.
+# 넘긴 문서의 목록(`docs/ontology/skipped.yaml`)의 항목도 같은 모양이다.
+SOURCE_KEY = "derivedFrom"
+SOURCE_ENTRY_KEYS = ("path", "hash")
+PAGE_KEYS = frozenset((*PAGE_PROPERTY_KEYS, *RELATION_KEYS, SOURCE_KEY))
 # 페이지의 클래스(공통 어휘의 클래스) -> 그 클래스의 페이지를 두는 디렉토리. 하위 클래스의 페이지는 공통 조상 클래스의 디렉토리에 둔다.
 PAGE_CLASS_DIRECTORIES = {
     "Component": "component",

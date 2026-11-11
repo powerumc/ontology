@@ -13,14 +13,14 @@ from .model import Check
 # --- 읽을 수 없는 파일: 컴파일이 찾는다 ---------------------------------------------
 UNREADABLE_FILE = Check(compiler.UNREADABLE_FILE, "페이지나 ontology.yaml을 읽을 수 없다(YAML 문법 오류, frontmatter 없음)")
 INVALID_VALUE = Check(
-    compiler.INVALID_VALUE, "속성의 값의 종류가 맞지 않는다(문자열이어야 하는 자리에 숫자나 중첩된 값, 없는 날짜 등)"
+    compiler.INVALID_VALUE, "페이지 속성의 값의 종류가 맞지 않는다(문자열이어야 하는 자리에 숫자나 중첩된 값, 없는 날짜 등)"
 )
 INVALID_CLASS_DECLARATION = Check(
     compiler.INVALID_CLASS_DECLARATION, "ontology.yaml의 classes에 선언한 하위 클래스가 틀렸다", root_only=True
 )
 INVALID_ONTOLOGY_YAML = Check(
     compiler.INVALID_ONTOLOGY_YAML,
-    "ontology.yaml 최상위에 정의되지 않은 키가 있거나 Project가 되는 속성(title, description, aliases)의 값의 종류가 맞지 않는다",
+    "ontology.yaml 최상위에 정의되지 않은 키가 있거나 Project가 되는 속성(title, description, aliases)의 값의 종류가 맞지 않는다(읽을 수 없는 중첩된 값, 숫자 등)",
     root_only=True,
 )
 INVALID_IDENTIFIER = Check(
@@ -62,6 +62,13 @@ INVALID_RULES = Check(
     "invalid-rules", "ontology.yaml의 rules가 틀렸다(정의되지 않은 키, 값의 종류, 루트 전용 규칙을 덮어쓰려는 시도). 그 저장소는 루트 기본 규칙으로 검사한다"
 )
 
+# --- 원본 문서의 기록 ----------------------------------------------------------------
+STALE_PAGE = Check(
+    "stale-page", "페이지가 근거로 삼은 원본 문서가 기록한 해시와 달라졌다(낡음). git이 기록하는 blob 해시를 작업 트리의 현재 내용으로 따진다"
+)
+MISSING_SOURCE = Check("missing-source", "페이지의 derivedFrom이 가리키는 원본 문서가 없다")
+MISSING_SKIPPED_SOURCE = Check("missing-skipped-source", "넘긴 문서의 목록(skipped.yaml)에 적힌 원본 문서가 없다")
+
 # --- 인덱스 -------------------------------------------------------------------------
 INDEX_MISMATCH = Check(
     "index-mismatch",
@@ -91,6 +98,9 @@ CHECKS = (
     DUPLICATE_REPOSITORY_NAME,
     MISSING_ONTOLOGY_LAYER,
     INVALID_RULES,
+    STALE_PAGE,
+    MISSING_SOURCE,
+    MISSING_SKIPPED_SOURCE,
     INDEX_MISMATCH,
 )
 

@@ -915,11 +915,11 @@ def test_supersedes는_공통_클래스가_다르면_하위_클래스끼리도_�
 
 
 def test_Project의_속성도_값의_종류를_따진다(onto_cli):
-    """Project 엔티티는 `ontology.yaml`에서 만들어진다. 보고하는 파일은 그 `ontology.yaml`이다."""
+    """Project 엔티티는 `ontology.yaml`에서 만들어진다. 보고하는 파일은 그 `ontology.yaml`이고, 규칙을 담은 파일의 문제라 `invalid-ontology-yaml`이다."""
     repos = clean_repos()
     repos["billing"] = repo("billing", *[page("component/a", "Component", title="A", partOf="project")], title=5)
 
-    assert of_check(onto_cli, onto_cli.root(repos), "invalid-value") == [(ERROR, "billing", yaml_file("billing"), "invalid-value")]
+    assert of_check(onto_cli, onto_cli.root(repos), "invalid-ontology-yaml") == [(ERROR, "billing", yaml_file("billing"), "invalid-ontology-yaml")]
 
 
 # --- 보고의 순서와 요약 ---------------------------------------------------------
@@ -1146,7 +1146,7 @@ def test_확장자가_md가_아닌_페이지_파일을_조용히_건너뛰지_�
 
 def test_페이지가_아닌_파일과_숨김_파일은_보고하지_않는다(onto_cli):
     repos = clean_repos()
-    for name in ("notes.txt", "diagram.png", ".draft.MD", "component/.hidden.markdown", "skipped.yaml"):
+    for name in ("notes.txt", "diagram.png", ".draft.MD", "component/.hidden.markdown", "other.yaml"):
         repos["billing"][f"{ONTOLOGY_DIR}/{name}"] = "내용\n"
 
     assert validate(onto_cli, onto_cli.root(repos))[1] == []
