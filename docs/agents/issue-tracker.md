@@ -11,6 +11,7 @@
 - **댓글 달기**: `gh issue comment <number> --body "..."`
 - **라벨 붙이기 / 떼기**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **닫기**: `gh issue close <number> --comment "..."`
+- **수용 기준 체크**: 티켓을 닫기 전에 본문 `## Acceptance criteria`의 항목을 하나씩 실제 충족 여부와 맞춰 갱신한다. 구현과 테스트(또는 리뷰의 대조)로 확인한 항목만 `- [x]`로 바꾸고, 충족하지 못했거나 확인하지 못한 항목은 `- [ ]`로 둔다. 체크하지 않은 항목이 있으면 닫는 댓글에 항목과 이유, 후속 이슈 번호를 적는다. 갱신은 본문을 받아(`gh issue view <n> --json body --jq .body`) 그 절의 체크박스만 고친 뒤 `gh issue edit <n> --body-file <파일>`로 올리고, 다른 절은 건드리지 않는다.
 - 이슈의 제목과 본문은 한국어로 쓴다. 라벨은 영어 그대로 둔다.
 
 ## 제목 규약
