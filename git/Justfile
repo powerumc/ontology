@@ -202,10 +202,12 @@ pull:
 # 순서와 중단 조건이 이 명령의 약속이다.
 # - 지식 저장소: 올릴 커밋이 있는 곳만 현재 브랜치를 origin의 같은 이름 브랜치로 올린다. 원격에 없는 브랜치는 만든다.
 #   올릴 것이 없는 곳은 건드리지 않는다(원격에 접속하지도 않는다). 하나가 실패해도 나머지는 계속 올린다.
-# - 루트 저장소: 지식 저장소가 하나라도 실패했거나, 루트의 HEAD가 원격에서 확인되지 않는 서브모듈 커밋을 가리키면 올리지 않는다.
-#   (원격의 루트 저장소가 원격에 없는 커밋을 가리키게 되기 때문이다.)
+# - 루트 저장소: 지식 저장소가 하나라도 실패했거나, 이번에 올라가는 루트 커밋 가운데 하나라도 원격에서 확인되지 않는 서브모듈 커밋을
+#   가리키면 올리지 않는다(원격의 루트 저장소가 원격에 없는 커밋을 가리키게 되기 때문이다).
 # - 미커밋 변경은 올라가지 않는다. 그런 저장소는 올리기 전에 목록으로 알린다. 어떤 저장소도 커밋하거나 스테이징하지 않는다.
 # 끝에 저장소별 결과(푸시됨, 올릴 것 없음, 건너뜀, 실패와 그 이유)를 요약한다. 실패가 있으면 1로 끝난다.
+# 건너뜀(detached HEAD 등)은 실패가 아니라서 종료 코드는 0이다. 그 저장소에 올리지 않은 커밋이 남으면 요약 끝에서 따로 알린다.
+# 그 커밋을 루트 저장소가 가리키면 루트 푸시가 실패로 끝나므로, 원격에 없는 커밋을 가리키는 일은 없다.
 # 스크립트 검사를 푸시 관문으로 끼우는 자리는 레시피 안에 표시해 두었다(#15).
 
 # 루트 저장소와 모든 지식 저장소의 커밋한 것을 푸시한다. 지식 저장소가 먼저다.
@@ -221,6 +223,7 @@ push:
     skipped=
     failed=
     failed_repos=
+    leftover=
     need_setup=0
     list_failed=0
 
@@ -268,6 +271,9 @@ push:
         po_branch=$(repo_branch "$po_path")
         if ! po_count=$(repo_unpushed_count "$po_path" "$po_branch"); then
             record failed "$po_label" "푸시하지 않은 커밋 수를 세지 못했다"
+            if [ "$po_path" != . ]; then
+                failed_repos="$failed_repos$po_path "
+            fi
             return 0
         fi
         if [ "$po_count" = 0 ]; then
@@ -276,6 +282,7 @@ push:
         fi
         if [ -z "$po_branch" ]; then
             record skipped "$po_label" "detached HEAD($(git -C "$po_path" rev-parse --short HEAD 2>/dev/null))라 푸시하지 않았다. 원격에 없는 커밋 ${po_count}개가 있다. 브랜치로 옮긴 뒤 푸시하세요"
+            leftover="$leftover$po_label: 커밋 ${po_count}개$NL"
             return 0
         fi
 
@@ -283,15 +290,20 @@ push:
             # 루트 저장소는 지식 저장소가 모두 올라간 뒤에, 가리키는 커밋이 원격에 있을 때만 올린다.
             if [ "$list_failed" = 1 ]; then
                 record skipped "$po_label" "지식 저장소의 목록을 읽지 못해 어느 저장소를 먼저 올려야 하는지 알 수 없어 푸시하지 않았다"
+                leftover="$leftover$po_label: 커밋 ${po_count}개$NL"
                 return 0
             fi
             if [ -n "$failed_repos" ]; then
                 record skipped "$po_label" "지식 저장소 푸시에 실패해 푸시하지 않았다: ${failed_repos% }"
+                leftover="$leftover$po_label: 커밋 ${po_count}개$NL"
                 return 0
             fi
-            po_dangling=$(printf '%s\n' "$repos" | unpublished_pointers "$po_branch")
+            if ! po_dangling=$(unpublished_pointers "$po_branch"); then
+                record failed "$po_label" "올라갈 커밋이 가리키는 서브모듈 커밋을 읽지 못해 푸시하지 않았다"
+                return 0
+            fi
             if [ -n "$po_dangling" ]; then
-                record failed "$po_label" "원격에서 확인되지 않는 서브모듈 커밋을 가리켜 푸시하지 않았다. 그 저장소에서 커밋을 푸시한 뒤 다시 하세요: $(printf '%s' "$po_dangling" | tr '\n' ',' | sed 's/,/, /g')"
+                record failed "$po_label" "원격에서 확인되지 않는 서브모듈 커밋을 가리켜 푸시하지 않았다: $(printf '%s' "$po_dangling" | tr '\n' ';' | sed 's/;/; /g; s/; $//')"
                 return 0
             fi
         fi
@@ -301,9 +313,12 @@ push:
             po_new=" (원격에 새로 만듦)"
         fi
         echo "푸시 중: $po_label ($po_branch)"
-        # 현재 브랜치를 같은 이름의 원격 브랜치로 올린다. 브랜치를 명시해 push.default나 추적 브랜치 설정이 대상을 바꾸지 못하게 하고,
-        # 서브모듈은 따라 올리지 않는다(push.recurseSubmodules). 이유를 읽으므로 메시지 언어를 고정한다.
-        if po_out=$(LC_ALL=C git -C "$po_path" push --no-recurse-submodules origin "refs/heads/$po_branch:refs/heads/$po_branch" 2>&1 </dev/null); then
+        # 현재 브랜치를 같은 이름의 원격 브랜치로 올린다. 사용자의 git 설정이 올리는 것을 바꾸지 못하도록 명령줄에서 고정한다.
+        # - 브랜치를 refspec으로 명시한다: push.default나 추적 브랜치 설정이 대상을 바꾸지 못한다.
+        # - --no-follow-tags: push.followTags가 켜져 있으면 올리는 커밋에 닿는 주석 태그도 함께 올라간다. 커밋한 브랜치만 올린다.
+        # - --no-recurse-submodules: push.recurseSubmodules가 서브모듈을 따라 올리지 못하게 한다(순서는 이 레시피가 정한다).
+        # 이유를 읽으므로 메시지 언어를 고정한다.
+        if po_out=$(LC_ALL=C git -C "$po_path" push --no-follow-tags --no-recurse-submodules origin "refs/heads/$po_branch:refs/heads/$po_branch" 2>&1 </dev/null); then
             record pushed "$po_label" "$po_branch$po_new, 커밋 ${po_count}개"
         else
             record failed "$po_label" "푸시에 실패했다: $(push_failure_reason "$po_out")"
@@ -368,6 +383,12 @@ push:
     print_group "올릴 것 없음" "$nothing"
     print_group 건너뜀 "$skipped"
     print_group 실패 "$failed"
+    # 건너뛰어 올리지 못한 커밋은 종료 코드에 드러나지 않으므로 따로 알린다.
+    if [ -n "$leftover" ]; then
+        echo
+        echo "주의: 건너뛴 저장소에 푸시하지 않은 커밋이 남아 있습니다. 이 커밋은 원격에 없습니다:"
+        printf '%s' "$leftover" | sed 's/^/  /'
+    fi
     if [ "$need_setup" = 1 ]; then
         echo
         echo "초기화되지 않은 서브모듈이 있습니다. just setup으로 초기화하세요."

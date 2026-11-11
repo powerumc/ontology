@@ -1,5 +1,7 @@
 """`just git push`: 이미 커밋된 것만, 지식 저장소를 먼저 올리고 모두 성공한 뒤 루트 저장소를 올린다. 저장소별 결과를 요약한다."""
 
+import pytest
+
 ROOT = "루트 저장소"
 STATES = ("푸시됨", "올릴 것 없음", "건너뜀", "실패")
 
@@ -25,6 +27,20 @@ def _uncommitted(result):
     header = "미커밋 변경이 있는 저장소"
     before_summary = result.stdout.partition("== 요약 ==")[0]
     _, marker, rest = before_summary.partition(header)
+    found = {}
+    if not marker:
+        return found
+    for line in rest.splitlines()[1:]:
+        if not line.startswith("  "):
+            break
+        found[line.strip().split(":")[0]] = line.strip()
+    return found
+
+
+def _left_behind(result):
+    """요약 뒤에 알리는 "건너뛴 저장소에 푸시하지 않은 커밋이 남아 있다"의 목록. `{저장소: 줄}`이고, 알림이 없으면 빈 딕셔너리다."""
+    header = "푸시하지 않은 커밋이 남아 있습니다"
+    _, marker, rest = result.stdout.partition("== 요약 ==")[2].partition(header)
     found = {}
     if not marker:
         return found
@@ -496,3 +512,233 @@ def test_하위_디렉토리에서_불러도_루트_저장소를_기준으로_�
 
     assert result.returncode == 0, result.stderr
     assert _tip(sandbox, billing.url) == head
+
+
+# --- 올라가는 루트 커밋 전체가 가리키는 서브모듈 커밋을 본다 ------------------------------------------
+
+
+def test_루트가_가리킨_뒤_등록을_해제해_저장소가_없어진_커밋은_확인할_수_없어_루트를_올리지_않는다(sandbox):
+    """`just repo remove --force`는 스테이징까지만 한다. 커밋한 포인터는 HEAD에 남아 있는데 지식 저장소의 등록은 인덱스에서 빠진다."""
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    root.register(billing)
+    clone = root.set_up_clone()
+    unpushed = _local_commit(sandbox, _sub(clone))
+    _commit_pointers(sandbox, clone, "billing")
+    assert sandbox.just("repo", "remove", "billing", "--force", cwd=clone).returncode == 0
+    root_tip = _tip(sandbox, root.origin)
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode != 0
+    assert _tip(sandbox, root.origin) == root_tip
+    state, line = _outcomes(result)[ROOT]
+    assert state == "실패" and "projects/billing" in line and unpushed[:7] in line
+
+
+def test_작업_트리의_gitmodules에서_등록이_빠져_있어도_올라가는_루트_커밋이_가리키는_커밋을_확인한다(sandbox):
+    """무엇을 검사할지는 미커밋 상태(작업 트리의 `.gitmodules`, 인덱스)가 아니라 올라가는 커밋이 정한다."""
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    root.register(billing)
+    clone = root.set_up_clone()
+    unpushed = _local_commit(sandbox, _sub(clone))
+    _commit_pointers(sandbox, clone, "billing")
+    (clone / ".gitmodules").write_text("", encoding="utf-8")  # 미커밋 변경. 그 저장소는 목록에서 빠져 푸시되지 않는다
+    root_tip = _tip(sandbox, root.origin)
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode != 0
+    assert _tip(sandbox, root.origin) == root_tip
+    assert _tip(sandbox, billing.url) != unpushed
+    state, line = _outcomes(result)[ROOT]
+    assert state == "실패" and "projects/billing" in line and unpushed[:7] in line
+
+
+def test_함께_올라가는_중간_루트_커밋이_원격에_없는_서브모듈_커밋을_가리키면_루트_저장소를_올리지_않는다(sandbox):
+    """서브모듈에서 커밋을 고쳐 쓰면(amend) 앞 루트 커밋은 사라진 커밋을 가리킨 채 이력에 남는다. 받는 사람이 그 커밋을 체크아웃하면 서브모듈을 받지 못한다."""
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    root.register(billing)
+    clone = root.set_up_clone()
+    sub = _sub(clone)
+    replaced = _local_commit(sandbox, sub)
+    _commit_pointers(sandbox, clone, "billing")  # 루트가 곧 사라질 커밋을 가리킨다
+    (sub / "local.md").write_text("# 고쳐 씀\n", encoding="utf-8")
+    sandbox.git("commit", "-a", "--amend", "-m", "고쳐 씀", cwd=sub)
+    amended = sandbox.head(sub)
+    _commit_pointers(sandbox, clone, "billing")  # HEAD는 고친 커밋을 가리킨다
+    root_tip = _tip(sandbox, root.origin)
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode != 0
+    assert _tip(sandbox, billing.url) == amended  # 지식 저장소는 올라갔다
+    assert _tip(sandbox, root.origin) == root_tip
+    state, line = _outcomes(result)[ROOT]
+    assert state == "실패" and replaced[:7] in line and amended[:7] not in line
+
+
+def test_병합_커밋이_충돌을_풀며_기록한_서브모듈_커밋도_원격에_없으면_루트_저장소를_올리지_않는다(sandbox):
+    """병합 커밋은 부모와 비교하지 않으면 diff에 나오지 않는다. 충돌을 풀며 새 포인터를 적은 병합 커밋을 놓치지 않는다."""
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    root.register(billing)
+    clone = root.set_up_clone()
+    sub = _sub(clone)
+    sandbox.git("checkout", "-b", "feature", cwd=sub)
+    unpushed = _local_commit(sandbox, sub)
+    sandbox.git("checkout", "main", cwd=sub)  # 그 커밋은 이번 푸시가 올리지 않는다
+    sandbox.git("checkout", "-b", "side", cwd=clone)
+    _local_commit(sandbox, clone, "SIDE.md")
+    sandbox.git("checkout", "main", cwd=clone)
+    _local_commit(sandbox, clone, "MAIN.md")
+    sandbox.git("merge", "--no-commit", "--no-ff", "side", cwd=clone)
+    sandbox.git("update-index", "--cacheinfo", f"160000,{unpushed},projects/billing", cwd=clone)
+    sandbox.git("commit", "-m", "병합하며 포인터를 옮김", cwd=clone)
+    root_tip = _tip(sandbox, root.origin)
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode != 0
+    assert _tip(sandbox, root.origin) == root_tip
+    state, line = _outcomes(result)[ROOT]
+    assert state == "실패" and unpushed[:7] in line
+
+
+def test_새_루트_작업_브랜치는_초기화하지_않은_지식_저장소의_포인터가_그대로면_거부하지_않고_올린다(sandbox):
+    """같은 이름의 원격 브랜치가 없어도, 이 브랜치의 커밋이 포인터를 바꾸지 않았으면 확인할 것이 없다."""
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    clone = root.clone()  # 서브모듈을 초기화하지 않았다
+    sandbox.git("checkout", "-b", "feature", cwd=clone)
+    head = _local_commit(sandbox, clone, "NOTES.md")
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode == 0, result.stderr
+    assert _tip(sandbox, root.origin, "feature") == head
+    assert _outcomes(result)[ROOT][0] == "푸시됨"
+
+
+# --- 푸시하지 못한 저장소 -----------------------------------------------------------------------
+
+
+def test_푸시하지_않은_커밋_수를_세지_못한_지식_저장소가_있으면_실패로_보고하고_루트_저장소는_올리지_않는다(sandbox):
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    root.register(billing)
+    clone = root.set_up_clone()
+    sub = _sub(clone)
+    _local_commit(sandbox, sub)
+    git_dir = sandbox.git("rev-parse", "--absolute-git-dir", cwd=sub).stdout.strip()
+    with open(f"{git_dir}/refs/remotes/origin/main", "w", encoding="utf-8") as f:  # 없는 객체를 가리키는 원격 추적 참조: rev-list가 실패한다
+        f.write("1" * 40 + "\n")
+    root_head = _local_commit(sandbox, clone, "NOTES.md")  # 루트 커밋은 포인터를 바꾸지 않으므로 포인터 검사가 막아 주지 않는다
+    root_tip = _tip(sandbox, root.origin)
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode != 0
+    assert _tip(sandbox, root.origin) == root_tip != root_head
+    outcomes = _outcomes(result)
+    assert outcomes["projects/billing"][0] == "실패"
+    state, line = outcomes[ROOT]
+    assert state == "건너뜀" and "projects/billing" in line
+
+
+def test_건너뛴_저장소에_푸시하지_않은_커밋이_남으면_종료_코드는_0이어도_요약_끝에서_눈에_띄게_알린다(sandbox):
+    """건너뜀은 정상 결과다. 그 커밋을 루트가 가리키면 루트 푸시가 실패하므로 안전하다. 그래도 커밋한 작업이 공유되지 않았다는 사실은 보여야 한다."""
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    docs = sandbox.knowledge_remote("docs")
+    root.register(billing)
+    root.register(docs)
+    clone = root.set_up_clone()
+    sandbox.git("checkout", "--detach", cwd=_sub(clone, "billing"))
+    _local_commit(sandbox, _sub(clone, "billing"))
+    _local_commit(sandbox, _sub(clone, "billing"), "more.md")  # billing: detached HEAD에 커밋 2개
+    sandbox.git("checkout", "--detach", cwd=clone)
+    _local_commit(sandbox, clone, "NOTES.md")  # 루트도 detached HEAD에 커밋 1개
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode == 0, result.stderr
+    outcomes = _outcomes(result)
+    assert outcomes["projects/billing"][0] == "건너뜀" and outcomes[ROOT][0] == "건너뜀"
+    assert outcomes["projects/docs"][0] == "올릴 것 없음"
+    left = _left_behind(result)
+    assert set(left) == {"projects/billing", ROOT}  # 올릴 것이 없는 docs는 알리지 않는다
+    assert "2" in left["projects/billing"] and "1" in left[ROOT]
+
+
+def test_올리지_않은_커밋이_남은_건너뜀이_없으면_그런_알림을_하지_않는다(sandbox):
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    clone = root.set_up_clone()
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode == 0, result.stderr
+    assert "푸시하지 않은 커밋이 남아 있습니다" not in result.stdout
+
+
+# --- 사용자의 git 설정이 약속을 깨지 않는다 -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("push.followTags", "true"),  # 올리는 커밋에 닿는 주석 태그를 함께 올린다
+        ("push.recurseSubmodules", "on-demand"),
+        ("push.default", "nothing"),
+        ("push.autoSetupRemote", "true"),  # 인자 없는 push가 추적 설정을 만든다
+        ("submodule.recurse", "true"),
+        ("diff.ignoreSubmodules", "all"),  # 서브모듈 포인터 변경을 diff에서 숨긴다
+    ],
+)
+def test_사용자의_push_설정이_켜져_있어도_브랜치만_같은_이름으로_올리고_태그와_추적_설정은_건드리지_않는다(sandbox, key, value):
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    root.register(billing)
+    clone = root.set_up_clone()
+    sandbox.git("config", "--global", key, value, cwd=clone)
+    sub = _sub(clone)
+    sandbox.git("checkout", "-b", "feature", "origin/main", cwd=sub)  # 추적 대상이 origin/main이다
+    feature_head = _local_commit(sandbox, sub)
+    sandbox.git("tag", "-a", "v-billing", "-m", "지식 저장소의 태그", cwd=sub)
+    root_head = _commit_pointers(sandbox, clone, "billing")
+    sandbox.git("tag", "-a", "v-root", "-m", "루트의 태그", cwd=clone)
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode == 0, result.stderr
+    assert _tip(sandbox, billing.url, "feature") == feature_head
+    assert _tip(sandbox, root.origin) == root_head
+    assert sandbox.git("tag", "--list", cwd=billing.url).stdout == ""  # 태그는 올리지 않았다
+    assert sandbox.git("tag", "--list", cwd=root.origin).stdout == ""
+    assert sandbox.git("config", "--get", "branch.feature.merge", cwd=sub).stdout.strip() == "refs/heads/main"  # 추적 설정은 그대로다
+    assert sandbox.git("config", "--get", "branch.main.merge", cwd=clone).stdout.strip() == "refs/heads/main"
+    assert {state for state, _ in _outcomes(result).values()} == {"푸시됨"}
+
+
+def test_diff_설정이_서브모듈_변경을_숨겨도_루트가_원격에_없는_서브모듈_커밋을_가리키면_올리지_않는다(sandbox):
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    root.register(billing)
+    clone = root.set_up_clone()
+    sandbox.git("config", "--global", "diff.ignoreSubmodules", "all", cwd=clone)
+    sub = _sub(clone)
+    sandbox.git("checkout", "-b", "feature", cwd=sub)
+    feature_head = _local_commit(sandbox, sub)
+    _commit_pointers(sandbox, clone, "billing")
+    sandbox.git("checkout", "main", cwd=sub)
+    root_tip = _tip(sandbox, root.origin)
+
+    result = _push(sandbox, clone)
+
+    assert result.returncode != 0
+    assert _tip(sandbox, root.origin) == root_tip
+    state, line = _outcomes(result)[ROOT]
+    assert state == "실패" and feature_head[:7] in line

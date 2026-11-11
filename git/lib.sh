@@ -152,27 +152,39 @@ repo_has_remote_commit() {
     [ -n "$rhc_refs" ]
 }
 
-# 루트 저장소의 HEAD가 기록한 서브모듈 커밋 가운데 원격에 있다고 확인되지 않는 것을 `<경로> <짧은 해시>`로 한 줄에 하나씩 적는다.
-# 푸시하면 원격의 루트 저장소가 원격에 없는 커밋을 가리키게 되는 지식 저장소를 찾는 것이다. 표준 입력으로 knowledge_repos의 출력을
-# 받고, $1은 루트 저장소의 현재 브랜치다.
-# - 루트의 origin/$1이 이미 같은 커밋을 기록하고 있으면 푸시가 새로 알리는 것이 아니라서 넘어간다. 그 커밋을 로컬에 아직 받아 오지
+# 이번 푸시로 루트 저장소의 원격에 올라가는 커밋들이 가리키는 서브모듈 커밋 가운데, 원격에 있다고 확인되지 않는 것을
+# `<경로> <짧은 해시> (<이유>)`로 한 줄에 하나씩 적는다. 푸시하면 원격의 루트 저장소가 원격에 없는 커밋을 가리키게 되는 곳을 찾는 것이다.
+# $1은 루트 저장소의 현재 브랜치다. 올라가는 커밋을 읽지 못하면 실패한다.
+# - 무엇을 볼지는 올라가는 커밋이 정한다. 작업 트리의 .gitmodules나 인덱스 같은 미커밋 상태는 보지 않는다. 올라가는 커밋은
+#   origin/$1 이후의 것이고, 원격에 그 브랜치가 없으면(새 작업 브랜치) origin의 어느 브랜치에도 없는 커밋이다(repo_unpushed_count와 같다).
+#   HEAD뿐 아니라 함께 올라가는 중간 커밋도 보는 것은, 받는 사람이 그 커밋을 체크아웃해도 서브모듈을 받을 수 있어야 해서다.
+# - 그 커밋들이 새로 기록하거나 바꾼 서브모듈 커밋만 본다. 병합 커밋은 부모마다 본다. 설정(diff.ignoreSubmodules, diff.renames)에 기대지 않는다.
+# - 루트의 origin/$1이 이미 같은 경로에 같은 커밋을 기록하고 있으면 새로 알리는 것이 아니라서 넘어간다. 그 커밋을 로컬에 아직 받아 오지
 #   않았거나 저장소를 초기화하지 않았어도 마찬가지다.
-# - 초기화된 지식 저장소: 그 저장소의 원격 추적 참조에 기록된 커밋이 있어야 한다. 마지막으로 받거나 푸시한 시점의 정보라서, 그 사이에
-#   원격에 올라간 커밋은 없는 것으로 보고 거부하는 쪽(안전한 쪽)으로 틀린다.
-# - 초기화되지 않은 지식 저장소: 확인할 저장소가 없으므로 확인할 수 없는 것으로 적는다.
-# - HEAD에 기록이 없는 등록(아직 커밋하지 않은 것)은 푸시되지 않으므로 보지 않는다.
+# - 그 경로에 초기화된 저장소가 있으면 그 저장소의 원격 추적 참조에 커밋이 있어야 한다. 마지막으로 받거나 푸시한 시점의 정보라서, 그 사이에
+#   원격에 올라간 커밋은 없는 것으로 보고 거부하는 쪽으로 대개 틀린다(원격에서 지워진 브랜치의 추적 참조가 prune 전에 남은 경우는 반대로 틀린다).
+# - 그 경로에 저장소가 없으면(초기화하지 않았거나 등록을 해제했다) 확인할 수 없는 것으로 적는다.
 unpublished_pointers() {
     up_branch=$1
-    while IFS="$TAB" read -r up_path _; do
+    # 원격에 같은 이름의 브랜치가 있으면 그 이후, 없으면 origin의 어느 브랜치에도 없는 커밋
+    if git rev-parse --verify --quiet "refs/remotes/origin/$up_branch" >/dev/null 2>&1; then
+        up_log=$(git -c core.quotePath=false log --format= --raw --no-renames --no-abbrev --ignore-submodules=none -m HEAD --not "refs/remotes/origin/$up_branch" 2>/dev/null) || return 1
+    else
+        up_log=$(git -c core.quotePath=false log --format= --raw --no-renames --no-abbrev --ignore-submodules=none -m HEAD --not --remotes=origin 2>/dev/null) || return 1
+    fi
+    # raw 줄: ":<옛 모드> <새 모드> <옛 해시> <새 해시> <상태><탭><경로>". 새 모드가 160000이면 서브모듈이 새 커밋으로 기록된 것이다.
+    up_pairs=$(printf '%s\n' "$up_log" | awk -F '\t' '{ split($1, m, " "); if (m[2] == "160000") print $2 "\t" m[4] }' | sort -u)
+    while IFS="$TAB" read -r up_path up_sha; do
         [ -n "$up_path" ] || continue
-        up_sha=$(recorded_commit "$up_path") || continue
         [ "$(recorded_commit "$up_path" "refs/remotes/origin/$up_branch")" != "$up_sha" ] || continue
         if repo_initialized "$up_path"; then
             ! repo_has_remote_commit "$up_path" "$up_sha" || continue
-            up_note=
+            up_note=" (원격에 없다)"
         else
-            up_note=" (초기화되지 않아 확인할 수 없다)"
+            up_note=" (초기화되지 않았거나 없어 확인할 수 없다)"
         fi
         printf '%s %s%s\n' "$up_path" "$(printf %.7s "$up_sha")" "$up_note"
-    done
+    done <<EOF
+$up_pairs
+EOF
 }
