@@ -25,7 +25,7 @@ INVALID_CLASS_DECLARATION = Check(
 )
 INVALID_ONTOLOGY_YAML = Check(
     compiler.INVALID_ONTOLOGY_YAML,
-    "ontology.yaml 최상위에 정의되지 않은 키가 있거나 Project가 되는 속성(title, description, aliases)의 값의 종류가 맞지 않는다(읽을 수 없는 중첩된 값, 숫자 등)",
+    "ontology.yaml 최상위에 정의되지 않은 키가 있거나 Project가 되는 속성(title, description, aliases)과 Project가 쓰는 관계(dependsOn)의 값의 종류가 맞지 않는다(읽을 수 없는 중첩된 값, 숫자 등)",
     root_only=True,
 )
 INVALID_IDENTIFIER = Check(
@@ -102,7 +102,7 @@ SCOPE_VIOLATION = Check(
 
 PATH_REFERENCE = Check(
     "path-reference",
-    "관계의 값이 식별자도 교차 참조도 아니다(파일 경로, file: 주소, 첫 조각이 클래스 디렉토리가 아닌 값. 저장소 밖을 가리키는 경로는 저장소가 단독으로 열리면 깨진다)",
+    "관계의 값(페이지의 관계와 ontology.yaml의 dependsOn)이 식별자도 교차 참조도 아니다(파일 경로, file: 주소, 첫 조각이 클래스 디렉토리가 아닌 값. 저장소 밖을 가리키는 경로는 저장소가 단독으로 열리면 깨진다)",
     root_only=True,
 )
 OUTSIDE_LINK = Check(

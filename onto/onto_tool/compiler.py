@@ -6,7 +6,7 @@
 루트 저장소에서는 여러 지식 저장소가 하나의 그래프로 합쳐진다. 지식 저장소 안에서는 그 저장소 하나만 컴파일하고(`workspace.Within`),
 보고하는 파일 경로도 그 저장소 기준이다. 루트 저장소나 다른 지식 저장소는 읽지 않는다.
 관계의 값은 같은 저장소의 식별자이거나, 다른 저장소의 엔티티를 가리키는 교차 참조(`<저장소 이름>:<식별자>`)이고,
-가리키는 엔티티가 있는지는 따지지 않는다. 모든 엔티티에는 온 지식 저장소의 이름을
+가리키는 엔티티가 있는지는 따지지 않는다. `Project`는 페이지가 없어 자기가 쓰는 관계(`dependsOn`)를 `ontology.yaml`에 적고, 같은 방식으로 읽는다. 모든 엔티티에는 온 지식 저장소의 이름을
 `onto:repository`로 적는다. 저장소는 `ontology.yaml`의 `classes`로 자기 하위 클래스를 선언할 수 있다.
 페이지의 `derivedFrom`은 항목(원본 문서의 경로와 해시)마다 `Source` 엔티티가 되어 페이지가 `onto:derivedFrom`으로 가리킨다.
 `Source`는 페이지가 없어 `onto:repository`를 적지 않고, 구조 제약의 대상 엔티티가 아니다. 파일은 `Compiled.source_files`가 알려 준다.
@@ -30,7 +30,17 @@ from .classes import ClassIndex
 from .errors import OntoError
 from .graphs import canonical
 from .iri import UNRESOLVED_BASE, class_iri, entity_iri, resolve_reference, source_iri, unresolved_iri
-from .keys import CLASS_DECLARATION_KEYS, CLASSES_KEY, PAGE_KEYS, PROJECT_KEYS, RELATION_KEYS, RULES_KEY, SCOPE_KEY, SOURCE_KEY
+from .keys import (
+    CLASS_DECLARATION_KEYS,
+    CLASSES_KEY,
+    PAGE_KEYS,
+    PROJECT_KEYS,
+    PROJECT_RELATION_KEYS,
+    RELATION_KEYS,
+    RULES_KEY,
+    SCOPE_KEY,
+    SOURCE_KEY,
+)
 from .ontology_yaml import OntologyYamlError, read_ontology_yaml, undefined_keys_message
 from .pages import (
     INDEX_FILE,
@@ -125,6 +135,9 @@ class RepositoryRecord:
     scope: object = None
     scope_declared: bool = False
     pages: list[PageRecord] = field(default_factory=list)
+    # `Project` 엔티티가 쓴 관계(`ontology.yaml`의 `dependsOn`). 페이지가 아니지만 같은 모양이라 관계를 훑는 검사가 페이지처럼 본다(`referrers`).
+    # 파일은 `ontology.yaml`이고 `meta`에는 `Project`가 쓸 수 있는 관계의 키만 든다. `ontology.yaml`을 읽을 수 없으면 None이다.
+    project: PageRecord | None = None
     misnamed_pages: list[str] = field(default_factory=list)  # 페이지처럼 보이지만 확장자가 `.md`가 아니라 읽지 않은 파일의 경로
     index_text: str | None = None  # 지금 인덱스 파일의 글자(줄바꿈은 `\n`으로 통일). 파일이 없거나 읽지 않았으면 None
     # 인덱스 경로를 읽지도 쓰지도 않는 이유. 심볼릭 링크, 일반 파일이 아닌 것, 지식 저장소 밖을 가리키는 경로다. 문제가 없으면 None
@@ -132,6 +145,10 @@ class RepositoryRecord:
     skipped: list[SourceEntry] = field(default_factory=list)  # 넘긴 문서의 목록(`skipped.yaml`)의 항목. 파일이 없거나 읽을 수 없으면 비어 있다
     # 페이지와 넘긴 문서의 목록이 가리키는 원본 문서의 경로 -> 지금 작업 트리에 있는 내용의 해시. 없거나 읽을 수 없는 문서는 None이다.
     document_hashes: dict[str, str | None] = field(default_factory=dict)
+
+    def referrers(self) -> list[PageRecord]:
+        """다른 엔티티를 가리킬 수 있는 것: 페이지와 `Project` 엔티티(`ontology.yaml`). 관계와 링크를 훑는 검사가 쓴다."""
+        return [*self.pages, *([self.project] if self.project is not None else [])]
 
     @property
     def skipped_file(self) -> str:
@@ -315,6 +332,7 @@ def _read_repository(
         read.problems.append(Problem(yaml_file, str(exc), UNREADABLE_FILE))
         return read
     name = read.record.name = str(data["name"])
+    read.record.project = PageRecord(PROJECT_IDENTIFIER, yaml_file, {key: data[key] for key in PROJECT_RELATION_KEYS if key in data})
     read.record.rules = data.get(RULES_KEY)
     read.record.scope, read.record.scope_declared = data.get(SCOPE_KEY), SCOPE_KEY in data
     if undefined := undefined_keys_message(data):
@@ -332,7 +350,7 @@ def _read_repository(
         read.files[node["@id"]] = file
 
     try:
-        project = scalar_values({key: data[key] for key in PROJECT_KEYS if key in data})
+        project = scalar_values({key: data[key] for key in (*PROJECT_KEYS, *PROJECT_RELATION_KEYS) if key in data})
         add(PROJECT_IDENTIFIER, {"class": "Project", **project}, yaml_file)
     except FrontmatterError as exc:
         read.problems.append(Problem(yaml_file, str(exc), INVALID_ONTOLOGY_YAML))

@@ -12,6 +12,9 @@ frontmatter 키와 RDF의 대응은 `vocab/context.jsonld`가 정한다. 여기 
 - `Project`의 제목·설명·별칭(`ontology.yaml`의 `title`, `description`, `aliases`)은 선택이다. 없으면 없는 채로 두고
   `name`으로 채우지 않는다. 그러므로 `Project`에는 제목을 필수로 요구하는 구조 제약을 두지 않는다.
   `name`과 공유 범위만 든 `ontology.yaml`이 최신화 직후 검사를 통과해야 하기 때문이다.
+- `Project`는 페이지가 없어 자기가 쓰는 관계를 `ontology.yaml`에 적는다. `Project`가 쓰는 관계는 `dependsOn` 하나다(`PROJECT_RELATION_KEYS`).
+  값의 형식(식별자 또는 `<저장소 이름>:<식별자>` 교차 참조, 여럿이면 목록)과 깨진 참조, 등록되지 않은 저장소, 경로 참조, 공유 범위, 구조 제약
+  검사는 페이지의 관계와 같다. 다른 관계의 키는 정의되지 않은 키다.
 - `ontology.yaml`의 `scope`(공유 범위)와 `rules`(규칙 덮어쓰기)는 허용되는 키다. `rules` 안의 키(`sources`, `checks`, …)는
   `rules.py`의 스키마가 정한다. `scope`의 값은 `scope.py`가 읽고, 공유 범위 검사(`checks/scopes.py`)가 값과 교차 참조를 검사한다.
   `scope`는 컴파일된 그래프에 나타나지 않는다. 적지 않은 지식 저장소는 `private`으로 본다.
@@ -50,6 +53,8 @@ REVERSE_RELATION_KEYS = {
 ONTOLOGY_YAML_REQUIRED_KEYS = ("name",)
 # `Project` 엔티티의 사실이 되는 선택 키. 페이지 frontmatter와 같은 이름과 뜻이다.
 PROJECT_KEYS = ("title", "description", "aliases")
+# `Project`가 쓰는 관계의 키. `RELATION_KEYS`에 든 키 가운데 `Project`가 쓸 수 있는 것이다. 값은 페이지의 관계와 같은 형식이다.
+PROJECT_RELATION_KEYS = ("dependsOn",)
 # 지식 저장소가 자기 네임스페이스에 선언하는 하위 클래스. `{클래스 이름: {subClassOf: 상위 클래스 이름}}`이고 선택이다.
 # 엔티티를 서술하는 사실이 아니라 어휘의 선언이라 `Project`의 사실이 되지 않고, JSON-LD context에도 없다.
 CLASSES_KEY = "classes"
@@ -58,4 +63,4 @@ CLASS_DECLARATION_KEYS = ("subClassOf",)
 SCOPE_KEY = "scope"
 # 규칙 덮어쓰기. 루트 기본 규칙(`rules.yaml`)과 같은 구조로 바꿀 값만 적는다. 읽기와 검증은 `rules.py`가 한다.
 RULES_KEY = "rules"
-ONTOLOGY_YAML_KEYS = frozenset((*ONTOLOGY_YAML_REQUIRED_KEYS, *PROJECT_KEYS, CLASSES_KEY, SCOPE_KEY, RULES_KEY))
+ONTOLOGY_YAML_KEYS = frozenset((*ONTOLOGY_YAML_REQUIRED_KEYS, *PROJECT_KEYS, *PROJECT_RELATION_KEYS, CLASSES_KEY, SCOPE_KEY, RULES_KEY))

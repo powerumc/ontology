@@ -20,7 +20,7 @@
 
 onto:Project a owl:Class ;
     rdfs:label "Project"@en ;
-    rdfs:comment "지식 저장소 하나가 다루는 프로젝트 그 자체. 페이지 없이 ontology.yaml에서 만들어지며 식별자는 project다."@ko .
+    rdfs:comment "지식 저장소 하나가 다루는 프로젝트 그 자체. 페이지 없이 ontology.yaml에서 만들어지며 식별자는 project다. 자기가 쓰는 관계(dependsOn)도 ontology.yaml에 적는다."@ko .
 
 onto:Component a owl:Class ;
     rdfs:label "Component"@en ;

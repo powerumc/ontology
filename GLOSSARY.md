@@ -103,7 +103,7 @@ _Avoid_: 설정, 컨피그, 정책
 ### 공통 어휘의 클래스
 
 **Project**:
-지식 저장소 하나가 다루는 프로젝트 그 자체.
+지식 저장소 하나가 다루는 프로젝트 그 자체. 페이지가 없고 `ontology.yaml`에서 만들어지므로, 자기가 쓰는 관계(`dependsOn`)도 `ontology.yaml`에 적는다.
 
 **Component**:
 프로젝트를 이루는 시스템, 모듈, 서비스.
@@ -132,7 +132,7 @@ _Avoid_: 설정, 컨피그, 정책
 한 `Component`가 다른 `Component`나 `Project`의 일부라는 관계.
 
 **dependsOn**:
-한 `Component`나 `Project`가 동작하려면 다른 `Component`나 `Project`가 필요하다는 관계. 직접 의존만 적는다.
+한 `Component`나 `Project`가 동작하려면 다른 `Component`나 `Project`가 필요하다는 관계. 직접 의존만 적는다. `Component`는 페이지에, `Project`는 `ontology.yaml`에 적는다. `Project`가 쓰는 관계는 이것 하나다.
 
 **implements**:
 `Report`가 `Plan`이나 `Decision`을 실행했다는 관계.

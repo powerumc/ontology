@@ -1,6 +1,9 @@
-"""관계의 값(참조)을 훑는 검사 항목: 깨진 참조, 등록되지 않은 지식 저장소, 식별자도 교차 참조도 아닌 값(파일 경로).
+"""참조를 훑는 검사 항목: 깨진 참조, 등록되지 않은 지식 저장소, 식별자도 교차 참조도 아닌 값(파일 경로).
 
-그래프가 아니라 페이지의 frontmatter 원문에서 본다. 등록되지 않은 저장소 이름을 쓴 교차 참조는 컴파일에서 오류 없이
+훑는 것은 페이지의 관계의 값과 `Project` 엔티티의 관계의 값(`ontology.yaml`의 `dependsOn`)이다.
+`Project`는 페이지가 없어 자기가 쓰는 관계를 `ontology.yaml`에 적는다. 그 값은 페이지의 관계와 같은 규칙으로 검사하고, 문제는 `ontology.yaml`의 것으로 보고한다.
+
+관계의 값은 그래프가 아니라 frontmatter 원문(`ontology.yaml`은 그 값)에서 본다. 등록되지 않은 저장소 이름을 쓴 교차 참조는 컴파일에서 오류 없이
 그 문자열 그대로의 IRI가 되어 그래프만으로는 깨진 참조와 구별되지 않기 때문이다. 참조를 엔티티의 IRI로 바꾸는 규칙은
 컴파일과 같은 `iri.resolve_reference`를 쓴다.
 
@@ -25,7 +28,7 @@
 import re
 from collections.abc import Iterator
 
-from ..compiler import PROJECT_IDENTIFIER, Compiled
+from ..compiler import PROJECT_IDENTIFIER, Compiled, PageRecord, RepositoryRecord
 from ..iri import entity_iri, resolve_reference
 from ..keys import PAGE_CLASS_DIRECTORIES
 from ..rules import RuleSet
@@ -59,43 +62,55 @@ def not_a_reference(reference: str) -> str | None:
     return None
 
 
+class _Known:
+    """참조가 가리킬 수 있는 것: 등록된 지식 저장소와 그 안의 엔티티."""
+
+    def __init__(self, records: list[RepositoryRecord]) -> None:
+        # 지식 저장소는 `name`으로도 서브모듈 디렉토리 이름으로도 가리킬 수 있다. 둘이 다르면 그 문제는 따로 보고한다.
+        self.registered = {name for record in records for name in (record.directory, record.name) if name}
+        self.unreadable = {record.directory for record in records if record.has_layer and record.name is None}
+        self.without_layer = {record.directory for record in records if not record.has_layer}
+        self.entities = {
+            entity_iri(record.name, identifier)
+            for record in records
+            if record.name is not None
+            for identifier in (PROJECT_IDENTIFIER, *(page.identifier for page in record.pages))
+        }
+
+    def exists(self, record: RepositoryRecord, target: str) -> bool:
+        """`record`의 저장소에서 쓴 식별자나 교차 참조 `target`이 가리키는 엔티티가 있는가."""
+        return resolve_reference(record.name, target) in self.entities
+
+    def dangling(self, record: RepositoryRecord, page: PageRecord, where: str, target: str) -> Iterator[Issue]:
+        """식별자나 교차 참조 `target`이 등록되지 않은 지식 저장소나 없는 엔티티를 가리키면 그 문제를 낸다. `where`는 설명이 가리킬 자리다."""
+        repository, separator, _ = target.partition(":")
+        repository = repository.strip()
+        if separator and repository not in self.registered:
+            yield Issue(UNREGISTERED_REPOSITORY, page.file, f"{where}: 등록되지 않은 지식 저장소를 가리킨다(저장소 이름: `{repository}`)")
+        elif separator and repository in self.unreadable:
+            return
+        elif separator and repository in self.without_layer:
+            yield Issue(BROKEN_REFERENCE, page.file, f"{where}: 지식 저장소 `{repository}`에 온톨로지 층이 없다")
+        elif not self.exists(record, target):
+            yield Issue(BROKEN_REFERENCE, page.file, f"{where}: 가리키는 엔티티가 없다")
+
+
 def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
-    records = compiled.records
-    # 지식 저장소는 `name`으로도 서브모듈 디렉토리 이름으로도 가리킬 수 있다. 둘이 다르면 그 문제는 따로 보고한다.
-    registered = {name for record in records for name in (record.directory, record.name) if name}
-    unreadable = {record.directory for record in records if record.has_layer and record.name is None}
-    without_layer = {record.directory for record in records if not record.has_layer}
-    entities = {
-        entity_iri(record.name, identifier)
-        for record in records
-        if record.name is not None
-        for identifier in (PROJECT_IDENTIFIER, *(page.identifier for page in record.pages))
-    }
-    for record in records:
+    known = _Known(compiled.records)
+    for record in compiled.records:
         if record.name is None:
             continue
-        for page in record.pages:
+        for page in record.referrers():
             for key, target in page.relations():
                 where = f"`{key}`의 값 `{target}`"
-                repository, separator, _ = target.partition(":")
-                repository = repository.strip()
                 reason = not_a_reference(target)
-                if reason and resolve_reference(record.name, target) not in entities:
+                if reason and not known.exists(record, target):
                     yield Issue(
                         PATH_REFERENCE,
                         page.file,
                         f"{where}: 식별자나 교차 참조가 아니다({reason}). 같은 지식 저장소의 엔티티는 식별자(`component/api`)로, "
                         "다른 지식 저장소의 엔티티는 교차 참조(`<저장소 이름>:<식별자>`)로 가리킨다",
                     )
-                elif separator and repository not in registered:
-                    yield Issue(
-                        UNREGISTERED_REPOSITORY,
-                        page.file,
-                        f"{where}: 등록되지 않은 지식 저장소를 가리킨다(저장소 이름: `{repository}`)",
-                    )
-                elif separator and repository in unreadable:
-                    continue
-                elif separator and repository in without_layer:
-                    yield Issue(BROKEN_REFERENCE, page.file, f"{where}: 지식 저장소 `{repository}`에 온톨로지 층이 없다")
-                elif resolve_reference(record.name, target) not in entities:
-                    yield Issue(BROKEN_REFERENCE, page.file, f"{where}: 가리키는 엔티티가 없다")
+                else:
+                    yield from known.dangling(record, page, where, target)
+

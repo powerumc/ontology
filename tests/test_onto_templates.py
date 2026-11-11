@@ -183,6 +183,35 @@ def test_규약_문서가_참조와_링크의_공유_범위_규칙과_검사의_
         assert phrase in text, phrase
 
 
+def test_규약_문서가_Project의_dependsOn을_관계_표와_ontology_yaml_절에_적는다():
+    text = conventions()
+    relations = text.split("## 관계와 교차 참조")[1].split("### 참조하는 법")[0]
+    ontology_yaml = text.split("## `ontology.yaml`")[1].split("## 확인")[0]
+
+    assert re.search(r"^\| `dependsOn` \|[^|]*\| `Component`, `Project` → `Component`, `Project` \|$", relations, re.MULTILINE)
+    assert re.search(r"^\| `dependsOn` \|", ontology_yaml, re.MULTILINE)  # `ontology.yaml`의 키 표
+    assert "`Project`가 쓰는 관계는 `dependsOn` 하나" in text
+
+
+def test_규약_문서가_보여_주는_Project의_dependsOn_예는_도구가_받아들인다(onto_cli):
+    section = conventions().split("## `ontology.yaml`")[1].split("## 확인")[0]
+    examples = [block for block in re.findall(r"```yaml\n(.*?)```", section, re.DOTALL) if "dependsOn:" in block]
+    assert len(examples) == 1
+    yaml_text = examples[0]  # 예의 `name`이 이 견본의 디렉토리 이름과 같다
+    repos = {
+        "billing": {f"{ONTOLOGY_DIR}/ontology.yaml": yaml_text, **page("component/gateway", "Component", title="게이트웨이", partOf="project")},
+        "shop": repo("shop", page("component/api", "Component", title="상점 API", partOf="project")),
+    }
+    root = onto_cli.root(repos)
+
+    result = onto_cli.run(root, "validate")
+
+    assert result.returncode == 0, result.stdout
+    assert result.stdout == ""
+    dependencies = onto_cli.query(root, "SELECT ?o WHERE { ?e a onto:Project ; onto:repository 'billing' ; onto:dependsOn ?o }")
+    assert dependencies  # 예가 의존을 적었고 도구가 그것을 읽었다
+
+
 def test_규약_문서가_보여_주는_본문_링크와_교차_참조는_도구가_받아들이고_경로_참조는_거부한다(onto_cli):
     """문서가 권하는 쓰기(페이지 기준 상대 경로, `<저장소>:<식별자>` 링크)는 통과하고, 금지하는 값(`docs/ontology/plan/x`)은 걸린다."""
     link = "[설계](../../design.md) [결제 API](billing:component/api)\n"

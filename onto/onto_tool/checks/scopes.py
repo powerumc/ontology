@@ -2,7 +2,8 @@
 
 공유 범위를 지키는 안전장치라 이 모듈의 항목은 모두 루트 전용이다. 지식 저장소의 규칙이 끄거나 심각도를 바꿀 수 없다.
 
-- 교차 참조는 관계의 값(`dependsOn: billing:component/api`)과 페이지 본문의 링크 대상(`[글](billing:component/api)`)이다.
+- 교차 참조는 관계의 값(`dependsOn: billing:component/api`)과 페이지 본문의 링크 대상(`[글](billing:component/api)`)이다. `Project`가
+  `ontology.yaml`의 `dependsOn`에 적은 값도 관계의 값이라 같다(문제는 `ontology.yaml`의 것으로 보고한다).
   `class`의 값 `<저장소 이름>:<나머지>`(`class: billing:Invoice`)도 본다. 그런 값은 클래스를 풀지 못하는 값(`disallowed-class`)이지만 그 항목은 저장소 규칙으로
   끌 수 있어, 꺼도 저장소 이름이 담긴 채 통과하지 않게 한다. 같은 이유로 정의되지 않은 키(`undefined-key`)와 그 값, 값의 종류가 틀린 관계의 값(`invalid-value`:
   `dependsOn: {id: billing:component/api}`처럼 중첩된 값)에 든 문자열도 중첩까지 훑어 본다. 키-값의 값뿐 아니라 키도 본다(`notes: {billing:component/api: 메모}`).
@@ -50,7 +51,7 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
 
     for record in compiled.records:
         source = scopes[record.directory]
-        for page in record.pages:
+        for page in record.referrers():  # 페이지와 `Project` 엔티티(`ontology.yaml`의 `dependsOn`)
             for where, target in _cross_references(page):
                 repository = target.partition(":")[0].strip()
                 for directory in sorted(by_reference.get(repository, ())):

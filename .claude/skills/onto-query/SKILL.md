@@ -46,7 +46,7 @@ description: 지식 저장소의 온톨로지를 SPARQL로 질의해 프로젝�
 | 관계 | 뜻 | 쓰는 쪽 → 가리키는 쪽 | 추론으로 생기는 역 |
 |---|---|---|---|
 | `onto:partOf` | A는 B의 일부다. 추이 관계다 | `Component` → `Component`, `Project` | `onto:hasPart` |
-| `onto:dependsOn` | A가 동작하려면 B가 필요하다. 직접 의존만 적고, 간접 의존은 `onto:dependsOn+` 경로로 구한다 | `Component`, `Project` → `Component`, `Project` | 없음 |
+| `onto:dependsOn` | A가 동작하려면 B가 필요하다. 직접 의존만 적고, 간접 의존은 `onto:dependsOn+` 경로로 구한다. `Project`의 의존은 `ontology.yaml`의 `dependsOn`에서 온다 | `Component`, `Project` → `Component`, `Project` | 없음 |
 | `onto:implements` | 이 구현 결과가 그 계획이나 결정을 실행했다 | `Report` → `Plan`, `Decision` | `onto:implementedBy` |
 | `onto:governs` | 이 정책이 그 대상에 적용된다 | `Policy` → `Project`, `Component` | `onto:governedBy` |
 | `onto:supersedes` | 새 것이 같은 클래스의 옛 것을 대체한다 | 같은 클래스끼리 | `onto:supersededBy` |
@@ -84,6 +84,9 @@ SELECT ?e ?t WHERE { ?e a onto:Policy ; dcterms:title ?t } ORDER BY ?t
 # 직접 의존과 간접 의존
 SELECT ?a ?b WHERE { ?a onto:dependsOn ?b }
 SELECT ?a ?b WHERE { ?a onto:dependsOn+ ?b }
+
+# 프로젝트 사이의 의존(엔티티가 `ontology.yaml`의 경로로 나온다)
+SELECT ?a ?b WHERE { ?a a onto:Project ; onto:dependsOn ?b . ?b a onto:Project }
 
 # 어떤 컴포넌트의 일부(간접 포함)
 SELECT ?x WHERE { ?x onto:partOf <https://onto.invalid/entity/billing/component/gateway> }

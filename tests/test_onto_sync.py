@@ -55,6 +55,19 @@ def test_구성이_없는_지식_저장소에_sync하면_name이_디렉토리_�
     assert project_names(sandbox, root) == ["billing"]  # 도구가 읽은 name
 
 
+def test_만든_ontology_yaml은_프로젝트_사이의_의존을_적는_선택_키를_주석으로_안내한다(sandbox):
+    """`Project`가 쓰는 관계는 `dependsOn` 하나다. 주석이라 만들자마자 검사를 통과하고, 풀어 쓰면 도구가 받아들인다."""
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing")
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stderr
+    text = (billing / YAML).read_text(encoding="utf-8")
+    assert re.search(r"^# dependsOn:.*\bProject\b", text, re.MULTILINE)
+    assert not re.search(r"^dependsOn:", text, re.MULTILINE)  # 선택 키라 적어 두지 않는다
+
+
 def test_ontology_yaml의_name은_원격_저장소가_아니라_서브모듈_디렉토리_이름이다(sandbox):
     root = sandbox.root()
     attach(sandbox, root, "billing", directory="invoice")

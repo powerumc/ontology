@@ -300,6 +300,7 @@ def _ontology_yaml(name: str) -> str:
 # title: 프로젝트 이름          # 이 프로젝트(Project 엔티티)의 제목
 # description: 한 줄 설명
 # aliases: [별칭, alias]
+# dependsOn: [shop:project]     # 이 프로젝트(Project)가 의존하는 Project나 Component. 다른 저장소는 <이름>:<식별자>로 가리킨다
 # classes:                      # 이 저장소만의 하위 클래스
 #   Invoice:
 #     subClassOf: Component

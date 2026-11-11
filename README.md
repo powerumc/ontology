@@ -31,7 +31,7 @@
     ├── .onto/                # 루트 저장소의 onto/ 사본. 커밋하지 않음
     ├── .claude/skills/onto-*/ # 스킬 사본. 커밋하지 않음
     └── docs/ontology/        # 이 저장소의 지식. 커밋함
-        ├── ontology.yaml     # 저장소 이름, 공유 범위, 규칙 덮어쓰기
+        ├── ontology.yaml     # 저장소 이름, 공유 범위, 프로젝트의 의존, 규칙 덮어쓰기
         ├── index.md          # 진입점 (생성물)
         ├── skipped.yaml      # 읽고도 기록할 것이 없던 원본 문서의 목록 (필요할 때 생김)
         └── plan/ policy/ term/ decision/ report/ component/

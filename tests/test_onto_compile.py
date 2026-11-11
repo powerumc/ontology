@@ -654,13 +654,14 @@ def test_문서화된_frontmatter_키를_모두_쓴_페이지는_키마다_그�
 
 
 def test_문서화된_ontology_yaml_키를_모두_쓰면_키마다_그래프에_나타난다(onto_cli):
-    """`name`은 엔티티의 출처와 식별자에, `title`·`description`·`aliases`는 Project의 사실에, `classes`는 선언한 클래스에 나타난다."""
+    """`name`은 엔티티의 출처와 식별자에, `title`·`description`·`aliases`·`dependsOn`은 Project의 사실에, `classes`는 선언한 클래스에 나타난다."""
     root = onto_cli.root(
         billing(
             page("component/invoice-service", "Invoice", title="청구서 서비스"),
             title="결제",
             description="결제 서비스",
             aliases=["billing service", "청구"],
+            dependsOn="component/invoice-service",
             classes={"Invoice": {"subClassOf": "Component"}},
         )
     )
@@ -676,4 +677,5 @@ def test_문서화된_ontology_yaml_키를_모두_쓰면_키마다_그래프에_
     assert (f"{DCTERMS}title", "결제") in facts
     assert (f"{DCTERMS}description", "결제 서비스") in facts
     assert {obj for predicate, obj in facts if predicate.endswith("altLabel")} == {"billing service", "청구"}
+    assert (f"{VOCAB}dependsOn", f"{PAGES}/component/invoice-service.md") in facts  # Project가 쓰는 관계는 dependsOn 하나다
     assert invoice_as_component == [[f"{PAGES}/component/invoice-service.md"]]  # classes

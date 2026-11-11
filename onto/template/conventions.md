@@ -9,7 +9,7 @@
 
 ```
 docs/ontology/
-├── ontology.yaml     # 이 저장소의 이름, 공유 범위, 하위 클래스, 규칙 덮어쓰기
+├── ontology.yaml     # 이 저장소의 이름, 공유 범위, 프로젝트의 의존, 하위 클래스, 규칙 덮어쓰기
 ├── index.md          # 인덱스. 생성물이라 손으로 고치지 않는다
 ├── skipped.yaml      # 읽고도 기록할 것이 없던 원본 문서의 목록. 필요할 때 생긴다
 └── plan/ policy/ term/ decision/ report/ component/   # 클래스별 페이지. 첫 페이지를 쓸 때 디렉토리가 생긴다
@@ -92,12 +92,13 @@ derivedFrom:
 | 관계 | 뜻 | 쓰는 쪽 → 가리키는 쪽 |
 |---|---|---|
 | `partOf` | A는 B의 일부다 | `Component` → `Component`, `Project` |
-| `dependsOn` | A가 동작하려면 B가 필요하다. 직접 의존만 적는다 | `Component` → `Component`, `Project` |
+| `dependsOn` | A가 동작하려면 B가 필요하다. 직접 의존만 적는다 | `Component`, `Project` → `Component`, `Project` |
 | `implements` | 이 구현 결과가 그 계획이나 결정을 실행했다 | `Report` → `Plan`, `Decision` |
 | `governs` | 이 정책이 그 대상에 적용된다 | `Policy` → `Project`, `Component` |
 | `supersedes` | 새 것이 옛 것을 대체한다 | 같은 클래스끼리 |
 | `about` | 이 페이지가 다루는 대상 | `Plan`, `Decision`, `Report`, `Term` → `Project`, `Component` |
 
+- `Project`는 페이지가 없어 자기가 쓰는 관계를 `ontology.yaml`에 적는다(아래 "`ontology.yaml`"). `Project`가 쓰는 관계는 `dependsOn` 하나다. 값의 형식과 검사는 페이지의 관계와 같다.
 - 역방향(`hasPart`, `implementedBy`, `governedBy`, `supersededBy`)은 페이지에 쓰지 않는다. 질의할 때 추론으로 생긴다. 쓰면 오류다.
 - `partOf`는 추이 관계다. A가 B의 일부이고 B가 C의 일부이면 질의에서 A는 C의 일부다. `dependsOn`은 추이 관계가 아니다. 간접 의존은 질의에서 경로로 구한다.
 - 다른 엔티티와의 관계가 들어오는 것도 나가는 것도 없는 페이지는 고아 페이지라 경고한다. 페이지마다 관계를 하나 이상 적는다. `derivedFrom`은 관계로 세지 않는다.
@@ -106,7 +107,7 @@ derivedFrom:
 
 - 같은 저장소의 엔티티는 식별자를 그대로 쓴다: `about: component/ledger`. `Project`는 `project`다.
 - 다른 저장소의 엔티티는 `<저장소 이름>:<식별자>`로 쓴다(교차 참조): `dependsOn: billing:component/api`, `about: billing:project`. 저장소 이름은 그 저장소의 `ontology.yaml`의 `name`이다.
-- 관계의 값은 식별자나 교차 참조뿐이다. 파일 경로(`../plan/x.md`, `docs/ontology/plan/x`, `projects/billing/…`), `file:` 주소, `https://…` 같은 주소는 오류(`path-reference`)다. 경로는 옮기면 깨지고, 저장소 밖의 경로는 이 저장소만 열었을 때 열리지 않으며, 다른 저장소의 위치를 드러낸다. 식별자의 첫 조각은 클래스 디렉토리(`component/`, `plan/`, …)이거나 값이 `project`여야 하므로, 그 밖으로 시작하는 값(`componet/api` 같은 오타 포함)도 같은 오류다.
+- 관계의 값(`ontology.yaml`의 `dependsOn`도 같다)은 식별자나 교차 참조뿐이다. 파일 경로(`../plan/x.md`, `docs/ontology/plan/x`, `projects/billing/…`), `file:` 주소, `https://…` 같은 주소는 오류(`path-reference`)다. 경로는 옮기면 깨지고, 저장소 밖의 경로는 이 저장소만 열었을 때 열리지 않으며, 다른 저장소의 위치를 드러낸다. 식별자의 첫 조각은 클래스 디렉토리(`component/`, `plan/`, …)이거나 값이 `project`여야 하므로, 그 밖으로 시작하는 값(`componet/api` 같은 오타 포함)도 같은 오류다.
 - 공유 범위(`scope`)가 더 좁은 저장소의 엔티티는 가리킬 수 없다. 범위는 `private` < `team` < `public`이다. 더 넓은 범위의 저장소는 가리켜도 되고, 같은 범위끼리는 `team`일 때만 같은 팀(같은 `team:<팀 이름>`, 또는 둘 다 이름 없는 `team`)이어야 한다. 가리키는 엔티티가 없어도 참조에 저장소 이름이 드러나므로 오류(`scope-violation`)다. 범위를 알 수 없는 저장소(`scope`를 적지 않았거나 틀렸다, 온톨로지 층이 없다)는 가장 좁은 `private`으로 본다.
 - 가리키는 엔티티가 없으면 깨진 참조라 오류다. 다른 저장소를 가리키는 참조는 그 저장소와 합쳐 검사해야 확인된다.
 
@@ -178,8 +179,18 @@ classes:
 | `name` | 이 저장소의 이름. **필수**. 서브모듈 디렉토리 이름과 같아야 한다. 교차 참조가 이 이름으로 이 저장소를 가리킨다 |
 | `scope` | 공유 범위. `private`, `team`, `team:<팀 이름>`, `public` 중 하나이고 다른 값은 오류다(대소문자를 구분하고, 팀 이름은 비어 있지 않고 공백과 `:`가 없다). 처음에는 가장 좁은 `private`이다. 적지 않으면 `private`으로 본다. 공유 범위가 더 좁은 저장소의 엔티티는 참조할 수 없고(위 "참조하는 법"), 이름이 다른 팀의 저장소끼리도 참조할 수 없다 |
 | `title` `description` `aliases` | 이 프로젝트(`Project` 엔티티)의 제목, 설명, 별칭. 선택 |
+| `dependsOn` | 이 프로젝트가 동작하려면 필요한 `Project`나 `Component`. 선택. 값은 페이지의 관계와 같다(식별자 또는 교차 참조, 여럿이면 목록). `Project`가 쓰는 관계는 `dependsOn` 하나다 |
 | `classes` | 이 저장소가 선언하는 하위 클래스(위) |
 | `rules` | 루트 기본 규칙(`.onto/rules.yaml`) 가운데 이 저장소에서만 바꿀 값. 같은 구조로 바꿀 값만 적는다 |
+
+프로젝트 사이의 의존은 `dependsOn`에 적는다. 직접 의존만 적고, 값의 검사(깨진 참조, 경로 참조, 공유 범위, 구조 제약)는 페이지의 관계와 같다. 문제는 `ontology.yaml`의 것으로 보고된다.
+
+```yaml
+name: billing
+dependsOn:
+  - shop:project          # 다른 저장소의 프로젝트에 의존한다
+  - shop:component/api    # 다른 저장소의 컴포넌트에 의존한다
+```
 
 `rules`의 키는 루트 기본 규칙(`.onto/rules.yaml`)과 같다. 바꿀 값만 적고, 적지 않은 값은 기본 규칙을 따른다.
 
