@@ -42,7 +42,7 @@ def _tip(sandbox, bare, branch="main"):
 
 
 def _attach(sandbox, files, *, push_gate=True, indexed=True):
-    """`billing`을 붙인 루트 저장소와 그 클론. 인덱스는 생성물이지만 지식 저장소가 커밋하는 파일이라 만들어 커밋하고, 루트가 그 커밋을 가리키게 한다.
+    """`billing`을 붙인 루트 저장소와 그 클론. 최신화(`just onto sync`)로 복사된 기능과 인덱스를 갖추고, 인덱스는 생성물이지만 지식 저장소가 커밋하는 파일이라 커밋해 루트가 그 커밋을 가리키게 한다.
 
     루트와 `billing` 모두 푸시할 커밋이 하나씩 있는 상태다. `(루트, billing 원격, 클론)`을 돌려준다.
     """
@@ -52,8 +52,10 @@ def _attach(sandbox, files, *, push_gate=True, indexed=True):
     clone = root.set_up_clone()
     sub = clone / "projects" / "billing"
     if indexed:
-        built = sandbox.just("onto", "build", cwd=clone)
-        assert built.returncode == 0, built.stderr
+        # `just repo add`로 등록하면 하는 최신화와 같다. 복사된 기능(`.onto/`)이 없으면 `outdated-managed-files` 경고가 검사에 끼고, 최신화가 인덱스도 만든다.
+        synced = sandbox.just("onto", "sync", "billing", cwd=clone)
+        assert synced.returncode == 0, synced.stderr or synced.stdout
+        assert (sub / ONTOLOGY_DIR / "index.md").is_file()
     else:
         (sub / "local.md").write_text("# 메모\n", encoding="utf-8")
     sandbox.git("add", "-A", cwd=sub)
