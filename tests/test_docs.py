@@ -180,3 +180,13 @@ def test_테스트_안내의_걸리는_시간은_전체_테스트가_병렬로�
 
     assert "병렬은 1분 안팎" not in guide  # 테스트가 1500개를 넘어 병렬로도 몇 분이 걸린다
     assert re.search(r"병렬로도 [^.]*\d+분", guide)
+
+
+def test_onto_ingest_스킬의_쓰는_파일_문장은_프로젝트_의존을_적는_ontology_yaml의_dependsOn을_한_문장에_담는다():
+    """앞 문장만 따르는 에이전트가 프로젝트 사이의 의존을 적지 않거나, 예외를 모르고 `ontology.yaml`의 다른 키를 고치지 않게 한다."""
+    document = text(SKILL_FILES["onto-ingest"])
+    sentence = re.search(r"쓰는 파일은(.*?뿐이다)", document)
+
+    assert sentence is not None
+    assert "`skipped.yaml`" in sentence[1] and "`ontology.yaml`" in sentence[1] and "`dependsOn`" in sentence[1]
+    assert "다른 키" in document and "고치지 않는다" in document.split("쓰는 파일은")[1].split("**커밋하지")[0]
