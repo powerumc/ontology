@@ -884,6 +884,54 @@ def test_순환하는_skipped_yaml_링크는_없는_파일이_아니라_읽을_�
     assert onto_cli.run(root, "build").returncode == 1
 
 
+def test_순환하는_페이지_링크는_없는_파일이_아니라_읽을_수_없는_파일로_알린다(onto_cli):
+    root = onto_cli.root({"team": team_repo()})
+    (root / "projects/team" / ONTOLOGY_DIR / "component/loop.md").symlink_to("loop.md")
+
+    result, findings = validate(onto_cli, root)
+
+    assert [finding[:4] for finding in findings] == [(ERROR, "team", file("component/loop", "team"), "unreadable-file")]
+    assert "Too many levels of symbolic links" in findings[0][4]
+    assert result.returncode == 1
+    assert onto_cli.run(root, "build").returncode == 1
+
+
+def test_서로를_가리키는_두_페이지_링크도_읽을_수_없는_파일로_알린다(onto_cli):
+    root = onto_cli.root({"team": team_repo()})
+    layer = root / "projects/team" / ONTOLOGY_DIR
+    (layer / "component/ping.md").symlink_to("pong.md")
+    (layer / "component/pong.md").symlink_to("ping.md")
+
+    findings = found(onto_cli, root)
+
+    assert sorted(findings) == [(ERROR, "team", file(f"component/{name}", "team"), "unreadable-file") for name in ("ping", "pong")]
+
+
+def test_순환하는_ontology_yaml_링크는_온톨로지_층이_없는_것이_아니라_읽을_수_없는_파일로_알린다(onto_cli):
+    root = onto_cli.root({"team": team_repo()})
+    link = root / "projects/team" / ONTOLOGY_DIR / "ontology.yaml"
+    link.unlink()
+    link.symlink_to("ontology.yaml")
+
+    result, findings = validate(onto_cli, root)
+
+    assert (ERROR, "team", yaml_file("team"), "unreadable-file") in [finding[:4] for finding in findings]
+    assert "missing-ontology-layer" not in [finding[3] for finding in findings]  # 층이 없는 것이 아니라 읽을 수 없는 것이다
+    assert "Too many levels of symbolic links" in next(finding[4] for finding in findings if finding[3] == "unreadable-file")
+    assert result.returncode == 1
+    assert onto_cli.run(root, "build").returncode == 1
+
+
+def test_순환하는_링크도_규칙에서_unreadable_file을_경고로_낮추면_build가_건너뛰고_알린다(onto_cli):
+    onto_cli.set_root_check("unreadable-file", severity="warning")
+    root = onto_cli.root({"team": team_repo()})
+    (root / "projects/team" / ONTOLOGY_DIR / "component/loop.md").symlink_to("loop.md")
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode == 0 and "unreadable-file" in result.stderr
+
+
 def test_가리키는_파일이_없는_skipped_yaml_링크가_저장소_안을_가리키면_넘긴_문서가_없는_것으로_본다(onto_cli):
     root = onto_cli.root({"team": team_repo()})
     (root / "projects/team" / ONTOLOGY_DIR / "skipped.yaml").symlink_to("skipped.missing.yaml")

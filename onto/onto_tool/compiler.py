@@ -55,6 +55,7 @@ from .pages import (
 )
 from .paths import is_inside, real_path
 from .sources import SourceEntry, document_hashes, load_skipped, outside_paths, parse_entries, parse_skipped
+from .textfile import is_missing, stat_fails
 from .workspace import ONTOLOGY_DIR, ONTOLOGY_YAML, PROJECTS_DIR, SKIPPED_YAML, Repository, Within, Workspace
 
 PROJECT_IDENTIFIER = "project"
@@ -228,7 +229,8 @@ def compile_workspace(workspace: Workspace) -> Compiled:
 
     for repository in workspace.repositories():
         yaml_path = repository.path / ONTOLOGY_YAML
-        if not yaml_path.is_file():
+        # 순환하는 링크 같은 읽을 수 없는 파일은 없는 파일이 아니다. 온톨로지 층이 없다고 건너뛰지 않고 읽다가 실패해 읽을 수 없는 파일로 알린다.
+        if not yaml_path.is_file() and not stat_fails(yaml_path):
             record = _record(workspace, repository, has_layer=False)
             warnings.append(f"{record.label}: 온톨로지 층({ONTOLOGY_YAML.as_posix()})이 없어 건너뛰었다")
             if os.path.lexists(yaml_path) and not is_inside(yaml_path, real_path(repository.path)):
@@ -367,6 +369,12 @@ def _read_repository(
                     OUTSIDE_LINK,
                 )
             )
+        elif not is_missing(path):
+            # 저장소 안이고 가리키는 파일이 없는 것이 아니다: 순환하는 링크 같은 읽을 수 없는 파일이다. 없는 페이지처럼 조용히 넘기지 않는다.
+            try:
+                read_page(path)
+            except FrontmatterError as exc:
+                read.problems.append(Problem(workspace.relative(path), f"frontmatter를 읽을 수 없다: {exc}", _kind(exc)))
     for identifier, path in find_pages(repository.ontology_dir):
         file = workspace.relative(path)
         if not is_inside(path, repository_root):

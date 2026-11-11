@@ -41,6 +41,20 @@ def is_missing(path: Path) -> bool:
     return False
 
 
+def stat_fails(path: Path) -> bool:
+    """`path`의 상태를 알 수 없다: `os.stat`가 `FileNotFoundError`가 아닌 `OSError`를 낸다(순환하는 링크 `ELOOP`, 디렉토리가 아닌 것의 안 `ENOTDIR`, 권한이 없는 경로).
+
+    파일이 없는 것(`is_missing`)이 아니라 읽을 수 없는 파일이다. `Path.is_file()`은 그것들도 거짓이라 없는 파일로 잘못 읽는다.
+    """
+    try:
+        os.stat(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return False
+
+
 def read_text(path: Path, error: type[Exception]) -> str:
     """`path`를 UTF-8(BOM은 뗀다)로 읽는다. 읽을 수 없으면 `error(이유)`를 던진다."""
     try:

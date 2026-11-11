@@ -16,7 +16,9 @@ from .. import compiler
 from .model import Check
 
 # --- 읽을 수 없는 파일: 컴파일이 찾는다 ---------------------------------------------
-UNREADABLE_FILE = Check(compiler.UNREADABLE_FILE, "페이지나 ontology.yaml을 읽을 수 없다(YAML 문법 오류, frontmatter 없음)")
+UNREADABLE_FILE = Check(
+    compiler.UNREADABLE_FILE, "페이지나 ontology.yaml을 읽을 수 없다(YAML 문법 오류, frontmatter 없음, 순환하는 심볼릭 링크)"
+)
 INVALID_VALUE = Check(
     compiler.INVALID_VALUE, "페이지 속성의 값의 종류가 맞지 않는다(문자열이어야 하는 자리에 숫자나 중첩된 값, 없는 날짜 등)"
 )
