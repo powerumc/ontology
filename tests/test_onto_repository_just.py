@@ -285,6 +285,48 @@ def test_지식_저장소의_팀_Justfile이_복사된_Justfile을_모듈로_불
     assert sync.returncode == 1 and "루트 저장소에서만 쓸 수 있다" in sync.stderr
 
 
+def test_지식_저장소의_팀_Justfile이_복사된_Justfile을_import해도_그_저장소만_다룬다(sandbox):
+    """`import`한 파일의 `working-directory`는 불러 들인 쪽 기준이라 실행 위치가 저장소의 상위(`projects/`)가 된다. 도구는 실행 위치가 아니라 자기가 있는 `.onto/`의 위를 저장소로 본다."""
+    root = sandbox.root()
+    billing_files = {
+        **repo("billing", page(BILLING_PLAN, "Plan", title=BILLING_PLAN_TITLE), title="결제"),
+        "Justfile": "import '.onto/Justfile'\n",
+        "docs/design.md": "# 설계\n",
+    }
+    billing = attach(sandbox, root, "billing", billing_files)
+    attach(sandbox, root, "shop", repo("shop", page(SHOP_PLAN, "Plan", title=SHOP_PLAN_TITLE), title="상점"))
+    (billing / "docs" / "deeper").mkdir(parents=True)
+
+    for cwd in (billing, billing / "docs" / "deeper"):
+        build = sandbox.just("build", cwd=cwd)
+        validate = sandbox.just("validate", cwd=cwd)
+        query = sandbox.just("query", "SELECT ?e ?t WHERE { ?e a onto:Plan ; dcterms:title ?t }", cwd=cwd)
+        status = sandbox.just("status", cwd=cwd)
+        sync = sandbox.just("sync", cwd=cwd)
+
+        assert build.returncode == 0, build.stderr
+        assert "지식 저장소 1개" in build.stdout and BILLING_PLAN_TITLE in (billing / ".onto" / ".build" / "graph.ttl").read_text(encoding="utf-8")
+        assert (validate.returncode, validate.stdout) == (0, ""), validate.stderr
+        assert "이 저장소만 검사했다" in validate.stderr
+        assert parse_table(query.stdout) == [["e", "t"], [f"{ONTOLOGY_DIR}/{BILLING_PLAN}.md", BILLING_PLAN_TITLE]]
+        assert [line.split("\t")[:3] for line in status.stdout.splitlines()] == [["새 문서", "billing", "docs/design.md"]]
+        assert sync.returncode == 1 and "루트 저장소에서만 쓸 수 있다" in sync.stderr
+    assert not (billing.parent / "docs").exists()  # 실행 위치였던 상위 디렉토리(`projects/`)를 저장소로 열지 않는다
+
+
+def test_d로_실행_위치를_바꿔도_그_저장소만_다룬다(sandbox):
+    _, billing, _ = knowledge_repos(sandbox)
+    (billing / "docs" / "deeper").mkdir(parents=True)
+
+    for directory in (".", "docs", "docs/deeper", ".."):  # 저장소 안, 하위 디렉토리, 저장소의 상위(`projects/`)
+        validate = sandbox.just("-f", ".onto/Justfile", "-d", directory, "validate", cwd=billing)
+        query = sandbox.just("-f", ".onto/Justfile", "-d", directory, "query", "SELECT ?e WHERE { ?e a onto:Plan }", cwd=billing)
+
+        assert (validate.returncode, validate.stdout) == (0, ""), (directory, validate.stderr)
+        assert "이 저장소만 검사했다" in validate.stderr, directory
+        assert parse_table(query.stdout) == [["e"], [f"{ONTOLOGY_DIR}/{BILLING_PLAN}.md"]], directory
+
+
 def tool_command(tool_dir, *args: str) -> list:
     """`just`를 거치지 않고 도구를 직접 실행하는 명령줄. 범위를 `Justfile`이 아니라 손으로 넘긴다."""
     return ["uv", "run", "--locked", "--quiet", "--project", tool_dir, "python", "-P", "-X", "utf8", "-m", "onto_tool", *args]
