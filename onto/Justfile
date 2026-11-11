@@ -19,7 +19,8 @@ tool := "uv run --locked --quiet --project " + quote(source_directory()) + " pyt
 default:
     @"{{just_executable()}}" --justfile "{{source_file()}}" --list
 
-# 지식 저장소의 페이지를 그래프로 컴파일하고 추론해 이 디렉토리의 .build/graph.ttl로 남긴다. 저장소의 작업 트리에는 아무것도 만들지 않는다.
+# 지식 저장소의 페이지를 그래프로 컴파일하고 추론해 이 디렉토리의 .build/graph.ttl로 남긴다. 모든 지식 저장소를 모은 전체 인덱스도 이 디렉토리의 .build/index.md로 남긴다.
+# 지식 저장소의 온톨로지 층에는 그 저장소의 인덱스(docs/ontology/index.md)를 만든다. 인덱스는 생성물이지만 커밋하는 파일이다. 그 밖에는 저장소의 작업 트리에 아무것도 만들지 않는다.
 [no-exit-message]
 build *args:
     @{{tool}} build "$@"

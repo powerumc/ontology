@@ -49,6 +49,9 @@ DUPLICATE_ENTITY_ACROSS_REPOSITORIES = Check(
 REPOSITORY_NAME_MISMATCH = Check("repository-name-mismatch", ERROR, "ontology.yaml의 name이 서브모듈 디렉토리 이름과 다르다")
 MISSING_ONTOLOGY_LAYER = Check("missing-ontology-layer", WARNING, "등록된 지식 저장소에 온톨로지 층(ontology.yaml)이 없어 검사하지 못했다")
 
+# --- 인덱스 -------------------------------------------------------------------------
+INDEX_MISMATCH = Check("index-mismatch", ERROR, "지식 저장소의 인덱스(index.md)가 현재 페이지에서 만들어지는 인덱스와 다르다(다시 build한다)")
+
 CHECKS = (
     UNREADABLE_FILE,
     INVALID_VALUE,
@@ -69,6 +72,7 @@ CHECKS = (
     DUPLICATE_ENTITY_ACROSS_REPOSITORIES,
     REPOSITORY_NAME_MISMATCH,
     MISSING_ONTOLOGY_LAYER,
+    INDEX_MISMATCH,
 )
 
 BY_NAME = {check.name: check for check in CHECKS}

@@ -507,7 +507,7 @@ def test_지식_저장소_최상위에_표준_라이브러리나_의존성과_�
     assert result.stdout.splitlines() == ["e", PLAN_FILE]
 
 
-def test_build는_루트_저장소의_작업_트리에_아무것도_만들지_않고_산출물은_도구_디렉토리에_둔다(onto_cli):
+def test_build는_지식_저장소의_인덱스_말고는_작업_트리에_아무것도_만들지_않고_산출물은_도구_디렉토리에_둔다(onto_cli):
     root = onto_cli.root(billing(page("plan/auth-redesign", "Plan", title="인증 재설계")))
     before = snapshot(root)
 
@@ -515,7 +515,8 @@ def test_build는_루트_저장소의_작업_트리에_아무것도_만들지_�
 
     assert result.returncode == 0, result.stderr
     assert onto_cli.graph_file.is_file()
-    assert snapshot(root) == before
+    assert snapshot(root) - before == {f"{PAGES}/index.md"}  # 인덱스는 생성물이지만 커밋하는 파일이라 온톨로지 층에 둔다
+    assert before <= snapshot(root)
 
 
 def test_식별자가_project인_페이지는_Project_엔티티와_합쳐지지_않고_파일_이름과_함께_오류로_알린다(onto_cli):

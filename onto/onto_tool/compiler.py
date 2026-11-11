@@ -7,6 +7,7 @@
 교차 참조(`<저장소 이름>:<식별자>`)이고, 가리키는 엔티티가 있는지는 따지지 않는다. 모든 엔티티에는 온 지식 저장소의 이름을
 `onto:repository`로 적는다. 저장소는 `ontology.yaml`의 `classes`로 자기 하위 클래스를 선언할 수 있다.
 추론(하위 클래스, 역관계, 추이 관계)은 여기서 하지 않는다. `inference.infer`가 이 그래프에 적용한다.
+인덱스 파일은 만들지 않고 지금 있는 글자만 읽어 둔다(`RepositoryRecord.index_text`). 인덱스는 `index`가 컴파일한 결과에서 만든다.
 """
 
 import json
@@ -24,6 +25,7 @@ from .iri import UNRESOLVED_BASE, class_iri, entity_iri, resolve_reference, unre
 from .keys import CLASS_DECLARATION_KEYS, CLASSES_KEY, PAGE_KEYS, PROJECT_KEYS, RELATION_KEYS
 from .ontology_yaml import OntologyYamlError, read_ontology_yaml
 from .pages import (
+    INDEX_FILE,
     FrontmatterError,
     ValueKindError,
     find_misnamed_pages,
@@ -32,7 +34,7 @@ from .pages import (
     read_frontmatter,
     scalar_values,
 )
-from .workspace import ONTOLOGY_YAML, Repository, Workspace
+from .workspace import ONTOLOGY_DIR, ONTOLOGY_YAML, Repository, Workspace
 
 PROJECT_IDENTIFIER = "project"
 # 지식 저장소가 선언하는 클래스의 이름. 공통 어휘의 클래스 이름처럼 영어로 쓰고 대문자로 시작한다.
@@ -78,10 +80,12 @@ class RepositoryRecord:
     directory: str  # 서브모듈 디렉토리 이름
     path: str  # 루트 저장소 기준 디렉토리 경로
     yaml_file: str  # 루트 저장소 기준 `ontology.yaml` 경로
+    index_file: str  # 루트 저장소 기준 인덱스(`index.md`)의 경로. 파일이 없어도 있어야 할 자리다
     has_layer: bool  # `ontology.yaml`이 있다. 없으면 컴파일이 건너뛴다
     name: str | None = None  # `ontology.yaml`의 `name`. 파일이 없거나 읽을 수 없으면 알 수 없다
     pages: list[PageRecord] = field(default_factory=list)
     misnamed_pages: list[str] = field(default_factory=list)  # 페이지처럼 보이지만 확장자가 `.md`가 아니라 읽지 않은 파일의 경로
+    index_text: str | None = None  # 지금 인덱스 파일의 글자(줄바꿈은 `\n`으로 통일). 파일이 없으면 None
 
 
 @dataclass
@@ -148,6 +152,7 @@ def _record(workspace: Workspace, repository: Repository, *, has_layer: bool) ->
         directory=repository.directory,
         path=workspace.relative(repository.path),
         yaml_file=workspace.relative(repository.path / ONTOLOGY_YAML),
+        index_file=workspace.relative(repository.path / ONTOLOGY_DIR / INDEX_FILE),
         has_layer=has_layer,
     )
 
@@ -181,6 +186,10 @@ def _read_repository(
         read.problems.append(Problem(yaml_file, str(exc), _kind(exc)))
 
     read.record.misnamed_pages = [workspace.relative(path) for path in find_misnamed_pages(repository.ontology_dir)]
+    index_path = repository.ontology_dir / INDEX_FILE
+    if index_path.is_file():
+        # 깨진 글자가 있어도 읽는다. 생성한 인덱스와 다른 글자가 되어 어긋난 인덱스로 보고될 뿐이다.
+        read.record.index_text = index_path.read_text(encoding="utf-8", errors="replace")
     for identifier, path in find_pages(repository.ontology_dir):
         file = workspace.relative(path)
         meta: dict[str, object] | None
