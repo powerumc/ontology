@@ -6,8 +6,9 @@ from pathlib import Path
 
 from ..errors import OntoError
 from ..paths import TOOL_DIR
-from ..sync import MANAGED_DIR, MANAGED_TREES, ROOT_TREE, Result, collect_sources, sync_repository
+from ..sync import MANAGED_DIR, MANAGED_TREES, ROOT_TREE, Result, collect_sources, sync_repository, untracked_sources
 from ..workspace import Workspace
+from ._output import warn
 
 NAME = "sync"
 HELP = (
@@ -21,6 +22,7 @@ HELP = (
 
 # 한 가지 동작이 이 수보다 많은 루트 관리 파일에 걸치면 파일마다 적지 않고 묶어서 적는다(처음 복사할 때 수십 줄이 쏟아지지 않게 한다).
 LISTED_LIMIT = 10
+UNTRACKED_SHOWN = 5  # 추적하지 않는 파일을 경고에 보여 주는 수
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -42,12 +44,15 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     sources = collect_sources(workspace.root)
+    if untracked := untracked_sources(workspace.root):  # 동작은 바꾸지 않는다. 고친 코드가 빠진 파일을 가져다 쓰면 지식 저장소의 도구가 깨진다
+        shown = ", ".join(untracked[:UNTRACKED_SHOWN]) + (f" 외 {len(untracked) - UNTRACKED_SHOWN}개" if len(untracked) > UNTRACKED_SHOWN else "")
+        warn([f"루트의 `{ROOT_TREE}/`에 추적하지 않는 파일이 있어 복사하지 않았다: {shown}. 복사하려면 `git add`한다"])
     results = [sync_repository(workspace, repository, sources) for repository in repositories]
     for result in results:
         _print(result)
-    sys.stdout.flush()  # 터미널에서 보고가 요약과 오류보다 먼저 보이게 한다
-
     print(_total(results))
+    sys.stdout.flush()  # 출력이 파이프로 갈 때 아래 오류(표준 오류)가 요약보다 먼저 나오지 않게 한다
+
     incomplete = [result.repository for result in results if not result.complete]
     if incomplete:
         print(
@@ -78,8 +83,12 @@ def _print(result: Result) -> None:
     for verb, paths in (("만듦", result.created), ("바꿈", result.changed), ("지움", result.removed)):
         for line in _lines(paths):
             print(f"  {verb}  {line}")
+    by_reason: dict[str, list[str]] = {}  # 같은 이유로 건너뛴 파일은 한데 묶는다(링크 하나가 수십 파일을 막아도 한 줄이다)
     for path, reason in result.skipped:
-        print(f"  건너뜀  {path} — {reason}")
+        by_reason.setdefault(reason, []).append(path)
+    for reason, paths in by_reason.items():
+        for line in _lines(paths):
+            print(f"  건너뜀  {line} — {reason}")
 
 
 def _summary(created: int, changed: int, removed: int, skipped: int) -> str:

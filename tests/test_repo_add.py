@@ -288,7 +288,7 @@ def test_origin이_공개_원본과_다른_주소면_등록된다(sandbox, origi
 # --- 등록할 수 없는 입력은 아무것도 바꾸지 않고 거부한다 --------------------------------
 
 
-@pytest.mark.parametrize("name", ["../evil", "a/b", ".", "..", "-x"])
+@pytest.mark.parametrize("name", ["../evil", "a/b", ".", "..", "-x", ".notes", ".hidden"])
 def test_projects_밖이나_아래로_벗어나는_이름은_거부한다(sandbox, name):
     root = sandbox.root()
     outside = root.work / "evil"
@@ -443,3 +443,33 @@ def test_루트의_기능을_복사하지_못해도_등록은_남고_다시_실�
     assert (root.work / "projects" / "billing" / "README.md").is_file()  # 등록은 되돌리지 않는다
     assert _staged(sandbox, root) == {".gitmodules", "projects/billing"}
     assert not (root.work / "projects" / "billing" / ".onto").exists()
+
+
+def test_URL에서_뽑은_이름이_숨김_이름이면_거부한다(sandbox):
+    """`.`으로 시작하는 디렉토리는 온톨로지 도구가 지식 저장소로 보지 않는다. 등록해 놓고 어떤 `onto` 명령에도 잡히지 않는 일을 막는다."""
+    root = sandbox.root()
+
+    result = _rejected_leaving_everything_unchanged(sandbox, root, sandbox.knowledge_remote(".github").url)
+
+    assert "이름" in result.stderr and "'.'" in result.stderr
+
+
+def test_최신화가_일부만_건너뛰어도_복사하지_못했다고_알리지_않고_마치지_못했다고_알린다(sandbox):
+    """읽을 수 없는 페이지가 있어 인덱스만 건너뛰고, `.onto/`와 `.gitignore`는 다 만든 경우다."""
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote(
+        "billing",
+        files={
+            "README.md": "# billing\n",
+            "docs/ontology/ontology.yaml": 'name: "billing"\n',
+            "docs/ontology/plan/broken.md": "frontmatter가 없다\n",
+        },
+    )
+
+    result = _add(sandbox, root, billing.url)
+
+    sub = root.work / "projects" / "billing"
+    assert result.returncode != 0
+    assert (sub / ".onto" / "Justfile").is_file() and ".onto/" in (sub / ".gitignore").read_text(encoding="utf-8")  # 복사는 끝났다
+    assert "최신화를 마치지 못했습니다" in result.stderr and "복사하지 못했" not in result.stderr
+    assert "just onto sync billing" in result.stderr

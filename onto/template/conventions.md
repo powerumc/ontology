@@ -33,7 +33,7 @@ date: 2026-03-02
 about: component/ledger
 derivedFrom:
   - path: docs/adr/0001-use-postgres.md
-    hash: 0123456789abcdef0123456789abcdef01234567
+    hash: "0123456789abcdef0123456789abcdef01234567"
 ---
 
 # 결제 데이터베이스로 PostgreSQL을 고른다
@@ -114,13 +114,15 @@ derivedFrom:
 ```yaml
 derivedFrom:
   - path: docs/design.md
-    hash: 0123456789abcdef0123456789abcdef01234567
+    hash: "0123456789abcdef0123456789abcdef01234567"
 ```
 
 - 항목은 `path`와 `hash` 둘로 이루어진다. 항목이 하나뿐이어도 목록으로 쓴다.
 - `path`는 저장소 루트 기준 원본 문서의 경로다(`docs/design.md`). `/`로 구분하고, `/`로 시작하거나 `.`, `..`이 있으면 안 된다.
-- `hash`는 그 문서의 git 해시(40자리 소문자 16진수)다. 문서를 읽은 시점의 내용에서 구한다. `git hash-object --no-filters <경로>`가 같은 값을 준다. 새로 생겼거나 바뀐 원본 문서는 `status`가 현재 해시와 함께 보여 주므로 그대로 옮겨 적는다. 숫자로만 이루어진 해시는 YAML이 숫자로 읽지 않게 따옴표로 감싼다.
-- 문서의 현재 해시가 적어 둔 해시와 다르면 그 페이지는 낡음이다. 다시 읽고 고친 뒤 해시를 갱신한다.
+- `hash`는 그 문서의 git 해시(40자리 소문자 16진수)다. 문서를 읽은 시점의 내용에서 구하고, **`status`가 보여 주는 현재 해시를 그대로 옮겨 적는다.** 새로 생겼거나 바뀐 원본 문서는 `status`가 해시와 함께 보여 준다. 낡음 판정도 같은 계산을 쓰므로 `status`가 낸 값이어야 쓰자마자 낡음이 되지 않는다.
+  - 해시는 git이 `.gitattributes`와 `core.autocrlf` 같은 줄바꿈 변환을 적용해 낸 blob 해시다. 변환을 건너뛰고 구한 값과 다를 수 있으니 직접 계산하지 않는다. `status`를 쓸 수 없을 때만 옵션 없이 `git hash-object <경로>`로 구한다.
+  - 저장소의 blob에 CRLF가 이미 들어 있는 문서는 `git rev-parse HEAD:<경로>`처럼 git에서 직접 얻은 해시와 `status`의 값이 다를 수 있다. 어느 쪽이 맞는지 따지지 말고 `status`의 값을 쓴다.
+  - 해시는 항상 따옴표로 감싼다(`hash: "0123…"`). 따옴표가 없으면 YAML이 숫자로만 이루어진 해시를 숫자로 읽어 해시가 아닌 값이 된다. 예를 그대로 따르면 같은 문제가 없다.
 - 한 페이지에 근거가 여럿이면 항목을 여럿 쓴다.
 - 읽었지만 기록할 것이 없는 원본 문서는 `docs/ontology/skipped.yaml`에 같은 모양(`path`, `hash`)의 항목의 목록으로 적는다. 넘긴 문서는 내용이 바뀌기 전까지 새 문서로 나오지 않는다.
 - ingest 대상(원본 문서)의 범위는 규칙의 `sources`가 정한다. 기본은 `docs/**/*.md`이고 온톨로지 층(`docs/ontology/`)은 항상 빠진다.

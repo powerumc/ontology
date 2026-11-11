@@ -4,8 +4,11 @@
 서브모듈로 붙인 것이다. 루트 저장소의 `onto/`가 복사의 원본이라, 테스트가 `onto/`의 파일을 고치면 루트의 기능이 바뀐 것이다.
 """
 
+import hashlib
+import json
 import os
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -778,3 +781,163 @@ def test_디렉토리_이름이_YAML에서_다른_값으로_읽히는_모양이�
 
     assert result.returncode == 0, result.stderr
     assert project_names(sandbox, root) == [directory]
+
+
+# --- 리뷰 지적 -------------------------------------------------------------------------------
+
+
+def sha256(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def test_기록에_dot_onto_밖이나_상위로_나가는_절대_경로가_있어도_그_경로의_파일을_지우지_않는다(sandbox):
+    """기록은 지식 저장소 안의 파일이라 믿지 않는다. 바른 지문을 함께 적어 놓아도 `.onto/` 밖의 경로는 버린다."""
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing")
+    outside = sandbox.new_dir("elsewhere", "victim") / "keep.txt"
+    outside.write_text("밖의 파일\n", encoding="utf-8")
+    readme = billing / "README.md"
+    victims = {
+        "../README.md": sha256(readme.read_text(encoding="utf-8")),
+        ".onto/../README.md": sha256(readme.read_text(encoding="utf-8")),
+        "README.md": sha256(readme.read_text(encoding="utf-8")),
+        str(outside): sha256("밖의 파일\n"),
+        ".onto/../../victim/keep.txt": sha256("밖의 파일\n"),
+    }
+    (billing / ".onto").mkdir()
+    (billing / ".onto" / RECORD_NAME).write_text(json.dumps(victims), encoding="utf-8")
+    before = readme.read_bytes()
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stderr
+    assert readme.read_bytes() == before
+    assert outside.read_text(encoding="utf-8") == "밖의 파일\n"
+    assert (billing / ".onto" / "Justfile").is_file()  # 나머지는 정상으로 최신화한다
+
+
+def test_인덱스_경로가_심볼릭_링크이면_따라가지_않고_건너뛴다(sandbox):
+    root = sandbox.root()
+    outside = sandbox.new_dir("elsewhere", "index-target") / "index.md"
+    outside.write_text("밖의 파일\n", encoding="utf-8")
+    billing = attach(sandbox, root, "billing", files=CONFIGURED)
+    (billing / INDEX).symlink_to(outside)
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 1
+    assert outside.read_text(encoding="utf-8") == "밖의 파일\n"
+    assert re.search(r"건너뜀\s+docs/ontology/index\.md\b.*심볼릭 링크", result.stdout)
+    assert (billing / ".onto" / "Justfile").is_file()
+
+
+@pytest.mark.parametrize("direction", ["파일이_디렉토리로", "디렉토리가_파일로"])
+def test_루트에서_파일이_디렉토리로_또는_반대로_바뀌어도_한_번의_실행으로_끝난다(sandbox, direction):
+    """옛 경로가 새 경로를 막고 있으므로 지우기가 복사보다 먼저여야 한다."""
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing")
+    extra = root.work / "onto" / "extra"
+    if direction == "파일이_디렉토리로":
+        extra.write_text("파일이었다\n", encoding="utf-8")
+    else:
+        extra.mkdir()
+        (extra / "x.txt").write_text("디렉토리였다\n", encoding="utf-8")
+    sandbox.git("add", "onto/extra", cwd=root.work)
+    assert sync(sandbox, root, "billing").returncode == 0
+    sandbox.git("rm", "-r", "-q", "-f", "onto/extra", cwd=root.work)
+    if direction == "파일이_디렉토리로":
+        extra.mkdir()
+        (extra / "x.txt").write_text("이제 디렉토리다\n", encoding="utf-8")
+    else:
+        extra.write_text("이제 파일이다\n", encoding="utf-8")
+    sandbox.git("add", "onto/extra", cwd=root.work)
+
+    first = sync(sandbox, root, "billing")
+    second = sync(sandbox, root, "billing")
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert second.returncode == 0 and "바뀐 것이 없다" in second.stdout
+    if direction == "파일이_디렉토리로":
+        assert (billing / ".onto" / "extra" / "x.txt").read_text(encoding="utf-8") == "이제 디렉토리다\n"
+    else:
+        assert (billing / ".onto" / "extra").read_text(encoding="utf-8") == "이제 파일이다\n"
+
+
+def test_루트의_onto에_추적하지_않는_파일이_있으면_복사하지_않고_경고한다_동작은_바꾸지_않는다(sandbox):
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing")
+    clean = sync(sandbox, root, "billing")
+    assert clean.returncode == 0 and clean.stderr == ""  # 가상환경과 캐시는 무시되는 파일이라 경고하지 않는다
+    for name in ("new_module.py", "notes.txt"):
+        (root.work / "onto" / name).write_text("아직 git add하지 않았다\n", encoding="utf-8")
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 0
+    assert "추적하지 않는 파일" in result.stderr and "onto/new_module.py" in result.stderr and "onto/notes.txt" in result.stderr
+    assert "git add" in result.stderr
+    assert not (billing / ".onto" / "new_module.py").exists()  # 복사하지 않는다(스펙대로 추적하는 파일만)
+
+
+def test_지식_저장소가_dot_onto를_이미_추적하고_있으면_추적에서_빼라고_알린다(sandbox):
+    """`.gitignore`는 추적하는 파일을 제외하지 못해, 블록을 되살려도 `.onto/`의 변경이 git 상태에 남는다."""
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing", files={"README.md": "# billing\n", ".onto/stray.txt": "누가 커밋했다\n"})
+    assert sandbox.git("ls-files", ".onto", cwd=billing).stdout.strip() == ".onto/stray.txt"
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 1
+    assert re.search(r"건너뜀\s+\.onto/\s+—.*이미 추적.*git rm -r --cached \.onto", result.stdout)
+    assert (billing / ".onto" / "Justfile").is_file()  # 최신화는 계속한다
+    assert (billing / ".onto" / "stray.txt").read_text(encoding="utf-8") == "누가 커밋했다\n"  # 추적하는 파일은 건드리지 않는다
+
+
+def test_같은_이유로_건너뛴_루트_관리_파일이_많으면_위치별로_묶어_한_줄로_알린다(sandbox):
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing")
+    assert sync(sandbox, root, "billing").returncode == 0
+    outside = sandbox.new_dir("elsewhere", "tool")
+    shutil.rmtree(billing / ".onto" / "onto_tool")
+    (billing / ".onto" / "onto_tool").symlink_to(outside)  # 도구 디렉토리 통째로 링크다. 그 아래 수십 개 파일이 막힌다
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 1
+    assert len(re.findall(r"^  건너뜀", result.stdout, re.MULTILINE)) == 1
+    assert re.search(r"건너뜀\s+\.onto/ 아래 파일 \d+개\s+—.*심볼릭 링크", result.stdout)
+    assert list(outside.iterdir()) == []
+
+
+def test_출력을_한_파이프로_모아도_전체_요약이_오류_줄보다_먼저_나온다(sandbox):
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing")
+    assert sync(sandbox, root, "billing").returncode == 0
+    (billing / ".onto" / "rules.yaml").write_text("손으로 고쳤다\n", encoding="utf-8")
+
+    result = sandbox.run(["sh", "-c", f"{shutil.which('just')} onto sync billing 2>&1"], cwd=root.work, check=False)
+
+    lines = result.stdout.splitlines()
+    summary = next(number for number, line in enumerate(lines) if line.startswith("최신화: 지식 저장소"))
+    error = next(number for number, line in enumerate(lines) if line.startswith("오류:"))
+    assert summary < error
+
+
+def test_인덱스는_build와_같은_기준으로_만든다_규칙에서_꺼진_읽기_문제의_파일은_건너뛰고_만든다(sandbox):
+    """`build`는 실효 심각도가 오류인 읽기 문제에서만 멈춘다. 최신화가 `build`가 만드는 인덱스를 못 만든다고 하지 않는다."""
+    root = sandbox.root()
+    files = repo(
+        "billing",
+        page("plan/launch", "Plan", title="출시 계획", about="project"),
+        {f"{ONTOLOGY_DIR}/plan/broken.md": "frontmatter가 없다\n"},
+        rules={"checks": {"unreadable-file": {"enabled": False}}},
+    )
+    billing = attach(sandbox, root, "billing", files=files)
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    index = (billing / INDEX).read_text(encoding="utf-8")
+    assert "출시 계획" in index and "broken" not in index  # 읽을 수 없는 페이지는 싣지 않는다
+    check = validate(sandbox, root)
+    assert check.returncode == 0, check.stdout  # `build`와 `validate`가 보는 인덱스와 같다

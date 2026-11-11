@@ -31,6 +31,7 @@ import yaml
 
 from . import index
 from .blocks import BlockError, MarkedBlock, replace_block
+from .commands._rules import ensure_valid
 from .compiler import compile_workspace
 from .errors import OntoError
 from .pages import INDEX_FILE
@@ -114,6 +115,15 @@ def collect_sources(root: Path) -> dict[str, Source]:
     return sources
 
 
+def untracked_sources(root: Path) -> list[str]:
+    """루트의 `onto/`에 있지만 추적하지 않아 복사하지 않는 파일(`.gitignore`가 제외한 가상환경, 캐시, 산출물은 뺀다). 루트 기준 경로다."""
+    found: list[str] = []
+    for tree, _ in MANAGED_TREES:
+        listing = _git(root, "ls-files", "-z", "--others", "--exclude-standard", "--", f"{tree}/")
+        found += sorted(os.fsdecode(entry) for entry in listing.split(b"\0") if entry)
+    return found
+
+
 def _git(root: Path, *args: str) -> bytes:
     try:
         result = subprocess.run(["git", "--literal-pathspecs", *args], cwd=root, capture_output=True, check=False)
@@ -137,10 +147,36 @@ def sync_repository(workspace: Workspace, repository: Repository, sources: dict[
     # `.gitignore`가 먼저다. 제외하지 못한 채 `.onto/`를 복사하면 루트 관리 파일이 지식 저장소의 git 상태에 나타나 커밋될 수 있다.
     if not _update_gitignore(path, result):
         return result
+    _report_tracked(path, result)
     if _create_ontology_yaml(path, repository.directory, result):
         _create_index(workspace, repository, result)
     _copy_managed_files(path, sources, result)
     return result
+
+
+def _report_tracked(repo: Path, result: Result) -> None:
+    """지식 저장소의 git이 루트 관리 파일의 위치를 이미 추적하고 있으면 알린다. 복사는 계속한다.
+
+    `.gitignore`는 추적하는 파일을 제외하지 못한다. 누가 블록이 없는 사이에 `git add -A`로 `.onto/`를 커밋했다면, 블록을 되살려도 그 위치의 변경이
+    git 상태에 계속 나타난다. 추적에서 빼는 것은 지식 저장소의 이력을 바꾸는 일이라 최신화가 하지 않고, 방법을 알린다.
+    """
+    for _, target_dir in MANAGED_TREES:
+        if _is_tracked(repo, target_dir):
+            result.skipped.append(
+                (
+                    f"{target_dir}/",
+                    f"이 저장소의 git이 이미 추적하고 있어 `.gitignore`가 제외하지 못하고 변경이 git 상태에 나타난다. "
+                    f"추적에서 뺀다(파일은 남는다): `git rm -r --cached {target_dir}`",
+                )
+            )
+
+
+def _is_tracked(repo: Path, relative: str) -> bool:
+    try:
+        listing = subprocess.run(["git", "--literal-pathspecs", "-C", str(repo), "ls-files", "-z", "--", relative], capture_output=True, check=False)
+    except FileNotFoundError:
+        return False
+    return listing.returncode == 0 and bool(listing.stdout.strip(b"\0"))
 
 
 def _update_gitignore(repo: Path, result: Result) -> bool:
@@ -208,18 +244,21 @@ def _create_index(workspace: Workspace, repository: Repository, result: Result) 
 
     인덱스가 없는 것은 스크립트 검사가 오류로 잡는다(`index-mismatch`). 최신화 직후의 저장소가 검사를 통과하도록 인덱스 없는 모든 저장소에 만든다.
     이 저장소의 페이지만 컴파일한다. 다른 지식 저장소의 문제가 이 저장소의 최신화를 막지 않는다.
+    인덱스를 만드는 조건은 `build`와 같다(`commands._rules.ensure_valid`). `build`가 만드는 인덱스를 최신화가 못 만든다고 하지 않는다.
     """
     if reason := _blocked(repository.path, INDEX_PATH):
         result.skipped.append((INDEX_PATH, reason))
         return
     if (repository.path / INDEX_PATH).exists():
         return  # 컴파일은 느리다. 인덱스가 이미 있으면 읽지 않는다
-    compiled = compile_workspace(_OnlyRepository(workspace.root, repository.directory))
+    only = _OnlyRepository(workspace.root, repository.directory)
+    compiled = compile_workspace(only)
     record = compiled.records[0]
-    if compiled.problems:
-        first = compiled.problems[0]
-        more = f" 외 {len(compiled.problems) - 1}개" if len(compiled.problems) > 1 else ""
-        result.skipped.append((INDEX_PATH, f"읽을 수 없는 파일이 있어 인덱스를 만들지 못했다: {first}{more}. 고친 뒤 `onto build`로 만든다"))
+    try:
+        ensure_valid(only, compiled)  # `build`와 같은 판정이다. 규칙에서 오류인 읽기 문제가 있을 때만 멈추고, 경고이거나 꺼진 문제의 파일은 건너뛰고 만든다
+    except OntoError as exc:
+        more = f" 외 {len(exc.messages) - 1}개" if len(exc.messages) > 1 else ""
+        result.skipped.append((INDEX_PATH, f"읽을 수 없는 파일이 있어 인덱스를 만들지 못했다: {exc.messages[0]}{more}. 고친 뒤 `onto build`로 만든다"))
         return
     content = next((content for content in index.collect(compiled) if content.index_file == record.index_file), None)
     if content is None:
@@ -256,6 +295,27 @@ def _copy_managed_files(repo: Path, sources: dict[str, Source], result: Result) 
     recorded = _read_record(repo)
     record = dict(recorded)
 
+    # 루트에서 없어진 루트 관리 파일. 기록이 있는 것만 우리가 만든 파일이다. 그 밖의 파일(가상환경, 캐시, 산출물)은 건드리지 않는다.
+    # 복사보다 먼저 지운다. 루트에서 파일이 디렉토리로(또는 반대로) 바뀌면 옛 경로가 새 경로를 막고 있어서, 나중에 지우면 한 번 더 실행해야 한다.
+    for target in sorted(set(recorded) - set(sources)):
+        if reason := _blocked(repo, target):
+            result.skipped.append((target, reason))
+            continue
+        path = repo / target
+        try:
+            current = _fingerprint_of(path)
+            if current is None:
+                del record[target]
+            elif current != recorded[target]:
+                result.skipped.append((target, _hand_edited(True, removed_from_root=True)))
+            else:
+                path.unlink()
+                _remove_empty_parents(repo, path)
+                del record[target]
+                result.removed.append(target)
+        except OSError as exc:
+            result.skipped.append((target, f"읽거나 지울 수 없다({exc.strerror})"))
+
     for target, source in sorted(sources.items()):
         if reason := _blocked(repo, target):
             result.skipped.append((target, reason))
@@ -275,26 +335,6 @@ def _copy_managed_files(repo: Path, sources: dict[str, Source], result: Result) 
             continue
         record[target] = source.fingerprint
         (result.created if current is None else result.changed).append(target)
-
-    # 루트에서 없어진 루트 관리 파일. 기록이 있는 것만 우리가 만든 파일이다. 그 밖의 파일(가상환경, 캐시, 산출물)은 건드리지 않는다.
-    for target in sorted(set(recorded) - set(sources)):
-        if reason := _blocked(repo, target):
-            result.skipped.append((target, reason))
-            continue
-        path = repo / target
-        try:
-            current = _fingerprint_of(path)
-            if current is None:
-                del record[target]
-            elif current != recorded[target]:
-                result.skipped.append((target, _hand_edited(True, removed_from_root=True)))
-            else:
-                path.unlink()
-                _remove_empty_parents(repo, path)
-                del record[target]
-                result.removed.append(target)
-        except OSError as exc:
-            result.skipped.append((target, f"읽거나 지울 수 없다({exc.strerror})"))
 
     if record != recorded:
         try:
