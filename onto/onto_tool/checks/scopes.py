@@ -4,8 +4,9 @@
 
 - 교차 참조는 관계의 값(`dependsOn: billing:component/api`)과 페이지 본문의 링크 대상(`[글](billing:component/api)`)이다.
   `class`의 값 `<저장소 이름>:<나머지>`(`class: billing:Invoice`)도 본다. 그런 값은 클래스를 풀지 못하는 값(`disallowed-class`)이지만 그 항목은 저장소 규칙으로
-  끌 수 있어, 꺼도 저장소 이름이 담긴 채 통과하지 않게 한다. 같은 이유로 정의되지 않은 키(`undefined-key`)의 값과 값의 종류가 틀린 관계의 값(`invalid-value`:
-  `dependsOn: {id: billing:component/api}`처럼 중첩된 값)에 든 문자열도 중첩까지 훑어 본다. 이 항목들도 저장소 규칙으로 끌 수 있기 때문이다.
+  끌 수 있어, 꺼도 저장소 이름이 담긴 채 통과하지 않게 한다. 같은 이유로 정의되지 않은 키(`undefined-key`)와 그 값, 값의 종류가 틀린 관계의 값(`invalid-value`:
+  `dependsOn: {id: billing:component/api}`처럼 중첩된 값)에 든 문자열도 중첩까지 훑어 본다. 키-값의 값뿐 아니라 키도 본다(`notes: {billing:component/api: 메모}`).
+  이 항목들도 저장소 규칙으로 끌 수 있기 때문이다.
   제목, 설명, 날짜, 별칭, 본문 평문처럼 참조가 아닌 글에 적힌 저장소 이름은 보지 않는다. 그런 글에 더 좁은 범위의 저장소 이름을 적지 않는 것은 작성자의 몫이다.
 - 범위를 알 수 없는 저장소는 가장 좁은 `private`으로 본다. 적지 않은 저장소, 온톨로지 층이 없거나 `ontology.yaml`을 읽을 수 없는 저장소,
   `scope` 값이 틀린 저장소가 그렇다. 그 저장소의 문제는 저장소 규칙으로 끌 수 있는 항목이나 경고로만 보고되므로, 그것에 기대면
@@ -65,9 +66,9 @@ def _cross_references(page: PageRecord) -> Iterator[tuple[str, str]]:
     for class_value in dict.fromkeys(_class_values(page)):
         if ":" in class_value:
             yield f"`class`의 값 `{class_value}`", class_value
-    for key, text in _unchecked_strings(page):
+    for where, text in _unchecked_strings(page):
         if ":" in text:
-            yield f"`{key}`의 값 `{text}`", text
+            yield where, text
     for destination in links.destinations(page.body):
         name, separator, rest = destination.strip().partition(":")
         # `http://…`처럼 `//`가 뒤따르는 것은 주소이고 교차 참조가 아니다. 저장소의 이름이 `http`여도 그렇다.
@@ -82,30 +83,34 @@ def _class_values(page: PageRecord) -> list[str]:
 
 
 def _unchecked_strings(page: PageRecord) -> Iterator[tuple[str, str]]:
-    """다른 검사가 값을 읽지 못해 위에서 보지 못한 문자열을 `(키, 문자열)`로. 정의되지 않은 키의 값과, 문자열이 아닌(중첩된) 관계의 값이다. 중첩 안까지 훑는다.
+    """다른 검사가 값을 읽지 못해 위에서 보지 못한 문자열을 `(설명에 쓸 자리, 문자열)`로. 정의되지 않은 키(와 그 값)와, 문자열이 아닌(중첩된) 관계의 값이다.
 
-    정의된 키 가운데 제목, 설명, 날짜, 별칭은 참조가 아닌 글이라 보지 않는다. 원본 문서의 기록(`derivedFrom`)도 저장소 안의 경로와 해시라 보지 않는다.
+    중첩 안까지 훑고, 키-값의 값뿐 아니라 키도 본다. 참조는 `{secret:component/x: 메모}`처럼 키에 적을 수도 있다.
+    정의된 키 가운데 제목, 설명, 날짜, 별칭은 참조가 아닌 글이라 보지 않는다. 원본 문서의 기록(`derivedFrom`)은 경로와 해시라 여기서 보지 않는다.
+    그 경로가 저장소 밖을 가리키는지는 컴파일이 `outside-link`로 따로 알린다.
     """
     meta = page.meta or {}
     for key, value in meta.items():
         if key not in PAGE_KEYS:
-            for text in _strings(value):
-                yield str(key), text
+            yield f"정의되지 않은 키 `{key}`", str(key)
+            for kind, text in _strings(value):
+                yield f"`{key}`의 {kind} `{text}`", text
     for key in RELATION_KEYS:
         value = meta.get(key)
         for item in value if isinstance(value, list) else [value]:
             if not isinstance(item, str):  # 문자열은 `page.relations()`가 이미 냈다
-                for text in _strings(item):
-                    yield key, text
+                for kind, text in _strings(item):
+                    yield f"`{key}`의 {kind} `{text}`", text
 
 
-def _strings(value: object) -> Iterator[str]:
-    """값 안의 문자열을 중첩된 목록과 키-값의 값까지 모두 낸다."""
+def _strings(value: object) -> Iterator[tuple[str, str]]:
+    """값 안의 문자열을 `(종류, 문자열)`로 중첩된 목록과 키-값의 키와 값까지 모두 낸다. 종류는 `값` 또는 `키`다."""
     if isinstance(value, str):
-        yield value
+        yield "값", value
     elif isinstance(value, list):
         for item in value:
             yield from _strings(item)
     elif isinstance(value, dict):
-        for item in value.values():
+        for key, item in value.items():
+            yield "키", str(key)
             yield from _strings(item)

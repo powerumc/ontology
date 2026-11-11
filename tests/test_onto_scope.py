@@ -17,7 +17,7 @@ import re
 
 import pytest
 
-from support.onto_cli import ONTOLOGY_DIR, page, repo, snapshot
+from support.onto_cli import ONTOLOGY_DIR, REPOSITORY, page, repo, snapshot
 
 ERROR = "오류"
 WARNING = "경고"
@@ -829,6 +829,102 @@ def test_class_값의_저장소_이름이_더_넓은_저장소이거나_등록�
     assert violations(onto_cli, repos) == []
 
 
+# --- 원본 문서의 기록이 지식 저장소 밖을 가리킨다 ---------------------------------------------------------
+# `derivedFrom`과 넘긴 문서의 목록(`skipped.yaml`)의 `path`는 지식 저장소 루트 기준이라 저장소 밖을 가리킬 수 없다. 모양이 틀렸다는 `invalid-value`와 `missing-source`는
+# 저장소 규칙으로 끌 수 있으므로, 저장소 밖을 가리키는 경로는 루트 전용 `outside-link`로도 알린다. 끄고도 다른 저장소의 위치가 담긴 채 통과하지 않게 한다.
+
+SOURCE_HASH = "0123456789abcdef0123456789abcdef01234567"
+MUTE_SOURCES = {"checks": {"invalid-value": {"enabled": False}, "missing-source": {"enabled": False}, "missing-skipped-source": {"enabled": False}}}
+OUTSIDE_SOURCE_PATHS = {
+    "저장소_밖의_상위_디렉토리": "../shop/docs/design.md",
+    "안으로_갔다_밖으로": "docs/../../shop/docs/design.md",
+    "절대_경로": "/Users/me/notes/design.md",
+    "윈도우_드라이브": "C:\\Users\\me\\design.md",
+    "file_주소": "file:///Users/me/notes/design.md",
+}
+INSIDE_SOURCE_PATHS = {
+    "원본_문서": "docs/design.md",
+    "안으로_갔다_안으로": "docs/api/../design.md",  # 모양은 틀리지만(invalid-value) 저장소 안이다
+    "웹_주소": "https://example.com/design.md",  # 파일이 아니다
+}
+
+
+def sourced(path: str, **project) -> dict[str, dict[str, str]]:
+    """`billing`의 페이지 하나가 `path`를 근거로 삼는다. 이 견본은 `invalid-value`와 `missing-source`를 끈다."""
+    gateway = page("component/gateway", "Component", title="게이트웨이", partOf="project", derivedFrom=[{"path": path, "hash": SOURCE_HASH}])
+    return {"billing": repo("billing", gateway, rules=MUTE_SOURCES, **project)}
+
+
+@pytest.mark.parametrize("path", OUTSIDE_SOURCE_PATHS.values(), ids=OUTSIDE_SOURCE_PATHS.keys())
+def test_derivedFrom의_경로가_지식_저장소_밖을_가리키면_값_검사를_꺼도_outside_link로_잡는다(onto_cli, path):
+    root = onto_cli.root(sourced(path))
+
+    result, findings = validate(onto_cli, root)
+
+    assert [finding[:4] for finding in findings] == [(ERROR, "billing", file("component/gateway"), "outside-link")]
+    assert "derivedFrom" in findings[0][4] and path in findings[0][4]
+    assert result.returncode == 1
+
+
+@pytest.mark.parametrize("path", INSIDE_SOURCE_PATHS.values(), ids=INSIDE_SOURCE_PATHS.keys())
+def test_derivedFrom의_경로가_지식_저장소_안이거나_파일이_아니면_outside_link가_아니다(onto_cli, path):
+    assert [finding[3] for finding in validate(onto_cli, onto_cli.root(sourced(path)))[1]] == []
+
+
+def test_derivedFrom의_경로가_밖을_가리키면_값의_종류_오류와_함께_둘_다_보고한다(onto_cli):
+    """값 검사를 끄지 않으면 모양 오류(`invalid-value`)와 저장소 밖(`outside-link`)이 서로 다른 항목으로 나란히 보고된다."""
+    bad = page("component/gateway", "Component", title="게이트웨이", partOf="project", derivedFrom=[{"path": "../shop/docs/design.md", "hash": SOURCE_HASH}])
+
+    result, findings = validate(onto_cli, onto_cli.root({"billing": repo("billing", bad)}))
+
+    assert sorted(finding[3] for finding in findings) == ["invalid-value", "outside-link"]
+    assert result.returncode == 1
+
+
+def test_저장소_밖을_가리키는_derivedFrom_항목이_여럿이어도_경로마다_한_번씩_보고한다(onto_cli):
+    entries = [{"path": "../a.md", "hash": SOURCE_HASH}, {"path": "../a.md", "hash": SOURCE_HASH}, {"path": "/b.md", "hash": SOURCE_HASH}, {"path": "docs/design.md", "hash": SOURCE_HASH}]
+    gateway = page("component/gateway", "Component", title="게이트웨이", partOf="project", derivedFrom=entries)
+
+    findings = validate(onto_cli, onto_cli.root({"billing": repo("billing", gateway, rules=MUTE_SOURCES)}))[1]
+
+    assert [finding[3] for finding in findings] == ["outside-link", "outside-link"]
+    assert "../a.md" in findings[0][4] and "/b.md" in findings[1][4]
+
+
+def skipped(path: str) -> dict[str, dict[str, str]]:
+    """`billing`의 넘긴 문서의 목록이 `path`를 적는다. 이 견본은 `invalid-value`와 `missing-skipped-source`를 끈다."""
+    files = repo("billing", rules=MUTE_SOURCES)
+    files[f"{ONTOLOGY_DIR}/skipped.yaml"] = json.dumps([{"path": path, "hash": SOURCE_HASH}], ensure_ascii=False) + "\n"
+    return {"billing": files}
+
+
+@pytest.mark.parametrize("path", OUTSIDE_SOURCE_PATHS.values(), ids=OUTSIDE_SOURCE_PATHS.keys())
+def test_넘긴_문서의_목록의_경로가_지식_저장소_밖을_가리키면_값_검사를_꺼도_outside_link로_잡는다(onto_cli, path):
+    root = onto_cli.root(skipped(path))
+
+    result, findings = validate(onto_cli, root)
+
+    assert [finding[:4] for finding in findings] == [(ERROR, "billing", f"projects/billing/{ONTOLOGY_DIR}/skipped.yaml", "outside-link")]
+    assert path in findings[0][4]
+    assert result.returncode == 1
+
+
+@pytest.mark.parametrize("path", INSIDE_SOURCE_PATHS.values(), ids=INSIDE_SOURCE_PATHS.keys())
+def test_넘긴_문서의_목록의_경로가_지식_저장소_안이거나_파일이_아니면_outside_link가_아니다(onto_cli, path):
+    assert [finding[3] for finding in validate(onto_cli, onto_cli.root(skipped(path)))[1]] == []
+
+
+def test_저장소_밖을_가리키는_원본_문서의_기록은_지식_저장소_안에서도_보고한다(onto_cli):
+    """`outside-link`는 한 저장소만으로 판단할 수 있어 지식 저장소 안(`--within repository`)에서도 돈다."""
+    files = sourced("../shop/docs/design.md")["billing"]
+    repository = onto_cli.repository("billing", files)
+
+    result = onto_cli.run(repository, "validate", within=REPOSITORY)
+
+    assert [line.split("\t")[3] for line in result.stdout.splitlines()] == ["outside-link"]
+    assert result.returncode == 1
+
+
 # --- 정의되지 않은 키와 값의 종류가 틀린 관계의 값 ---------------------------------------------------
 # `undefined-key`, `invalid-value`, `reverse-relation`도 저장소 규칙으로 끌 수 있어, 그 값에 든 교차 참조 모양도 중첩까지 훑어 공유 범위를 따진다. 제목, 설명, 날짜, 별칭은 보지 않는다.
 
@@ -848,6 +944,11 @@ UNCHECKED_FIELDS = {
     "문자열이_아닌_관계의_값": {"dependsOn": {"id": "secret:component/x"}},
     "관계의_목록_안의_중첩된_값": {"dependsOn": ["component/b", {"id": "secret:component/x"}]},
     "역방향_관계_키": {"hasPart": "secret:component/x"},
+    # 참조가 키-값의 값이 아니라 키에 적힐 수도 있다.
+    "정의되지_않은_최상위_키": {"secret:component/x": "메모"},
+    "정의되지_않은_키의_중첩된_키": {"notes": {"secret:component/x": "메모"}},
+    "정의되지_않은_키의_목록_안의_중첩된_키": {"notes": [{"links": {"secret:component/x": 1}}]},
+    "문자열이_아닌_관계의_값의_키": {"dependsOn": {"secret:component/x": "메모"}},
 }
 
 

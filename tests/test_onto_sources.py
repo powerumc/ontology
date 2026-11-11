@@ -440,11 +440,10 @@ def test_넘긴_문서의_목록이_비어_있어도_문제가_없다(onto_cli, 
         ("- docs/a.md\n", "invalid-value"),
         (f"- path: docs/a.md\n  hash: \"{OTHER_HASH}\"\n  why: 메모\n", "invalid-value"),
         ("- path: docs/a.md\n", "invalid-value"),
-        (f"- path: /abs.md\n  hash: \"{OTHER_HASH}\"\n", "invalid-value"),
         (f"- path: {ONTOLOGY_DIR}/index.md\n  hash: \"{OTHER_HASH}\"\n", "invalid-value"),
         ("- path: [docs/a.md\n", "unreadable-file"),
     ],
-    ids=["목록이_아님", "문자열_항목", "모르는_키", "해시_없음", "절대_경로", "온톨로지_층의_파일", "YAML_문법_오류"],
+    ids=["목록이_아님", "문자열_항목", "모르는_키", "해시_없음", "온톨로지_층의_파일", "YAML_문법_오류"],
 )
 def test_넘긴_문서의_목록의_모양이_틀리면_그_파일을_알리며_오류로_보고한다(onto_cli, text, check):
     root = onto_cli.root(billing(files={SKIPPED_YAML: text}))
@@ -454,6 +453,17 @@ def test_넘긴_문서의_목록의_모양이_틀리면_그_파일을_알리며_
     assert [f[:4] for f in findings] == [(ERROR, "billing", yaml_file(), check)]
     assert result.returncode == 1
     assert onto_cli.run(root, "build").returncode == 1  # 읽을 수 없는 파일이라 다른 파일과 같이 멈춘다
+
+
+def test_넘긴_문서의_목록의_경로가_절대_경로이면_값의_종류_오류와_저장소_밖_링크_오류를_함께_보고한다(onto_cli):
+    """값의 종류(`invalid-value`)는 저장소 규칙으로 끌 수 있고, 저장소 밖을 가리키는 경로(`outside-link`)는 루트 전용이다."""
+    root = onto_cli.root(billing(files={SKIPPED_YAML: f"- path: /abs.md\n  hash: \"{OTHER_HASH}\"\n"}))
+
+    result, findings = validate(onto_cli, root)
+
+    assert sorted(f[:4] for f in findings) == [(ERROR, "billing", yaml_file(), "invalid-value"), (ERROR, "billing", yaml_file(), "outside-link")]
+    assert result.returncode == 1
+    assert onto_cli.run(root, "build").returncode == 1
 
 
 def test_넘긴_문서의_목록은_질의의_그래프에_나타나지_않는다(onto_cli):

@@ -31,6 +31,7 @@
 
 import hashlib
 import os
+import posixpath
 import re
 import subprocess
 import unicodedata
@@ -108,16 +109,41 @@ def _is_normal_path(path: str) -> bool:
     return bool(path) and not path.startswith("/") and all(segment not in ("", ".", "..") for segment in path.split("/"))
 
 
-def read_skipped(path: Path) -> list[SourceEntry]:
-    """넘긴 문서의 목록(`skipped.yaml`)을 읽는다. 파일이 없거나 비어 있으면 빈 목록이다.
+def outside_paths(value: object) -> list[tuple[str, str]]:
+    """`derivedFrom`이나 넘긴 문서의 목록의 아직 검증하지 않은 값에서 지식 저장소 밖의 파일을 가리키는 `path`를 `(경로, 이유)`로. 같은 경로는 한 번만 낸다.
 
-    읽을 수 없으면 `FrontmatterError`, 모양이 틀리면 `ValueKindError`로 이유를 알린다(파일 이름은 부른 쪽이 붙인다).
-    목록은 `{path, hash}` 항목의 목록이고, 항목의 모양은 `derivedFrom`과 같다.
+    항목의 다른 부분(해시, 모르는 키)이 틀려도 `path` 문자열만 본다. 모양이 틀려 읽을 수 없는 기록(`parse_entries`가 던지는)도 저장소 밖을 가리키는지는 가릴 수 있다.
+    `docs/../design.md`처럼 모양은 틀려도 풀면 저장소 안인 경로는 밖이 아니다. 그것은 값의 종류 오류(`invalid-value`)가 알린다. 웹 주소는 파일이 아니라 밖이 아니다.
     """
+    found: dict[str, str] = {}
+    for item in value if isinstance(value, list) else [value]:
+        path = item.get("path") if isinstance(item, dict) else None
+        if isinstance(path, str) and path not in found and (reason := _outside_reason(path)):
+            found[path] = reason
+    return list(found.items())
+
+
+def _outside_reason(path: str) -> str | None:
+    """원본 문서의 `path`가 지식 저장소 밖의 파일이면 그 이유를, 아니면 None을 돌려준다. 경로는 파일 이름 그대로다(`#`, `?`, `%`는 주소의 문법이 아니다). `\\`는 `/`로 읽는다."""
+    if re.match(r"[A-Za-z]:[\\/]", path):
+        return "윈도우의 절대 경로다"
+    if path[:5].lower() == "file:":
+        return "`file:` 주소다"
+    normalized = path.replace("\\", "/")
+    if normalized.startswith("/"):
+        return "절대 경로다"
+    resolved = posixpath.normpath(normalized)
+    if resolved == ".." or resolved.startswith("../"):
+        return "상대 경로를 풀면 지식 저장소의 루트 위로 나간다"
+    return None
+
+
+def load_skipped(path: Path) -> object:
+    """넘긴 문서의 목록(`skipped.yaml`)의 값을 검증 없이 읽는다. 파일이 없거나 비어 있으면 `None`이다. 읽을 수 없으면 `FrontmatterError`다."""
     try:
         text = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
-        return []
+        return None
     except UnicodeDecodeError as exc:
         raise FrontmatterError("UTF-8 문서가 아니다") from exc
     except OSError as exc:  # 디렉토리이거나 권한이 없다
@@ -128,6 +154,11 @@ def read_skipped(path: Path) -> list[SourceEntry]:
         raise FrontmatterError(f"YAML 문법 오류: {str(exc).strip().splitlines()[0]}") from exc
     except ValueError as exc:  # `2026-02-30`처럼 날짜 모양이지만 없는 날짜
         raise FrontmatterError(f"값을 읽을 수 없다: {exc}") from exc
+    return data
+
+
+def parse_skipped(data: object) -> list[SourceEntry]:
+    """`load_skipped`가 읽은 값을 항목으로 읽는다. 값이 없으면 빈 목록이고, 모양이 틀리면 `ValueKindError`다."""
     if data is None:
         return []
     if not isinstance(data, list):

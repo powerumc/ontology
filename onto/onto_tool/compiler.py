@@ -40,7 +40,7 @@ from .pages import (
     read_page,
     scalar_values,
 )
-from .sources import SourceEntry, document_hashes, parse_entries, read_skipped
+from .sources import SourceEntry, document_hashes, load_skipped, outside_paths, parse_entries, parse_skipped
 from .workspace import ONTOLOGY_DIR, ONTOLOGY_YAML, PROJECTS_DIR, SKIPPED_YAML, Repository, Within, Workspace
 
 PROJECT_IDENTIFIER = "project"
@@ -356,6 +356,8 @@ def _read_repository(
                 sources = tuple(parse_entries(meta.get(SOURCE_KEY), f"`{SOURCE_KEY}`"))
             except ValueKindError as exc:
                 failure = failure or Problem(file, f"frontmatter를 읽을 수 없다: {exc}", _kind(exc))
+            # 값의 종류 검사(`invalid-value`)는 저장소 규칙으로 끌 수 있다. 저장소 밖의 경로는 그것과 별개로 루트 전용 항목이 알린다.
+            read.problems += _outside_sources(file, f"`{SOURCE_KEY}`", meta.get(SOURCE_KEY))
         # 값의 종류가 틀려도 읽은 frontmatter는 남긴다. 같은 페이지의 다른 문제(정의되지 않은 키, 깨진 참조)가 가려지지 않게 한다.
         read.record.pages.append(PageRecord(identifier, file, meta, sources, body))
         if identifier == PROJECT_IDENTIFIER:
@@ -377,7 +379,9 @@ def _read_repository(
             read.problems.append(Problem(file, f"frontmatter를 읽을 수 없다: {exc}", _kind(exc)))
 
     try:
-        read.record.skipped = read_skipped(repository.path / SKIPPED_YAML)
+        skipped = load_skipped(repository.path / SKIPPED_YAML)
+        read.problems += _outside_sources(read.record.skipped_file, "넘긴 문서의 목록", skipped)
+        read.record.skipped = parse_skipped(skipped)
     except FrontmatterError as exc:
         read.problems.append(Problem(read.record.skipped_file, f"넘긴 문서의 목록을 읽을 수 없다: {exc}", _kind(exc)))
     referenced = {entry.path for page in read.record.pages for entry in page.sources} | {entry.path for entry in read.record.skipped}
@@ -385,6 +389,19 @@ def _read_repository(
     if notice:
         read.notices.append(f"{read.record.label}: {notice}")
     return read
+
+
+def _outside_sources(file: str, label: str, value: object) -> list[Problem]:
+    """`derivedFrom`이나 넘긴 문서의 목록(`label`)의 `path` 가운데 지식 저장소 밖을 가리키는 것마다 문제 하나. 원본 문서는 이 저장소 안의 파일이다."""
+    return [
+        Problem(
+            file,
+            f"{label}의 `path` `{path}`가 지식 저장소 밖의 파일을 가리킨다({reason}). 원본 문서는 이 지식 저장소 안의 파일이다. "
+            "다른 지식 저장소의 문서는 그 저장소가 정리한 지식을 관계의 교차 참조(`<저장소 이름>:<식별자>`)로 가리킨다",
+            OUTSIDE_LINK,
+        )
+        for path, reason in outside_paths(value)
+    ]
 
 
 def _inside(path: Path, root: Path) -> bool:
