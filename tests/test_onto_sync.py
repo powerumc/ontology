@@ -133,7 +133,7 @@ def test_sync_뒤_지식_저장소의_git_상태에_dot_onto가_나타나지_않
 
     assert result.returncode == 0, result.stderr
     status = sandbox.git("status", "--porcelain", "--untracked-files=all", cwd=billing).stdout.splitlines()
-    assert sorted(status) == sorted(["?? .gitignore", f"?? {INDEX}", f"?? {YAML}"])
+    assert sorted(status) == sorted(["?? .gitignore", "?? AGENTS.md", f"?? {INDEX}", f"?? {YAML}"])  # 지침 파일이 없던 저장소는 AGENTS.md가 생긴다
     assert sandbox.head(billing) == head
     assert sandbox.git("diff", "--cached", "--name-only", cwd=billing).stdout == ""  # 스테이징도 하지 않는다
     assert sandbox.git("check-ignore", "--quiet", ".onto/Justfile", cwd=billing, check=False).returncode == 0
@@ -302,11 +302,11 @@ CONFIGURED = repo(
 
 
 def owned_files(billing: Path) -> dict[str, tuple[bytes, int]]:
-    """지식 저장소의 저장소 소유 파일(원본 문서와 온톨로지 층)의 내용과 수정 시각. 루트 관리 파일(`.onto/`)과 `.gitignore`의 블록은 뺀다."""
+    """지식 저장소의 저장소 소유 파일(원본 문서와 온톨로지 층)의 내용과 수정 시각. 루트 관리 파일(`.onto/`)과 표시된 블록이 든 파일(`.gitignore`, 지침 파일)은 뺀다."""
     found = {}
     for path in sorted(billing.rglob("*")):
         relative = path.relative_to(billing).as_posix()
-        if path.is_file() and relative.split("/")[0] not in (".git", ".onto") and relative != ".gitignore":
+        if path.is_file() and relative.split("/")[0] not in (".git", ".onto") and relative not in (".gitignore", "CLAUDE.md", "AGENTS.md"):
             found[relative] = (path.read_bytes(), path.stat().st_mtime_ns)
     return found
 
@@ -553,11 +553,11 @@ def test_끝에_저장소별로_만든_파일_바꾼_파일_건너뛴_파일을_
     attach(sandbox, root, "billing"), attach(sandbox, root, "shop")
     first = sync(sandbox, root)
     tracked = tracked_onto_files(sandbox, root)
-    created = len(tracked) + 3  # .onto/ 아래 복사본(기록은 세지 않는다)과 .gitignore, ontology.yaml, 인덱스
+    created = len(tracked) + 4  # .onto/ 아래 복사본(기록은 세지 않는다)과 .gitignore, AGENTS.md(지침 파일), ontology.yaml, 인덱스
 
     assert f"billing: 만든 파일 {created}개, 바꾼 파일 0개, 지운 파일 0개, 건너뛴 파일 0개" in first.stdout
     assert f"shop: 만든 파일 {created}개" in first.stdout
-    for line in (".gitignore", YAML, INDEX):
+    for line in (".gitignore", "AGENTS.md", YAML, INDEX):
         assert f"만듦  {line}" in first.stdout
     assert first.stdout.rstrip().splitlines()[-1].startswith("최신화: 지식 저장소 2개")  # 끝에 전체 요약
 

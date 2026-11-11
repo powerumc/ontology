@@ -19,6 +19,7 @@ from . import (
     layout,
     links,
     orphans,
+    outdated,
     overrides,
     problems,
     references,
@@ -46,6 +47,7 @@ __all__ = [
 _MODULES = (
     problems,
     repositories,
+    outdated,
     overrides,
     frontmatter,
     layout,

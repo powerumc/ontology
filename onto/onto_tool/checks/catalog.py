@@ -58,6 +58,10 @@ DUPLICATE_REPOSITORY_NAME = Check(
     root_only=True,
 )
 MISSING_ONTOLOGY_LAYER = Check("missing-ontology-layer", "등록된 지식 저장소에 온톨로지 층(ontology.yaml)이 없어 검사하지 못했다")
+OUTDATED_MANAGED_FILES = Check(
+    "outdated-managed-files",
+    "지식 저장소의 루트 관리 파일(.onto/)이 루트 저장소의 onto/와 내용이 다르다(없는 파일, 다른 파일, 루트에서 없어졌는데 남은 파일). 버전 번호가 아니라 내용으로 판단하므로 버전을 올리지 않고 코드만 고친 경우도 잡는다. 최신화(just onto sync)가 필요하다",
+)
 INVALID_RULES = Check(
     "invalid-rules", "ontology.yaml의 rules가 틀렸다(정의되지 않은 키, 값의 종류, 루트 전용 규칙을 덮어쓰려는 시도). 그 저장소는 루트 기본 규칙으로 검사한다"
 )
@@ -119,6 +123,7 @@ CHECKS = (
     REPOSITORY_NAME_MISMATCH,
     DUPLICATE_REPOSITORY_NAME,
     MISSING_ONTOLOGY_LAYER,
+    OUTDATED_MANAGED_FILES,
     INVALID_RULES,
     STALE_PAGE,
     MISSING_SOURCE,

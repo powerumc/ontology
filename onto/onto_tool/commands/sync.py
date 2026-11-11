@@ -4,18 +4,25 @@ import argparse
 import sys
 from pathlib import Path
 
+from .. import vocab
+from ..checks import Finding
+from ..conformance import nonconforming
 from ..errors import OntoError
+from ..managed import MANAGED_DIR, MANAGED_TREES, ROOT_TREE, collect_sources, untracked_sources
 from ..paths import TOOL_DIR
-from ..sync import MANAGED_DIR, MANAGED_TREES, ROOT_TREE, Result, collect_sources, sync_repository, untracked_sources
+from ..sync import Result, sync_repository
 from ..workspace import Workspace
 from ._output import warn
+from ._rules import root_rules
 
 NAME = "sync"
 HELP = (
     "루트 저장소의 기능을 지식 저장소에 복사하거나 최신화한다. 루트 저장소의 onto/(추적하는 파일만)를 지식 저장소의 .onto/로 복사하고, "
-    "지식 저장소의 .gitignore에 표시된 블록으로 .onto/를 제외하며, 없으면 온톨로지 층의 뼈대(docs/ontology/ontology.yaml과 인덱스)를 만든다. "
+    "지식 저장소의 .gitignore에 표시된 블록으로 .onto/를 제외하고, 프로젝트 지침 파일(CLAUDE.md, 없으면 AGENTS.md, 둘 다 없으면 AGENTS.md를 만든다)에는 "
+    "온톨로지 층의 인덱스를 가리키는 표시된 블록을 넣으며(블록 밖은 바꾸지 않는다), 없으면 온톨로지 층의 뼈대(docs/ontology/ontology.yaml과 인덱스)를 만든다. "
     "이름(서브모듈 디렉토리 이름)을 생략하면 모든 지식 저장소에 적용한다. 마지막 최신화 뒤에 손으로 고친 루트 관리 파일은 덮어쓰지 않고 보고한다. "
     "저장소 소유 파일(ontology.yaml, 페이지)은 바꾸지 않는다. 변경은 지식 저장소의 작업 트리에 남고 커밋하지 않는다. "
+    "끝에 최신화한 저장소의 페이지 가운데 새 구조 제약에 어긋난 것을 보고한다(validate와 같은 다섯 칸. 종료 코드는 바꾸지 않는다). "
     "저장소마다 만든 파일, 바꾼 파일, 지운 파일, 건너뛴 파일을 요약한다. 건너뛴 파일은 하나씩 이유와 함께 보여 주고(같은 위치가 막은 파일만 묶는다), "
     "건너뛴 것이 있거나 사람이 확인할 것(지식 저장소가 이미 추적하는 .onto/)이 있으면 0이 아닌 종료 코드로 끝난다. "
     "루트 저장소에서만 쓸 수 있고 지식 저장소 안에서는 거부한다"
@@ -52,6 +59,8 @@ def run(args: argparse.Namespace) -> int:
     for result in results:
         _print(result)
     print(_total(results))
+    # 지식 저장소의 도구와 공통 어휘가 루트의 것으로 바뀌었다. 새 구조 제약에 어긋나게 된 페이지는 저장소 소유 파일이라 고치지 않고 알린다.
+    _print_nonconforming(nonconforming(workspace, [result.repository for result in results], root_rules(workspace)))
     sys.stdout.flush()  # 출력이 파이프로 갈 때 아래 오류(표준 오류)가 요약보다 먼저 나오지 않게 한다
 
     incomplete = [result.repository for result in results if not result.complete]
@@ -104,6 +113,19 @@ def _print(result: Result) -> None:
                 print(f"  건너뜀  {line} — {skip.reason}")
     for path, reason in result.attention:
         print(f"  확인 필요  {path} — {reason}")
+
+
+def _print_nonconforming(findings: list[Finding]) -> None:
+    """최신화한 지식 저장소에서 구조 제약에 어긋난 페이지. 문제 하나에 한 줄이고 `validate`의 보고와 같은 모양(탭으로 나눈 다섯 칸)이다."""
+    if not findings:
+        return
+    pages = len({finding.file for finding in findings})
+    print(
+        f"구조 제약에 어긋난 페이지 {pages}개(공통 어휘 {vocab.version() or '버전을 알 수 없음'}). "
+        "최신화는 페이지를 고치지 않는다. 페이지를 고친 뒤 `just onto validate`로 확인한다"
+    )
+    for finding in findings:
+        print("\t".join((finding.severity.value, finding.repository, finding.file, finding.check, " ".join(finding.message.split()))))
 
 
 def _summary(created: int, changed: int, removed: int, skipped: int, attention: int = 0) -> str:

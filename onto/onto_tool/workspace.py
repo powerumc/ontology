@@ -3,6 +3,7 @@
 도구는 현재 디렉토리를 루트 저장소로 본다. `just onto …`는 어디서 부르든 루트 저장소에서 실행된다.
 """
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,3 +47,14 @@ class Workspace:
     def display(self, path: Path) -> str:
         """사용자에게 보여 줄 경로. 루트 저장소 안이면 상대 경로, 밖이면 절대 경로다."""
         return self.relative(path) if path.is_relative_to(self.root) else str(path)
+
+
+class SubsetWorkspace(Workspace):
+    """다른 작업 공간에서 지식 저장소 일부만 보이는 작업 공간. 지식 저장소 하나의 인덱스를 만들거나 최신화한 저장소만 검사할 때 다른 저장소를 읽지 않는다."""
+
+    def __init__(self, base: Workspace, directories: Collection[str]) -> None:
+        super().__init__(base.root)
+        self._directories = frozenset(directories)
+
+    def repositories(self) -> list[Repository]:
+        return [repository for repository in super().repositories() if repository.directory in self._directories]

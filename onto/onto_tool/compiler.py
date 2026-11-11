@@ -139,6 +139,7 @@ class Compiled:
     # `files`에 섞지 않는다: `files`의 키는 페이지가 있는 엔티티(`onto:repository`를 가진 것)이고 검사가 그렇게 읽는다.
     source_files: dict[str, str] = field(default_factory=dict)
     notices: list[str] = field(default_factory=list)  # 알릴 것(원본 문서의 해시를 git으로 내지 못했다). 검사 항목이 따로 보고하지 않는다
+    root: Path | None = None  # 컴파일한 작업 공간의 루트. 레코드의 `path`가 이 위치 기준이다. 파일을 직접 읽어야 하는 검사 항목이 쓴다
 
 
 @dataclass
@@ -195,7 +196,7 @@ def compile_workspace(workspace: Workspace) -> Compiled:
 
     problems += duplicates
     raw.parse(data=json.dumps({"@context": context, "@graph": nodes}), format="json-ld", base=UNRESOLVED_BASE)
-    return Compiled(canonical(raw), files, names, warnings, problems, records, source_files, notices)
+    return Compiled(canonical(raw), files, names, warnings, problems, records, source_files, notices, root=workspace.root)
 
 
 def _duplicate_names(records: list[RepositoryRecord]) -> list[Problem]:
