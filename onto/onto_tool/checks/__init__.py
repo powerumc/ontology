@@ -51,18 +51,19 @@ def applied_rules(compiled: Compiled, root_rules: Rules) -> RuleSet:
 
 
 def split_problems(compiled: Compiled, applied: RuleSet) -> tuple[list[Problem], list[Problem]]:
-    """컴파일이 읽지 못한 파일의 문제를 `(켜진 검사 항목의 것, 꺼진 검사 항목의 것)`으로 나눈다.
+    """컴파일이 읽지 못한 파일의 문제를 `(멈추게 하는 것, 건너뛰는 것)`으로 나눈다.
 
-    켬/끔은 그 문제가 있는 지식 저장소의 규칙을 따른다(심각도는 따지지 않는다). `build`와 `query`가 쓴다. 켜진 항목의 문제가 있으면
-    일부만 컴파일한 그래프를 내놓지 않으려고 멈추고, 꺼진 항목의 문제가 난 파일은 건너뛴다. 컴파일은 읽을 수 없는 파일을 이미
-    그래프에서 뺐으므로 건너뛴다는 것은 멈추지 않는다는 뜻이다. 그래서 저장소가 `validate`에서 끈 항목의 문제로 `build`만 멈추는 일이 없다.
+    멈추게 하는 것은 그 문제가 있는 지식 저장소의 규칙에서 검사 항목이 켜져 있고 심각도가 오류인 문제다. 루트 전용 항목은 루트 기본
+    규칙의 값이다. `build`, `query`, `status`가 쓴다. 경고이거나 꺼진 항목의 문제는 건너뛴다. 컴파일은 읽을 수 없는 파일을 이미 그래프에서
+    뺐으므로 건너뛴다는 것은 멈추지 않는다는 뜻이다. `validate`는 켜진 오류가 하나라도 있으면 0이 아닌 종료 코드로 끝나므로,
+    `validate`가 0으로 끝나는 지식 저장소의 읽기 문제로 `build`가 멈추는 일은 없다(켜진 오류의 읽기 문제가 있으면 둘 다 멈춘다).
     """
-    enabled: list[Problem] = []
-    disabled: list[Problem] = []
+    blocking: list[Problem] = []
+    skipped: list[Problem] = []
     for problem in compiled.problems:
         rule = applied.of(repository_of(problem.file)).checks[problem.check]
-        (enabled if rule.enabled else disabled).append(problem)
-    return enabled, disabled
+        (blocking if rule.stops_build else skipped).append(problem)
+    return blocking, skipped
 
 
 def validate(compiled: Compiled, root_rules: Rules) -> list[Finding]:

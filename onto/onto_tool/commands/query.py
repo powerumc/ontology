@@ -19,7 +19,7 @@ HELP = (
     "SPARQL 질의를 실행한다. 하위 클래스, 역관계, 추이 관계가 추론된 그래프를 질의한다. "
     "SELECT 결과의 엔티티는 루트 저장소 기준 파일 경로로 나온다. "
     "CONSTRUCT와 DESCRIBE는 Turtle로 나오고, 엔티티의 IRI가 가리키는 파일이 주석으로 붙는다. "
-    "읽을 수 없는 파일이 있으면 멈춘다. 다만 그 지식 저장소의 규칙에서 그 문제를 보고하는 검사 항목이 꺼져 있으면 그 파일을 건너뛴다"
+    "읽을 수 없는 파일이 있으면 멈춘다. 다만 그 문제를 보고하는 검사 항목이 그 지식 저장소의 규칙에서 오류일 때만 멈추고, 꺼졌거나 경고이면 그 파일을 건너뛰고 표준 오류로 알린다"
 )
 
 
@@ -31,6 +31,7 @@ def run(args: argparse.Namespace) -> int:
     workspace = Workspace(Path.cwd())
     compiled = compile_workspace(workspace)
     warn(compiled.warnings)
+    warn(compiled.notices)
     ensure_valid(workspace, compiled)
     graph = infer(compiled.graph)
     # 질의 결과에서 `Source` 엔티티는 원본 문서의 파일 경로로 보인다

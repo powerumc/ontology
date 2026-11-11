@@ -18,7 +18,7 @@ HELP = (
     "지식 저장소의 페이지를 그래프로 컴파일하고 추론해 도구 디렉토리의 .build/graph.ttl로 남긴다. "
     "지식 저장소마다 온톨로지 층에 인덱스(docs/ontology/index.md)를 만든다. 인덱스는 생성물이지만 커밋하는 파일이다. "
     "모든 지식 저장소를 모은 전체 인덱스는 도구 디렉토리의 .build/index.md로 남긴다. "
-    "읽을 수 없는 파일이 있으면 멈춘다. 다만 그 지식 저장소의 규칙에서 그 문제를 보고하는 검사 항목이 꺼져 있으면 그 파일을 건너뛴다"
+    "읽을 수 없는 파일이 있으면 멈춘다. 다만 그 문제를 보고하는 검사 항목이 그 지식 저장소의 규칙에서 오류일 때만 멈추고, 꺼졌거나 경고이면 그 파일을 건너뛰고 표준 오류로 알린다"
 )
 
 
@@ -30,6 +30,7 @@ def run(args: argparse.Namespace) -> int:
     workspace = Workspace(Path.cwd())
     compiled = compile_workspace(workspace)
     warn(compiled.warnings)
+    warn(compiled.notices)
     ensure_valid(workspace, compiled)
 
     # 아무것도 쓰기 전에, 인덱스를 쓸 수 없는 경로(심볼릭 링크 등)를 모두 모아 알린다. 그래프만 쓰고 멈추지 않는다.

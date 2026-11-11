@@ -11,7 +11,8 @@
 
 다음 지식 저장소는 건너뛴다. 인덱스를 만들 수 없거나 믿을 수 없는 저장소에 "다시 build한다"고 알릴 수는 없고, 그 원인이 따로 보고된다.
 - 온톨로지 층이 없거나 `ontology.yaml`을 읽을 수 없는 저장소: 이름을 몰라 인덱스를 만들 수 없다.
-- 읽을 수 없는 파일이 있는 저장소: `build`가 멈춰 인덱스를 다시 만들 수 없다.
+- `build`를 멈추게 하는 읽을 수 없는 파일이 있는 저장소(그 문제를 보고하는 검사 항목이 그 저장소의 규칙에서 오류다): 인덱스를 다시 만들 수 없다.
+  항목이 꺼졌거나 경고이면 `build`는 그 파일을 건너뛰고 인덱스를 만들므로 이 검사도 한다.
 - 다른 저장소와 `name`이 겹치는 저장소: 그래프에 두 저장소의 엔티티가 섞여 인덱스가 틀린다.
 """
 
@@ -27,7 +28,11 @@ _SHOWN = 3  # 설명에 보여 주는 어긋난 줄의 수(한쪽당)
 
 
 def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
-    unreadable = {repository_of(problem.file) for problem in compiled.problems}
+    unreadable = {
+        repository_of(problem.file)
+        for problem in compiled.problems
+        if rules.of(repository_of(problem.file)).checks[problem.check].stops_build
+    }
     expected = {content.index_file: index.render(content) for content in index.collect(compiled)}
     for record in compiled.records:
         if record.index_file not in expected or record.directory in unreadable:

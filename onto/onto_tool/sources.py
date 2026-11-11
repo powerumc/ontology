@@ -4,17 +4,30 @@
 페이지는 `derivedFrom`에 근거로 삼은 문서의 경로와 git 해시를 적고(`{path, hash}` 항목), 읽고도 기록할 것이 없는 문서는
 넘긴 문서의 목록(`docs/ontology/skipped.yaml`)에 같은 모양의 항목으로 적는다. 문서의 지금 해시와 적힌 해시가 다르면 낡음이다.
 
-- 해시는 작업 트리에 있는 파일의 지금 내용으로 계산한다. 커밋하지 않은 수정도 달라진 것으로 본다.
-  계산은 git이 파일을 blob으로 해시하는 방식(`git hash-object --no-filters`)과 같다: `sha1("blob <바이트 수>\\0" + 내용)`.
-  git이 없어도 되고, 줄바꿈 변환 같은 사용자의 git 설정에 따라 달라지지 않는다. 내용 그대로를 해시한다.
-- 문서는 지식 저장소 안의 일반 파일이다. 저장소 밖을 가리키는 링크나 디렉토리는 없는 문서로 본다(ADR 0001).
-- ingest 대상은 규칙의 `sources`(글롭과 제외 경로)로 정하고, 온톨로지 층은 규칙과 무관하게 항상 뺀다. 숨김 파일과 숨김 디렉토리
-  (`.git`, 루트 관리 파일인 `.onto/`)도 대상이 아니다.
+- 해시는 git이 그 문서를 커밋할 때 기록하는 정규 blob 해시다. 깨끗한 클론에서 `git rev-parse HEAD:<경로>`와 같고, 같은 커밋이면
+  `core.autocrlf`나 `.gitattributes`의 `eol`·`text`·`filter`가 달라 작업 트리의 바이트가 기기마다 달라도 같다. 작업 트리에 있는 파일의
+  지금 내용으로 계산하므로 커밋하지 않은 수정도 달라진 것으로 본다.
+  지식 저장소가 git 작업 트리(`.git`이 있다)이면 `git hash-object --stdin-paths`(`-w` 없이)로 낸다. git이 그 경로에 `.gitattributes`와
+  `core.autocrlf` 같은 변환 설정을 적용해 `git add`가 기록할 blob의 해시를 준다. 그 설정은 사용자가 체크아웃에 쓴 것과 같은
+  설정이라 결과를 정하는 입력이므로 고정하지 않는다. 고정하는 것은 저장소를 찾는 방식(`GIT_DIR` 같은 환경 변수를 버리고, 상위 디렉토리의
+  저장소를 찾지 않는다)과 `core.safecrlf`뿐이다. `-w`가 없으면 객체도 인덱스도 쓰지 않는다.
+  git 저장소가 아닌 디렉토리(견본)에서는 파일 내용 그대로를 git이 blob으로 해시하는 방식(`sha1("blob <바이트 수>\0" + 내용)`)으로 계산한다.
+  git을 실행하지 못하면 그 방식으로 계산하고 알린다(`document_hashes`가 알림 문구를 돌려준다).
+- 문서는 지식 저장소 안의 일반 파일이다. 심볼릭 링크(경로 중간의 디렉토리 링크 포함)와 디렉토리는 원본 문서가 아니다. git이 링크를
+  내용이 아니라 대상 경로의 blob으로 기록하고, 저장소 밖을 가리킬 수 있기 때문이다(ADR 0001).
+- 경로는 대소문자를 구분해 저장소가 실제로 가진 이름과 같아야 한다. 대소문자를 구분하지 않는 파일 시스템(macOS)에서도 `docs/Design.md`는
+  `docs/design.md`가 아니다. 유니코드는 NFC로 정규화해 비교한다(macOS의 NFD 파일 이름과 NFC로 적은 경로가 같다). 비교만 정규화하고 파일은
+  디렉토리에 있는 이름 그대로 연다.
+- ingest 대상은 규칙의 `sources`(글롭과 제외 경로)로 정하고, 온톨로지 층은 규칙과 무관하게 항상 뺀다. 숨김 경로(경로의 어느 조각이든 `.`으로
+  시작하는 것: `.git`, 루트 관리 파일인 `.onto/`)와 심볼릭 링크도 대상이 아니다.
 """
 
 import hashlib
 import os
 import re
+import subprocess
+import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -111,33 +124,138 @@ def read_skipped(path: Path) -> list[SourceEntry]:
 
 # --- 해시 ---------------------------------------------------------------------------
 
+# 어느 저장소를 해시하는지를 바꾸는 환경 변수. 사용자의 셸이나 git 훅(`pre-push` 등)이 물려줄 수 있어 버린다.
+_GIT_LOCATION_VARIABLES = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+    "GIT_SUPER_PREFIX",
+    "GIT_INTERNAL_SUPER_PREFIX",
+)
+
+
+class _GitFailure(Exception):
+    """git으로 해시를 내지 못했다. 메시지는 이유다."""
+
 
 def blob_hash(content: bytes) -> str:
-    """내용을 git이 blob으로 해시하는 방식으로 해시한 값. `git hash-object --no-filters`와 같다."""
+    """내용을 git이 blob으로 해시하는 방식으로 해시한 값. 줄바꿈 변환 같은 git의 입력 변환은 적용하지 않는다."""
     return hashlib.sha1(b"blob %d\0" % len(content) + content, usedforsecurity=False).hexdigest()
 
 
-def document_hash(repository: Path, path: str) -> str | None:
-    """지식 저장소 `repository` 안의 원본 문서 `path`의 지금 내용의 해시. 문서가 없거나 읽을 수 없으면 None이다.
+def document_hashes(repository: Path, paths: Iterable[str]) -> tuple[dict[str, str | None], str | None]:
+    """지식 저장소 `repository` 안의 원본 문서 `paths`의 지금 내용의 해시를 `{경로: 해시}`로 돌려준다. 경로는 받은 글자 그대로다.
 
-    일반 파일이 아니거나(디렉토리), 저장소 밖을 가리키는 링크이면 없는 문서다.
+    문서가 없으면 None이다. 없는 문서는 이름이 저장소의 것과 대소문자까지 같은 일반 파일이 아닌 경우다(`_locate`).
+    git 작업 트리이면 git이 기록하는 정규 blob 해시이고, 아니면 파일 내용 그대로의 blob 해시다(모듈 설명).
+    두 번째 값은 알릴 것이다. git을 실행하지 못해 파일 내용 그대로 계산했을 때만 있고, 아니면 None이다.
     """
-    target = _regular_file(repository.resolve(), repository / path)
-    if target is None:
-        return None
+    listings: dict[Path, list[str]] = {}
+    located = {path: _locate(repository, path, listings) for path in sorted(set(paths))}
+    present = sorted({actual for actual in located.values() if actual is not None})
+    computed: dict[str, str | None] = {}
+    notice = None
+    if present and (repository / ".git").exists():
+        try:
+            computed = dict(_git_hashes(repository, present))
+        except _GitFailure as exc:
+            notice = (
+                f"원본 문서의 해시를 git으로 내지 못해 파일 내용 그대로 계산했다({exc}). "
+                "줄바꿈 변환이 있는 저장소에서는 git이 기록하는 해시와 다를 수 있다"
+            )
+    if present and not computed:
+        computed = {actual: _plain_hash(repository / actual) for actual in present}
+    return {path: computed.get(actual) if actual is not None else None for path, actual in located.items()}, notice
+
+
+def _plain_hash(path: Path) -> str | None:
     try:
-        return blob_hash(target.read_bytes())
+        return blob_hash(path.read_bytes())
     except OSError:
         return None
 
 
-def _regular_file(repository: Path, candidate: Path) -> Path | None:
-    """`candidate`가 `repository`(이미 풀어 쓴 경로) 안의 일반 파일이면 풀어 쓴 경로, 아니면 None."""
-    try:
-        resolved = candidate.resolve(strict=True)
-    except (OSError, RuntimeError):  # 없다, 링크가 끊겼거나 순환한다
-        return None
-    return resolved if resolved.is_relative_to(repository) and resolved.is_file() else None
+def _git_hashes(repository: Path, paths: list[str]) -> dict[str, str]:
+    """`git hash-object`로 낸 `{경로: 정규 blob 해시}`. `-w`가 없어 아무것도 쓰지 않는다. 실패하면 `_GitFailure`다.
+
+    `git add`가 기록할 blob의 해시를 낸다. 파일마다 `.gitattributes`와 `core.autocrlf` 같은 설정으로 입력 변환(`text`, `eol`, `filter`)을 거친다.
+    그 설정은 결과를 정하는 입력이라 고정하지 않는다. 사용자 환경에서 고정하는 것: 저장소 위치를 바꾸는 환경 변수를 버리고,
+    상위 디렉토리로 올라가 다른 저장소(루트 저장소)를 찾지 않게 하며(`GIT_CEILING_DIRECTORIES`), `core.safecrlf`를 끈다.
+    """
+    real = repository.resolve()
+    environment = {key: value for key, value in os.environ.items() if key not in _GIT_LOCATION_VARIABLES}
+    environment["GIT_CEILING_DIRECTORIES"] = str(real.parent)
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    command = ["git", "-c", "core.safecrlf=false", "-C", str(real), "hash-object"]
+
+    def run(arguments: list[str], text: bytes = b"") -> list[str]:
+        try:
+            done = subprocess.run([*command, *arguments], input=text, capture_output=True, env=environment, check=False)
+        except OSError as exc:
+            raise _GitFailure(f"git을 실행하지 못했다: {exc.strerror or exc}") from exc
+        if done.returncode != 0:
+            reason = done.stderr.decode("utf-8", errors="replace").strip().splitlines()
+            raise _GitFailure(reason[0] if reason else f"git이 종료 코드 {done.returncode}로 끝났다")
+        return done.stdout.decode("ascii", errors="replace").split()
+
+    # `--stdin-paths`는 한 줄에 경로 하나를 읽고 `"`로 시작하는 줄을 C 방식 따옴표로 읽는다. 그런 경로와 줄바꿈이 든 경로는 하나씩 부른다.
+    batch = [path for path in paths if "\n" not in path and not path.startswith('"')]
+    hashes: dict[str, str] = {}
+    if batch:
+        lines = run(["--stdin-paths"], b"\n".join(os.fsencode(path) for path in batch) + b"\n")
+        if len(lines) != len(batch):
+            raise _GitFailure("git이 낸 해시의 수가 경로의 수와 다르다")
+        hashes.update(zip(batch, lines, strict=True))
+    for path in paths:
+        if path not in hashes:
+            (hashes[path],) = run(["--", path])
+    if not all(GIT_HASH.fullmatch(value) for value in hashes.values()):
+        raise _GitFailure("git이 40자리 16진수가 아닌 해시를 냈다")
+    return hashes
+
+
+def _locate(repository: Path, path: str, listings: dict[Path, list[str]]) -> str | None:
+    """지식 저장소 안의 원본 문서 `path`가 실제로 있는 경로(저장소 루트 기준, 디렉토리에 있는 이름 그대로)를 돌려준다. 없으면 None이다.
+
+    조각마다 디렉토리의 항목과 맞춘다. 대소문자는 구분하고 유니코드는 NFC로 정규화해 비교한다. 그래서 대소문자를 구분하지 않는
+    파일 시스템에서도 같은 결과가 나온다. 경로 중간이든 끝이든 심볼릭 링크이면 없는 문서이고, 끝은 일반 파일이어야 한다.
+    `listings`는 디렉토리 목록을 모아 두는 곳이다.
+    """
+    current = repository
+    actual: list[str] = []
+    for component in path.split("/"):
+        if current not in listings:
+            try:
+                listings[current] = sorted(os.listdir(current))
+            except OSError:  # 디렉토리가 아니거나 읽을 수 없다
+                return None
+        name = _entry_named(component, listings[current])
+        if name is None:
+            return None
+        current = current / name
+        actual.append(name)
+        if current.is_symlink():
+            return None
+    return "/".join(actual) if current.is_file() else None
+
+
+def _entry_named(component: str, names: list[str]) -> str | None:
+    """`names`에서 이름이 `component`와 같은 항목. 글자 그대로 같은 것이 먼저이고, 없으면 NFC로 같은 것이 하나뿐일 때 그것이다."""
+    if component in names:
+        return component
+    wanted = nfc(component)
+    candidates = [name for name in names if nfc(name) == wanted]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def nfc(text: str) -> str:
+    """경로를 비교하는 키. 파일 이름을 바꾸는 것이 아니라 같은지 가리는 데만 쓴다."""
+    return unicodedata.normalize("NFC", text)
 
 
 # --- ingest 대상 --------------------------------------------------------------------
@@ -147,12 +265,12 @@ def list_documents(repository: Path, sources: Sources) -> list[str]:
     """지식 저장소 `repository` 안에서 규칙의 `sources`가 가리키는 원본 문서를 경로 순으로 돌려준다.
 
     경로는 지식 저장소 루트 기준이고 `/`로 구분한다. `include`의 글롭과 맞고 `exclude`의 글롭과 맞지 않는 일반 파일이다.
-    온톨로지 층(`docs/ontology/`)은 규칙과 무관하게 항상 빠지고, 숨김 파일과 숨김 디렉토리 안도 뺀다. 글롭은 `*`가 한 조각 안의
-    글자들, `?`가 글자 하나, `[…]`가 글자 집합이고, `**`는 조각으로 쓰면 디렉토리를 0개 이상 건너뛴다.
+    온톨로지 층(`docs/ontology/`)은 규칙과 무관하게 항상 빠진다. 숨김 경로(경로의 어느 조각이든 `.`으로 시작한다)도 글롭이 가리켜도 항상
+    빠지고, 심볼릭 링크도 원본 문서가 아니라 뺀다. 글롭은 `*`가 한 조각 안의 글자들, `?`가 글자 하나, `[…]`가 글자 집합이고,
+    `**`는 조각으로 쓰면 디렉토리를 0개 이상 건너뛴다.
     """
     include = [_glob_regex(glob) for glob in sources.include]
     exclude = [_glob_regex(glob) for glob in sources.exclude]
-    real = repository.resolve()
     found: set[str] = set()
     for root in _walk_roots(sources.include):
         top = repository / root
@@ -166,20 +284,27 @@ def list_documents(repository: Path, sources: Sources) -> list[str]:
             for name in filenames:
                 path = (relative / name).as_posix()
                 if (
-                    not name.startswith(".")
+                    not _is_hidden(path)
                     and any(form.fullmatch(path) for form in include)
                     and not any(form.fullmatch(path) for form in exclude)
                     and not path.startswith(f"{_LAYER}/")
-                    and _regular_file(real, repository / path) is not None
+                    and (repository / path).is_file()
+                    and not (repository / path).is_symlink()
                 ):
                     found.add(path)
     return sorted(found)
 
 
+def _is_hidden(path: str) -> bool:
+    """경로의 어느 조각이든 `.`으로 시작하는 숨김 경로. 글롭이 앞쪽을 숨김 디렉토리로 정해도(`.onto/**`) 대상이 아니다."""
+    return any(segment.startswith(".") for segment in path.split("/"))
+
+
 def _walk_roots(include: tuple[str, ...]) -> list[str]:
     """글롭을 맞춰 볼 디렉토리. 글롭의 앞쪽 글자 그대로인 디렉토리(`docs/**/*.md`는 `docs`)만 훑어, 저장소 전체를 걷지 않는다.
 
-    다른 디렉토리 아래에 든 디렉토리는 뺀다. 저장소 루트는 빈 문자열이다.
+    다른 디렉토리 아래에 든 디렉토리는 뺀다. 저장소 루트는 빈 문자열이다. 숨김 디렉토리(`.onto/**`)에서 시작하는 글롭은 찾을 파일이
+    모두 숨김 경로라 훑지 않는다.
     """
     roots: set[str] = set()
     for glob in include:
@@ -188,7 +313,8 @@ def _walk_roots(include: tuple[str, ...]) -> list[str]:
             if re.search(r"[*?\[]", segment):
                 break
             prefix.append(segment)
-        roots.add("/".join(prefix))
+        if not any(segment.startswith(".") for segment in prefix):
+            roots.add("/".join(prefix))
     return sorted(root for root in roots if not any(other != root and (not other or root.startswith(f"{other}/")) for other in roots))
 
 

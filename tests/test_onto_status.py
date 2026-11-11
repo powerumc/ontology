@@ -1,11 +1,14 @@
 """`status`: ingest할 대상, 곧 새로 생겼거나 바뀐 원본 문서를 지식 저장소별로 보여 준다.
 
 온톨로지 도구의 명령줄 진입점을 견본 페이지 디렉토리에 대고 실행한다(`onto_cli`). 한 번은 `just onto status`로 서브모듈로 붙은 지식
-저장소를 상대로 실행한다. 해시의 기대값은 도구의 계산이 아니라 `git hash-object`가 낸 값이다.
+저장소를 상대로 실행한다. 해시는 git이 기록하는 blob 해시이고 기대값은 도구의 계산이 아니라 `git hash-object`가 낸 값이다.
+줄바꿈 변환이 있는 git 저장소(`core.autocrlf`, `.gitattributes`)에서의 해시는 `test_onto_sources.py`가 확인한다.
 
 보고는 문서 하나에 한 줄이고, 탭으로 나눈 다섯 칸이다: 상태(`새 문서`/`바뀐 문서`), 지식 저장소, 원본 문서(지식 저장소 루트 기준 경로),
 현재 해시, 설명. 지식 저장소, 상태(새 문서가 먼저), 경로 순이다. 바뀐 것이 없으면 그렇다고 알리는 한 줄만 나온다. 어떤 파일도 고치지 않는다.
 """
+
+import unicodedata
 
 import pytest
 
@@ -227,6 +230,40 @@ def test_넘긴_문서는_다른_지식_저장소의_같은_경로_문서에_영
     assert listed(onto_cli, root) == [(NEW, "shop", "docs/a.md")]
 
 
+def test_넘겼던_문서를_나중에_페이지로_ingest했으면_넘긴_목록의_옛_항목은_무시하고_status에_나오지_않는다(onto_cli, sandbox):
+    """회의록을 넘겼다 -> 내용이 바뀌어 바뀐 문서로 다시 나왔다 -> 에이전트가 읽고 페이지를 만들었다. 지금 내용은 이미 처리되었다."""
+    root = build_root(onto_cli, {"billing": {"docs/meeting.md": "회의록\n결정이 하나 늘었다\n"}})
+    write_files(
+        root,
+        {
+            **skipped(("docs/meeting.md", OTHER_HASH)),
+            **derived_page("component/auth", ("docs/meeting.md", git_hash(sandbox, root, "docs/meeting.md"))),
+        },
+    )
+
+    result, records = status(onto_cli, root)
+
+    assert records == [] and result.stdout.strip() == NOTHING
+
+
+def test_지금_내용을_근거로_한_페이지가_있어도_옛_내용을_근거로_한_다른_페이지는_낡았다고_알리고_넘긴_문서_얘기는_하지_않는다(onto_cli, sandbox):
+    root = build_root(onto_cli, {"billing": {"docs/meeting.md": "회의록\n"}})
+    current = git_hash(sandbox, root, "docs/meeting.md")
+    write_files(
+        root,
+        {
+            **skipped(("docs/meeting.md", OTHER_HASH)),
+            **derived_page("component/auth", ("docs/meeting.md", current)),
+            **derived_page("component/old", ("docs/meeting.md", "f" * 40)),
+        },
+    )
+
+    (record,) = status(onto_cli, root)[1]
+
+    assert record[:4] == (CHANGED, "billing", "docs/meeting.md", current)
+    assert "component/old" in record[4] and "component/auth" not in record[4] and "넘긴" not in record[4]
+
+
 # --- 바뀐 것이 없을 때 -----------------------------------------------------------------
 
 
@@ -360,6 +397,33 @@ def test_숨김_파일과_숨김_디렉토리는_글롭에_맞아도_대상이_�
 
 
 @pytest.mark.parametrize(
+    ("include", "expected"),
+    [
+        ([".onto/**/*.md"], []),
+        (["docs/.drafts/*.md"], []),
+        ([".onto/**/*.md", "docs/.drafts/*.md", "docs/**/*.md"], ["docs/a.md"]),
+        (["**/*.md"], ["docs/a.md"]),
+    ],
+    ids=["숨김_디렉토리에서_시작", "중간에_숨김_디렉토리", "다른_글롭과_함께", "모든_md"],
+)
+def test_숨김_경로는_글롭이_어떻게_쓰여도_항상_제외한다(onto_cli, include, expected):
+    files = {"docs/a.md": "a\n", ".onto/template/page.md": "루트 관리 파일\n", "docs/.drafts/wip.md": "초안\n"}
+    root = onto_cli.root({"billing": {**repo("billing", rules={"sources": {"include": include}}), **files}})
+
+    assert [path for _, _, path in listed(onto_cli, root)] == expected
+
+
+def test_심볼릭_링크는_원본_문서가_아니라_같은_문서가_두_번_나오지_않고_온톨로지_층의_페이지도_나오지_않는다(onto_cli):
+    root = build_root(onto_cli, {"billing": {"docs/v2.md": "두 번째 판\n"}})
+    write_files(root, derived_page("component/auth"))
+    docs = root / "projects" / "billing" / "docs"
+    (docs / "latest.md").symlink_to("v2.md")
+    (docs / "page-link.md").symlink_to("ontology/component/auth.md")  # 온톨로지 층의 페이지를 가리키는 링크로 층의 제외를 우회하지 못한다
+
+    assert listed(onto_cli, root) == [(NEW, "billing", "docs/v2.md")]
+
+
+@pytest.mark.parametrize(
     ("glob", "expected"),
     [
         ("docs/**/*.md", ["docs/a.md", "docs/x/b.md", "docs/x/y/c.md"]),
@@ -377,6 +441,36 @@ def test_글롭은_이중별이_디렉토리를_0개_이상_건너뛰고_별은_
     root = onto_cli.root({"billing": {**repo("billing", rules={"sources": {"include": [glob]}}), **files}})
 
     assert [path for _, _, path in listed(onto_cli, root)] == expected
+
+
+def test_원본_문서_경로의_대소문자가_다르면_validate처럼_그_문서를_근거로_삼지_않은_것으로_본다(onto_cli, sandbox):
+    """macOS(대소문자를 구분하지 않는 파일 시스템)에서도 Linux와 같은 결과다. validate는 `missing-source`를 낸다."""
+    root = build_root(onto_cli, {"billing": {"docs/design.md": "설계\n"}})
+    write_files(root, derived_page("component/auth", ("docs/Design.md", git_hash(sandbox, root, "docs/design.md"))))
+
+    assert listed(onto_cli, root) == [(NEW, "billing", "docs/design.md")]
+    assert "missing-source" in onto_cli.run(root, "validate").stdout
+
+
+@pytest.mark.parametrize(("on_disk", "written"), [("NFD", "NFC"), ("NFC", "NFD")], ids=["파일이_NFD", "파일이_NFC"])
+def test_유니코드_정규화_형식이_달라도_같은_이름의_문서로_보아_근거로_삼은_문서와_넘긴_문서가_다시_나오지_않는다(onto_cli, sandbox, on_disk, written):
+    name = "docs/설계 문서.md"
+    meeting = "docs/회의록.md"
+    root = build_root(
+        onto_cli, {"billing": {unicodedata.normalize(on_disk, name): "설계\n", unicodedata.normalize(on_disk, meeting): "회의록\n"}}
+    )
+    hashes = {path: git_hash(sandbox, root, path) for path in (unicodedata.normalize(on_disk, name), unicodedata.normalize(on_disk, meeting))}
+    write_files(
+        root,
+        {
+            **derived_page("component/auth", (unicodedata.normalize(written, name), hashes[unicodedata.normalize(on_disk, name)])),
+            **skipped((unicodedata.normalize(written, meeting), hashes[unicodedata.normalize(on_disk, meeting)])),
+        },
+    )
+
+    result = onto_cli.run(root, "status")
+
+    assert (result.returncode, result.stdout.strip()) == (0, NOTHING)
 
 
 # --- 어떤 파일도 고치지 않는다 -------------------------------------------------------------

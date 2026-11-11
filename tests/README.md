@@ -75,7 +75,8 @@ def test_예(onto_cli):
 
 ### 원본 문서와 낡음(`test_onto_sources.py`, `test_onto_status.py`)
 
-페이지의 `derivedFrom`은 `{path, hash}` 항목(또는 그 목록)이다. `path`는 지식 저장소 루트 기준 원본 문서의 경로, `hash`는 그 문서의 git 해시(`git hash-object`가 내는 40자리 소문자 16진수)다. 넘긴 문서의 목록(`docs/ontology/skipped.yaml`)은 같은 모양의 항목의 목록이다. 테스트가 기대하는 해시는 도구의 계산이 아니라 `git hash-object --no-filters`가 낸 값이고(`sandbox.git`), 커밋하지 않은 수정을 다루는 테스트는 견본 지식 저장소 안에서 `git init`과 커밋을 해 `git rev-parse HEAD:<경로>`와 비교한다.
+페이지의 `derivedFrom`은 `{path, hash}` 항목(또는 그 목록)이다. `path`는 지식 저장소 루트 기준 원본 문서의 경로, `hash`는 그 문서의 git 해시(git이 기록하는 blob 해시, 40자리 소문자 16진수)다. 넘긴 문서의 목록(`docs/ontology/skipped.yaml`)은 같은 모양의 항목의 목록이다. 지식 저장소가 git 작업 트리이면 도구가 `git hash-object --stdin-paths`로 해시를 내므로(`.gitattributes`와 `core.autocrlf` 적용), 깨끗한 클론의 `git rev-parse HEAD:<경로>`와 같고 줄바꿈 변환 설정과 무관하다. git 저장소가 아닌 견본 디렉토리에서는 파일 내용 그대로 blob 해시를 낸다. 테스트가 기대하는 해시는 도구의 계산이 아니라 git이 낸 값이다: `git hash-object`(견본 루트를 만들기 전에 임시 파일로 구한다)와 `git rev-parse HEAD:<경로>`. 줄바꿈 변환을 다루는 테스트는 `git init`과 커밋으로 만든 원본 저장소를 `git clone -c core.autocrlf=true`로 클론한다.
 
-- `test_onto_sources.py`: `derivedFrom`이 그래프의 `Source` 엔티티(`onto:sourcePath`, `onto:sourceHash`)와 `onto:derivedFrom` 관계로 나타나는 것, 값의 모양, 낡음(`stale-page`)·없어진 원본 문서(`missing-source`)·없어진 넘긴 문서(`missing-skipped-source`) 검사.
-- `test_onto_status.py`: `status`가 새 문서와 바뀐 문서를 지식 저장소별로 보여 주는 것(보고는 문서 하나에 탭 다섯 칸), 넘긴 문서, 대상 범위(규칙의 글롭과 제외 경로, 온톨로지 층은 항상 제외), 아무 파일도 고치지 않는 것, 깨진 `rules`를 기본값으로 대신하지 않는 것. `just onto status`는 마지막 테스트 하나만 거친다.
+- `test_onto_sources.py`: `derivedFrom`이 그래프의 `Source` 엔티티(`onto:sourcePath`, `onto:sourceHash`)와 `onto:derivedFrom` 관계로 나타나는 것, 값의 모양, 낡음(`stale-page`, 경고)·없어진 원본 문서(`missing-source`, 경고)·없어진 넘긴 문서(`missing-skipped-source`, 경고) 검사, git 저장소에서의 해시(줄바꿈 변환, 환경 변수, 아무것도 고치지 않는 것, git 실패 시 대체), 경로 대조(대소문자, 유니코드 정규화, 심볼릭 링크).
+- `test_onto_status.py`: `status`가 새 문서와 바뀐 문서를 지식 저장소별로 보여 주는 것(보고는 문서 하나에 탭 다섯 칸), 넘긴 문서(페이지가 지금 내용을 근거로 삼았으면 넘긴 목록의 옛 항목은 무시), 대상 범위(규칙의 글롭과 제외 경로, 온톨로지 층·숨김 경로·심볼릭 링크는 항상 제외), 아무 파일도 고치지 않는 것, 깨진 `rules`를 기본값으로 대신하지 않는 것. `just onto status`는 마지막 테스트 하나만 거친다.
+- 읽을 수 없는 파일의 문제로 `build`·`query`·`status`가 멈추는 조건(그 항목이 오류일 때만)과 `validate`와의 동치는 `test_onto_rules.py`의 `test_validate가_0으로_끝나면…`이 확인한다.

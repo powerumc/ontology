@@ -3,11 +3,13 @@
 온톨로지 도구의 명령줄 진입점을 견본 페이지 디렉토리에 대고 실행한다(`onto_cli`).
 
 - `derivedFrom`은 `{path, hash}` 항목(또는 그 목록)이다. `path`는 지식 저장소 루트 기준 원본 문서의 경로, `hash`는 그 문서의
-  git 해시(`git hash-object`가 내는 40자리 소문자 16진수)다. 해시의 기대값은 도구의 계산이 아니라 git이 낸 값을 쓴다.
+  git 해시(git이 기록하는 blob 해시, 40자리 소문자 16진수)다. 해시의 기대값은 도구의 계산이 아니라 git이 낸 값을 쓴다.
 - 그래프에서 항목 하나는 `Source` 엔티티(`onto:sourcePath`, `onto:sourceHash`)가 되고 페이지가 `onto:derivedFrom`으로 가리킨다.
   `Source`는 페이지를 갖지 않는다. 질의 결과에서는 원본 문서의 파일 경로로 보인다.
 - 낡음(`stale-page`), 없어진 원본 문서(`missing-source`), 없어진 넘긴 문서(`missing-skipped-source`)는 스크립트 검사가 잡는다.
 """
+
+import unicodedata
 
 import pytest
 
@@ -317,8 +319,8 @@ def test_커밋하지_않은_수정도_작업_트리의_현재_내용으로_낡�
     assert found(onto_cli, root) == [(WARNING, "billing", file("component/auth"), "stale-page")]
 
 
-def test_줄바꿈이_다른_파일도_git이_계산한_해시와_같게_해시한다(onto_cli, sandbox):
-    """도구는 줄바꿈을 고치지 않고 파일 내용 그대로 해시한다(`git hash-object --no-filters`와 같다)."""
+def test_git_저장소가_아닌_견본은_줄바꿈을_고치지_않고_파일_내용_그대로_해시한다(onto_cli, sandbox):
+    """변환 설정이 없는 디렉토리에서는 `git hash-object`가 내는 값과 같다."""
     crlf = "첫 줄\r\n둘째 줄\r\n"
     root = onto_cli.root(billing(sourced_page("component/auth", (DESIGN, git_hash_of(sandbox, crlf))), files={DESIGN: crlf}))
 
@@ -329,13 +331,23 @@ def test_줄바꿈이_다른_파일도_git이_계산한_해시와_같게_해시�
 # --- 스크립트 검사: 없어진 원본 문서 ---------------------------------------------------
 
 
-def test_derivedFrom이_가리키는_원본_문서가_없으면_오류로_잡는다(onto_cli):
+def test_derivedFrom이_가리키는_원본_문서가_없으면_경고로_잡는다(onto_cli):
+    """원본 문서는 팀이 소유한다. 팀원이 문서를 옮겼다고 푸시 관문이 막히지 않게 기본은 경고다."""
     root = onto_cli.root(billing(sourced_page("component/auth", ("docs/gone.md", OTHER_HASH))))
 
     result, findings = validate(onto_cli, root)
 
-    assert [f[:4] for f in findings] == [(ERROR, "billing", file("component/auth"), "missing-source")]
+    assert [f[:4] for f in findings] == [(WARNING, "billing", file("component/auth"), "missing-source")]
     assert "docs/gone.md" in findings[0][4]
+    assert result.returncode == 0
+
+
+def test_없어진_원본_문서는_규칙으로_오류로_올릴_수_있고_그러면_종료_코드가_1이_된다(onto_cli):
+    root = onto_cli.root(billing(sourced_page("component/auth", ("docs/gone.md", OTHER_HASH)), rules={"checks": {"missing-source": {"severity": "error"}}}))
+
+    result, findings = validate(onto_cli, root)
+
+    assert [f[:4] for f in findings] == [(ERROR, "billing", file("component/auth"), "missing-source")]
     assert result.returncode == 1
 
 
@@ -423,3 +435,152 @@ def test_넘긴_문서의_목록은_질의의_그래프에_나타나지_않는�
     root = onto_cli.root(billing(files=files))
 
     assert onto_cli.query(root, "SELECT ?s WHERE { ?s a onto:Source }") == []
+
+
+# --- 해시: git이 기록하는 정규 blob 해시 ---------------------------------------------------
+# 지식 저장소가 git 작업 트리이면 해시는 git이 커밋할 때 기록하는 blob 해시다. 같은 커밋이면 줄바꿈 변환 설정(`core.autocrlf`,
+# `.gitattributes`)이 달라 작업 트리의 바이트가 달라도 같다.
+
+OTHER_DOC = "docs/other.md"
+LF_TEXT = "첫 줄\n둘째 줄\n"
+
+
+def git_origin(onto_cli, sandbox, *, attributes: str | None = None):
+    """git 저장소로 커밋한 `billing` 지식 저장소. 원본 문서(`docs/design.md`)와 그것을 근거로 한 페이지, 근거로 삼지 않은 문서(`docs/other.md`)가 있다.
+
+    페이지가 적은 해시는 줄바꿈 변환이 없는 곳에서 git이 낸 LF 내용의 blob 해시다. 저장소의 경로를 돌려준다.
+    """
+    files = {DESIGN: LF_TEXT, OTHER_DOC: LF_TEXT + "다른 문서\n", **({".gitattributes": attributes} if attributes else {})}
+    root = onto_cli.root(billing(sourced_page("component/auth", (DESIGN, git_hash_of(sandbox, LF_TEXT))), files=files))
+    origin = root / "projects" / "billing"
+    sandbox.git("init", "-q", cwd=origin)
+    sandbox.git("add", "-A", cwd=origin)
+    sandbox.git("commit", "-q", "-m", "초기", cwd=origin)
+    return origin
+
+
+def clone_root(onto_cli, sandbox, origin, *config: str):
+    """`origin`을 `projects/billing`으로 클론한 견본 루트. `config`는 `git clone -c`로 주는 설정이다."""
+    root = onto_cli.root({})
+    (root / "projects").mkdir()
+    arguments = [argument for setting in config for argument in ("-c", setting)]
+    sandbox.git("clone", "-q", *arguments, origin, root / "projects" / "billing", cwd=root)
+    return root
+
+
+def status_hashes(onto_cli, root, env=None) -> dict[str, str]:
+    """`status`가 보여 주는 문서 경로 -> 현재 해시."""
+    result = onto_cli.run(root, "status", env=env)
+    assert result.returncode == 0, result.stderr
+    return {fields[2]: fields[3] for fields in (line.split("\t") for line in result.stdout.splitlines() if "\t" in line)}
+
+
+LINE_ENDING_SETUPS = [
+    (None, ("core.autocrlf=true",)),
+    ("*.md text eol=crlf\n", ()),
+    ("*.md text eol=crlf\n", ("core.autocrlf=true",)),
+]
+
+
+@pytest.mark.parametrize(
+    ("attributes", "config"), LINE_ENDING_SETUPS, ids=["autocrlf", "gitattributes_eol", "둘_다"]
+)
+def test_해시는_깨끗한_클론의_git_rev_parse와_같고_줄바꿈_변환_설정과_무관하다(onto_cli, sandbox, attributes, config):
+    origin = git_origin(onto_cli, sandbox, attributes=attributes)
+    committed = {path: sandbox.git("rev-parse", f"HEAD:{path}", cwd=origin).stdout.strip() for path in (DESIGN, OTHER_DOC)}
+    default = clone_root(onto_cli, sandbox, origin)
+    converted = clone_root(onto_cli, sandbox, origin, *config)
+    assert b"\r\n" in (converted / "projects" / "billing" / OTHER_DOC).read_bytes()  # 작업 트리의 바이트가 정말 다르다
+
+    for root in (default, converted):
+        assert status_hashes(onto_cli, root) == {OTHER_DOC: committed[OTHER_DOC]}  # 근거로 삼은 문서는 낡지 않아 나오지 않는다
+        assert "stale-page" not in validate(onto_cli, root)[0].stdout  # 한 기기에서 ingest한 페이지가 다른 기기에서 낡지 않는다
+    assert committed[DESIGN] == git_hash_of(sandbox, LF_TEXT)
+
+
+def test_줄바꿈_변환이_있는_작업_트리에서도_커밋하지_않은_수정은_낡음으로_본다(onto_cli, sandbox):
+    origin = git_origin(onto_cli, sandbox)
+    root = clone_root(onto_cli, sandbox, origin, "core.autocrlf=true")
+    assert "stale-page" not in validate(onto_cli, root)[0].stdout
+
+    (root / "projects" / "billing" / DESIGN).write_bytes("첫 줄\r\n바뀐 둘째 줄\r\n".encode("utf-8"))
+
+    assert [f[3] for f in validate(onto_cli, root)[1]] == ["stale-page"]
+
+
+def test_git_저장소의_위치를_바꾸는_환경_변수가_있어도_그_지식_저장소의_해시를_낸다(onto_cli, sandbox):
+    """git 훅(`pre-push` 등)이 `GIT_DIR`을 물려줘도 다른 저장소를 해시하지 않는다."""
+    origin = git_origin(onto_cli, sandbox, attributes="*.md text eol=crlf\n")
+    root = clone_root(onto_cli, sandbox, origin)
+    elsewhere = sandbox.new_dir("elsewhere", "repo")
+    sandbox.git("init", "-q", cwd=elsewhere)
+
+    plain = status_hashes(onto_cli, root)
+    disturbed = status_hashes(onto_cli, root, env={**onto_cli.env, "GIT_DIR": str(elsewhere / ".git"), "GIT_WORK_TREE": str(elsewhere)})
+
+    assert disturbed == plain == {OTHER_DOC: sandbox.git("rev-parse", f"HEAD:{OTHER_DOC}", cwd=origin).stdout.strip()}
+
+
+def test_git_저장소의_status와_validate는_git_객체와_인덱스를_포함해_아무것도_고치지_않는다(onto_cli, sandbox):
+    origin = git_origin(onto_cli, sandbox)
+    root = clone_root(onto_cli, sandbox, origin, "core.autocrlf=true")
+    (root / "projects" / "billing" / DESIGN).write_text("커밋하지 않은 수정\n", encoding="utf-8")
+    before = {path.relative_to(root).as_posix(): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+
+    assert onto_cli.run(root, "status").returncode == 0
+    assert onto_cli.run(root, "validate").returncode == 0
+
+    assert {path.relative_to(root).as_posix(): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()} == before
+
+
+def test_git이_해시를_내지_못하면_파일_내용_그대로_계산하고_표준_오류로_알린다(onto_cli, sandbox):
+    root = onto_cli.root(billing(sourced_page("component/auth", (DESIGN, git_hash_of(sandbox, LF_TEXT))), files={DESIGN: LF_TEXT, OTHER_DOC: "다른 문서\n"}))
+    (root / "projects" / "billing" / ".git").write_text("gitdir: /nonexistent\n", encoding="utf-8")  # git 저장소처럼 보이지만 쓸 수 없다
+
+    validated = onto_cli.run(root, "validate")
+    status = onto_cli.run(root, "status")
+
+    assert (validated.returncode, validated.stdout) == (0, "")
+    assert "git으로 내지 못해" in validated.stderr
+    assert status.returncode == 0 and f"\tbilling\t{OTHER_DOC}\t{git_hash_of(sandbox, '다른 문서' + chr(10))}" in status.stdout
+    assert status.stderr.count("git으로 내지 못해") == 1
+
+
+# --- 경로: 대소문자와 유니코드 정규화, 심볼릭 링크 -----------------------------------------------
+
+
+def test_원본_문서_경로의_대소문자가_파일_이름과_다르면_어느_파일_시스템에서도_없는_문서로_본다(onto_cli, sandbox):
+    """macOS처럼 대소문자를 구분하지 않는 파일 시스템에서도 Linux와 같은 결과(`missing-source`)가 나온다."""
+    root = onto_cli.root(billing(sourced_page("component/auth", ("docs/Design.md", git_hash_of(sandbox, DESIGN_TEXT))), files={DESIGN: DESIGN_TEXT}))
+
+    assert found(onto_cli, root) == [(WARNING, "billing", file("component/auth"), "missing-source")]
+
+
+def test_경로의_중간_디렉토리_이름도_대소문자를_구분한다(onto_cli, sandbox):
+    root = onto_cli.root(billing(sourced_page("component/auth", ("Docs/design.md", git_hash_of(sandbox, DESIGN_TEXT))), files={DESIGN: DESIGN_TEXT}))
+
+    assert [f[3] for f in validate(onto_cli, root)[1]] == ["missing-source"]
+
+
+@pytest.mark.parametrize(("on_disk", "written"), [("NFD", "NFC"), ("NFC", "NFD")], ids=["파일이_NFD", "파일이_NFC"])
+def test_유니코드_정규화_형식이_달라도_같은_이름의_원본_문서로_본다(onto_cli, sandbox, on_disk, written):
+    """macOS 앱이 만든 NFD 파일 이름과 LLM이 적은 NFC 경로를 같은 문서로 본다. 파일은 디렉토리에 있는 이름 그대로 연다."""
+    name = "docs/설계 문서.md"
+    root = onto_cli.root(
+        billing(
+            sourced_page("component/auth", (unicodedata.normalize(written, name), git_hash_of(sandbox, DESIGN_TEXT))),
+            files={unicodedata.normalize(on_disk, name): DESIGN_TEXT},
+        )
+    )
+
+    assert validate(onto_cli, root)[1] == []
+
+
+def test_심볼릭_링크인_원본_문서는_없는_문서로_본다(onto_cli, sandbox):
+    """git은 링크를 내용이 아니라 대상 경로의 blob으로 기록한다. 경로 중간의 디렉토리 링크도 같다."""
+    hash_ = git_hash_of(sandbox, DESIGN_TEXT)
+    root = onto_cli.root(billing(sourced_page("component/auth", ("docs/latest.md", hash_), ("docs/linked/design.md", hash_)), files={DESIGN: DESIGN_TEXT}))
+    (root / "projects" / "billing" / "docs" / "latest.md").symlink_to("design.md")
+    (root / "projects" / "billing" / "docs" / "linked").symlink_to(".", target_is_directory=True)
+
+    assert [f[3] for f in validate(onto_cli, root)[1]] == ["missing-source", "missing-source"]

@@ -63,7 +63,9 @@ INVALID_RULES = Check(
 )
 
 # --- 원본 문서의 기록 ----------------------------------------------------------------
-STALE_PAGE = Check("stale-page", "페이지가 근거로 삼은 원본 문서가 기록한 해시와 달라졌다(낡음). 작업 트리의 현재 내용으로 따진다")
+STALE_PAGE = Check(
+    "stale-page", "페이지가 근거로 삼은 원본 문서가 기록한 해시와 달라졌다(낡음). git이 기록하는 blob 해시를 작업 트리의 현재 내용으로 따진다"
+)
 MISSING_SOURCE = Check("missing-source", "페이지의 derivedFrom이 가리키는 원본 문서가 없다")
 MISSING_SKIPPED_SOURCE = Check("missing-skipped-source", "넘긴 문서의 목록(skipped.yaml)에 적힌 원본 문서가 없다")
 

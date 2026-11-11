@@ -36,7 +36,7 @@ from .pages import (
     read_frontmatter,
     scalar_values,
 )
-from .sources import SourceEntry, document_hash, parse_entries, read_skipped
+from .sources import SourceEntry, document_hashes, parse_entries, read_skipped
 from .workspace import ONTOLOGY_DIR, ONTOLOGY_YAML, SKIPPED_YAML, Repository, Workspace
 
 PROJECT_IDENTIFIER = "project"
@@ -122,6 +122,7 @@ class Compiled:
     # `Source` 엔티티 IRI -> 루트 저장소 기준 원본 문서의 경로. 질의 결과에서 `Source`를 원본 문서의 파일로 보여 준다.
     # `files`에 섞지 않는다: `files`의 키는 페이지가 있는 엔티티(`onto:repository`를 가진 것)이고 검사가 그렇게 읽는다.
     source_files: dict[str, str] = field(default_factory=dict)
+    notices: list[str] = field(default_factory=list)  # 알릴 것(원본 문서의 해시를 git으로 내지 못했다). 검사 항목이 따로 보고하지 않는다
 
 
 @dataclass
@@ -131,6 +132,7 @@ class _RepositoryRead:
     files: dict[str, str] = field(default_factory=dict)
     source_files: dict[str, str] = field(default_factory=dict)
     problems: list[Problem] = field(default_factory=list)
+    notices: list[str] = field(default_factory=list)  # 알릴 것(원본 문서의 해시를 git으로 내지 못했다). 검사 항목이 따로 보고하지 않는다
 
 
 def compile_workspace(workspace: Workspace) -> Compiled:
@@ -145,6 +147,7 @@ def compile_workspace(workspace: Workspace) -> Compiled:
     names: list[str] = []
     problems: list[Problem] = []
     warnings: list[str] = []
+    notices: list[str] = []
     records: list[RepositoryRecord] = []
 
     for repository in workspace.repositories():
@@ -162,10 +165,11 @@ def compile_workspace(workspace: Workspace) -> Compiled:
         nodes += read.nodes
         files.update(read.files)
         source_files.update(read.source_files)
+        notices += read.notices
 
     problems += _duplicate_names(records)
     raw.parse(data=json.dumps({"@context": context, "@graph": nodes}), format="json-ld", base=UNRESOLVED_BASE)
-    return Compiled(canonical(raw), files, names, warnings, problems, records, source_files)
+    return Compiled(canonical(raw), files, names, warnings, problems, records, source_files, notices)
 
 
 def _duplicate_names(records: list[RepositoryRecord]) -> list[Problem]:
@@ -303,7 +307,9 @@ def _read_repository(
     except FrontmatterError as exc:
         read.problems.append(Problem(read.record.skipped_file, f"넘긴 문서의 목록을 읽을 수 없다: {exc}", _kind(exc)))
     referenced = {entry.path for page in read.record.pages for entry in page.sources} | {entry.path for entry in read.record.skipped}
-    read.record.document_hashes = {path: document_hash(repository.path, path) for path in sorted(referenced)}
+    read.record.document_hashes, notice = document_hashes(repository.path, referenced)
+    if notice:
+        read.notices.append(f"{read.record.path}: {notice}")
     return read
 
 
