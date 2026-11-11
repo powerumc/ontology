@@ -229,8 +229,9 @@ def compile_workspace(workspace: Workspace) -> Compiled:
 
     for repository in workspace.repositories():
         yaml_path = repository.path / ONTOLOGY_YAML
-        # 순환하는 링크 같은 읽을 수 없는 파일은 없는 파일이 아니다. 온톨로지 층이 없다고 건너뛰지 않고 읽다가 실패해 읽을 수 없는 파일로 알린다.
-        if not yaml_path.is_file() and not stat_fails(yaml_path):
+        # 순환하는 링크는 있는데 읽을 수 없는 파일이다(`lstat`은 되고 `stat`이 실패한다). 온톨로지 층이 없다고 건너뛰지 않고 읽다가 실패해 읽을 수 없는 파일로 알린다.
+        # 상위 경로가 디렉토리가 아니거나(`docs/ontology`가 파일이다) 열 수 없으면 `lstat`부터 실패해, `ontology.yaml`이 있을 수 없으니 전처럼 층이 없는 것이다.
+        if not yaml_path.is_file() and not (os.path.lexists(yaml_path) and stat_fails(yaml_path)):
             record = _record(workspace, repository, has_layer=False)
             warnings.append(f"{record.label}: 온톨로지 층({ONTOLOGY_YAML.as_posix()})이 없어 건너뛰었다")
             if os.path.lexists(yaml_path) and not is_inside(yaml_path, real_path(repository.path)):

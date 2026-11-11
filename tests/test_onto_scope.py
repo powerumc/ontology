@@ -922,6 +922,18 @@ def test_순환하는_ontology_yaml_링크는_온톨로지_층이_없는_것이_
     assert onto_cli.run(root, "build").returncode == 1
 
 
+def test_docs_ontology가_일반_파일인_저장소는_읽을_수_없는_ontology_yaml이_아니라_온톨로지_층이_없는_것으로_본다(onto_cli):
+    """`ontology.yaml`이 있을 수조차 없는 경우(`ENOTDIR`)다. 순환하는 링크와 달리 없는 파일이라 경고로 알리고 그 저장소만 건너뛴다."""
+    root = onto_cli.root({"team": team_repo(), "plain": {"docs/ontology": "층이 아니라 파일이다\n"}})
+
+    result, findings = validate(onto_cli, root)
+    built = onto_cli.run(root, "build")
+
+    assert [finding[:4] for finding in findings] == [(WARNING, "plain", "projects/plain", "missing-ontology-layer")]
+    assert result.returncode == 0
+    assert built.returncode == 0  # 다른 저장소의 build가 멈추지 않는다
+
+
 def test_순환하는_링크도_규칙에서_unreadable_file을_경고로_낮추면_build가_건너뛰고_알린다(onto_cli):
     onto_cli.set_root_check("unreadable-file", severity="warning")
     root = onto_cli.root({"team": team_repo()})
