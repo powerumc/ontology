@@ -91,6 +91,8 @@ def test_예(onto_cli):
 - 지식 저장소 안에서 `just -f .onto/Justfile …`을 부르면 도구가 `.onto/` 안에 가상환경과 `__pycache__`를 만든다. 작업 트리를 앞뒤로 비교하는 테스트는 이를 빼고 비교한다.
 - `.onto/.sync-record.json`을 손으로 꾸며(`.onto/` 밖이나 `..`, 절대 경로가 든 기록) 기록이 저장소 밖의 파일을 지우지 못하는 것을 본다. 최신화의 인덱스 생성 기준은 `build`와 같다(규칙에서 오류인 읽기 문제가 있을 때만 못 만든다).
 - 출력의 순서는 `sh -c 'just … 2>&1'`로 두 출력을 한 파이프에 모아 본다. 두 파이프로 따로 받으면 순서를 알 수 없다.
+- 건너뛴 파일의 보고: 같은 위치(링크, 디렉토리가 아닌 조각)가 막은 파일만 같은 이유끼리 묶고(`.onto/ 아래 파일 N개`), 손으로 고친 파일처럼 파일마다 사정이 다른 것은 몇 개든 하나씩 이유와 함께 적는다. 지식 저장소가 `.onto/`를 이미 추적하는 것은 건너뛴 것이 아니라 `확인 필요`로 알리고(복사는 계속한다) 종료 코드는 1이다.
+- 최신화가 부르는 git은 `GIT_DIR`, `GIT_INDEX_FILE` 같은 환경 변수와 위 디렉토리의 저장소를 따르지 않는다. 환경 변수를 둔 채 실행하려면 `sandbox.run([just, "onto", "sync", …], cwd=…, env={**sandbox.env, "GIT_INDEX_FILE": …})`로 부른다(`sandbox.just`는 환경을 받지 않는다).
 - `just repo add`가 등록 직후 최신화를 자동으로 실행하는 것은 `test_repo_add.py`가 본다. 그래서 등록하면 지식 저장소에 미커밋 파일(`.gitignore`, `docs/ontology/`)이 생기고, 방금 등록한 저장소를 바로 떼려면 `repo remove --force`가 필요하다(`test_repo_remove.py`).
 
 ### 템플릿과 규약 문서(`test_onto_templates.py`)

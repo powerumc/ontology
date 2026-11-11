@@ -887,10 +887,13 @@ def test_지식_저장소가_dot_onto를_이미_추적하고_있으면_추적에
 
     result = sync(sandbox, root, "billing")
 
-    assert result.returncode == 1
-    assert re.search(r"건너뜀\s+\.onto/\s+—.*이미 추적.*git rm -r --cached \.onto", result.stdout)
+    assert result.returncode == 1  # git 상태가 계속 오염되므로 사람이 확인해야 한다
+    assert re.search(r"확인 필요\s+\.onto/\s+—.*이미 추적.*git rm -r --cached \.onto", result.stdout)
+    assert "건너뜀" not in result.stdout  # 아무것도 건너뛰지 않았다: 복사는 끝까지 했다
+    assert "건너뛴 파일 0개, 확인할 것 1개" in result.stdout
     assert (billing / ".onto" / "Justfile").is_file()  # 최신화는 계속한다
     assert (billing / ".onto" / "stray.txt").read_text(encoding="utf-8") == "누가 커밋했다\n"  # 추적하는 파일은 건드리지 않는다
+    assert "billing" in result.stderr and "확인" in result.stderr
 
 
 def test_같은_이유로_건너뛴_루트_관리_파일이_많으면_위치별로_묶어_한_줄로_알린다(sandbox):
@@ -907,6 +910,91 @@ def test_같은_이유로_건너뛴_루트_관리_파일이_많으면_위치별�
     assert len(re.findall(r"^  건너뜀", result.stdout, re.MULTILINE)) == 1
     assert re.search(r"건너뜀\s+\.onto/ 아래 파일 \d+개\s+—.*심볼릭 링크", result.stdout)
     assert list(outside.iterdir()) == []
+
+
+def test_손으로_고친_루트_관리_파일이_많아도_파일마다_이유와_함께_하나씩_알린다(sandbox):
+    """같은 위치가 막은 파일(링크)과 달리, 손으로 고친 파일은 하나하나가 사람이 챙길 파일이다. 지우면 손수정이 흔적 없이 사라진다."""
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing")
+    assert sync(sandbox, root, "billing").returncode == 0
+    edited = sorted((billing / ".onto" / "onto_tool").glob("*.py"))[:12]
+    assert len(edited) == 12
+    for path in edited:
+        path.write_text(path.read_text(encoding="utf-8") + "# 내가 손으로 고친 줄\n", encoding="utf-8")
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 1
+    reported = re.findall(r"^  건너뜀\s+(\S+)\s+—\s+(.*)$", result.stdout, re.MULTILINE)
+    assert sorted(path for path, _ in reported) == sorted(f".onto/onto_tool/{p.name}" for p in edited)  # 파일 이름이 하나도 빠지지 않는다
+    assert all("손으로 고친" in reason for _, reason in reported)  # 이유가 파일마다 붙는다
+    assert "건너뛴 파일 12개" in result.stdout
+
+
+def test_손으로_고친_파일과_링크가_막은_파일이_함께_있으면_링크가_막은_파일만_묶는다(sandbox):
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing")
+    assert sync(sandbox, root, "billing").returncode == 0
+    (billing / ".onto" / "rules.yaml").write_text("손으로 고쳤다\n", encoding="utf-8")
+    outside = sandbox.new_dir("elsewhere", "tool")
+    shutil.rmtree(billing / ".onto" / "onto_tool")
+    (billing / ".onto" / "onto_tool").symlink_to(outside)
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 1
+    assert len(re.findall(r"^  건너뜀", result.stdout, re.MULTILINE)) == 2
+    assert re.search(r"건너뜀\s+\.onto/rules\.yaml\s+—.*손으로 고친", result.stdout)
+    assert re.search(r"건너뜀\s+\.onto/ 아래 파일 \d+개\s+—.*심볼릭 링크", result.stdout)
+
+
+def run_with_git_variables(sandbox, root, **variables: str):
+    """사용자의 셸이나 git 훅이 물려주는 `GIT_*` 환경 변수를 둔 채 `just onto sync billing`을 실행한다."""
+    just = shutil.which("just")
+    return sandbox.run([just, "onto", "sync", "billing"], cwd=root.work, check=False, env={**sandbox.env, **variables})
+
+
+def test_git_인덱스_파일을_가리키는_환경_변수가_있어도_루트가_추적하는_파일을_복사한다(sandbox):
+    """git 훅 안처럼 `GIT_INDEX_FILE`이 설정된 환경에서 `git ls-files`는 그 인덱스를 읽는다. 최신화는 루트 저장소의 인덱스를 읽어야 한다."""
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing")
+    elsewhere = sandbox.new_dir("elsewhere", "hook") / "index"  # 없는 인덱스 파일: git은 빈 인덱스로 읽는다
+
+    result = run_with_git_variables(sandbox, root, GIT_INDEX_FILE=str(elsewhere))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sorted(files_under(billing / ".onto")) == sorted([*tracked_onto_files(sandbox, root), RECORD_NAME])
+    assert not elsewhere.exists()  # 그 인덱스를 쓰지도 않았다
+
+
+def test_git_저장소를_가리키는_환경_변수가_있어도_지식_저장소가_dot_onto를_추적하는지는_그_저장소에서_본다(sandbox):
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing", files={"README.md": "# billing\n", ".onto/stray.txt": "누가 커밋했다\n"})
+    other = sandbox.new_dir("elsewhere", "other")
+    sandbox.git("init", "--initial-branch=main", cwd=other)  # `.onto/`를 추적하지 않는 다른 저장소
+
+    result = run_with_git_variables(sandbox, root, GIT_DIR=str(other / ".git"))
+
+    assert result.returncode == 1
+    assert re.search(r"확인 필요\s+\.onto/\s+—.*이미 추적", result.stdout)
+    assert (billing / ".onto" / "Justfile").is_file()
+
+
+def test_루트_저장소가_아니면_상위_디렉토리의_다른_저장소를_찾아_복사하지_않는다(sandbox):
+    """루트 저장소의 `.git`이 없어도 `git`은 위로 올라가 다른 저장소를 찾는다. 위 저장소가 `onto/`를 추적해도 그것을 루트의 기능으로 삼지 않는다."""
+    root = sandbox.root()
+    billing = attach(sandbox, root, "billing")
+    parent = root.work.parent
+    shutil.rmtree(root.work / ".git")
+    sandbox.git("init", "--initial-branch=main", cwd=parent)
+    sandbox.git("add", "-A", cwd=parent)
+    assert sandbox.git("ls-files", "root/onto/Justfile", cwd=parent).stdout.strip()  # 위 저장소가 `onto/`를 추적한다
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 1
+    assert "추적하는 파일을 알 수 없다" in result.stderr
+    assert not (billing / ".onto").exists()
 
 
 def test_출력을_한_파이프로_모아도_전체_요약이_오류_줄보다_먼저_나온다(sandbox):

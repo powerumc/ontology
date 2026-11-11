@@ -16,7 +16,8 @@ HELP = (
     "지식 저장소의 .gitignore에 표시된 블록으로 .onto/를 제외하며, 없으면 온톨로지 층의 뼈대(docs/ontology/ontology.yaml과 인덱스)를 만든다. "
     "이름(서브모듈 디렉토리 이름)을 생략하면 모든 지식 저장소에 적용한다. 마지막 최신화 뒤에 손으로 고친 루트 관리 파일은 덮어쓰지 않고 보고한다. "
     "저장소 소유 파일(ontology.yaml, 페이지)은 바꾸지 않는다. 변경은 지식 저장소의 작업 트리에 남고 커밋하지 않는다. "
-    "저장소마다 만든 파일, 바꾼 파일, 지운 파일, 건너뛴 파일을 요약한다. 건너뛴 것이 있으면 0이 아닌 종료 코드로 끝난다. "
+    "저장소마다 만든 파일, 바꾼 파일, 지운 파일, 건너뛴 파일을 요약한다. 건너뛴 파일은 하나씩 이유와 함께 보여 주고(같은 위치가 막은 파일만 묶는다), "
+    "건너뛴 것이 있거나 사람이 확인할 것(지식 저장소가 이미 추적하는 .onto/)이 있으면 0이 아닌 종료 코드로 끝난다. "
     "루트 저장소에서만 쓸 수 있고 지식 저장소 안에서는 거부한다"
 )
 
@@ -54,13 +55,18 @@ def run(args: argparse.Namespace) -> int:
     sys.stdout.flush()  # 출력이 파이프로 갈 때 아래 오류(표준 오류)가 요약보다 먼저 나오지 않게 한다
 
     incomplete = [result.repository for result in results if not result.complete]
+    pending = [result.repository for result in results if result.complete and result.attention]
     if incomplete:
         print(
             f"오류: 건너뛴 파일이 있어 최신화를 마치지 못한 지식 저장소: {', '.join(incomplete)}. 이유는 위의 `건너뜀` 줄에 있다",
             file=sys.stderr,
         )
-        return 1
-    return 0
+    if pending:
+        print(
+            f"오류: 최신화는 마쳤지만 확인이 필요한 지식 저장소: {', '.join(pending)}. 이유는 위의 `확인 필요` 줄에 있다",
+            file=sys.stderr,
+        )
+    return 1 if incomplete or pending else 0
 
 
 def _require_root(workspace: Workspace) -> None:
@@ -79,20 +85,30 @@ def _print(result: Result) -> None:
     if result.unchanged:
         print(f"{result.repository}: 바뀐 것이 없다")
         return
-    print(f"{result.repository}: {_summary(len(result.created), len(result.changed), len(result.removed), len(result.skipped))}")
+    counts = (len(result.created), len(result.changed), len(result.removed), len(result.skipped), len(result.attention))
+    print(f"{result.repository}: {_summary(*counts)}")
     for verb, paths in (("만듦", result.created), ("바꿈", result.changed), ("지움", result.removed)):
         for line in _lines(paths):
             print(f"  {verb}  {line}")
-    by_reason: dict[str, list[str]] = {}  # 같은 이유로 건너뛴 파일은 한데 묶는다(링크 하나가 수십 파일을 막아도 한 줄이다)
-    for path, reason in result.skipped:
-        by_reason.setdefault(reason, []).append(path)
-    for reason, paths in by_reason.items():
-        for line in _lines(paths):
-            print(f"  건너뜀  {line} — {reason}")
+    # 같은 위치(링크, 디렉토리가 아닌 조각)가 막은 파일은 같은 이유끼리 묶는다(링크 하나가 수십 파일을 막아도 한 줄이다).
+    # 그 밖의 건너뛴 파일은 하나하나가 사람이 챙길 파일(손으로 고친 파일 등)이라 이유와 함께 하나씩 적는다.
+    shared: dict[str, list[str]] = {}
+    for skip in result.skipped:
+        if skip.shared:
+            shared.setdefault(skip.reason, []).append(skip.path)
+    for skip in result.skipped:
+        if not skip.shared:
+            print(f"  건너뜀  {skip.path} — {skip.reason}")
+        elif paths := shared.pop(skip.reason, None):
+            for line in _lines(paths):
+                print(f"  건너뜀  {line} — {skip.reason}")
+    for path, reason in result.attention:
+        print(f"  확인 필요  {path} — {reason}")
 
 
-def _summary(created: int, changed: int, removed: int, skipped: int) -> str:
-    return f"만든 파일 {created}개, 바꾼 파일 {changed}개, 지운 파일 {removed}개, 건너뛴 파일 {skipped}개"
+def _summary(created: int, changed: int, removed: int, skipped: int, attention: int = 0) -> str:
+    text = f"만든 파일 {created}개, 바꾼 파일 {changed}개, 지운 파일 {removed}개, 건너뛴 파일 {skipped}개"
+    return f"{text}, 확인할 것 {attention}개" if attention else text
 
 
 def _lines(paths: list[str]) -> list[str]:
@@ -106,5 +122,5 @@ def _lines(paths: list[str]) -> list[str]:
 
 
 def _total(results: list[Result]) -> str:
-    counts = (sum(len(getattr(result, kind)) for result in results) for kind in ("created", "changed", "removed", "skipped"))
+    counts = (sum(len(getattr(result, kind)) for result in results) for kind in ("created", "changed", "removed", "skipped", "attention"))
     return f"최신화: 지식 저장소 {len(results)}개, {_summary(*counts)}"

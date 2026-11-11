@@ -29,7 +29,7 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
-from . import index
+from . import gitenv, index
 from .blocks import BlockError, MarkedBlock, replace_block
 from .commands._rules import ensure_valid
 from .compiler import compile_workspace
@@ -67,6 +67,17 @@ class Source:
         return _fingerprint(self.content, self.executable)
 
 
+@dataclass(frozen=True)
+class Skip:
+    """건너뛴 루트 관리 파일이나 저장소 소유 파일 하나. 경로는 지식 저장소 기준이다."""
+
+    path: str
+    reason: str
+    # 같은 위치가 막은 파일이다(심볼릭 링크나 디렉토리가 아닌 조각). 이유가 막은 위치를 가리키므로 같은 이유의 파일을 묶어 한 줄로 보여 줘도 된다.
+    # 아닌 파일(손으로 고친 파일, 쓸 수 없는 파일)은 하나하나가 사람이 챙길 파일이라 묶지 않는다.
+    shared: bool = False
+
+
 @dataclass
 class Result:
     """지식 저장소 하나를 최신화한 결과. 경로는 모두 그 지식 저장소 기준이다."""
@@ -75,7 +86,12 @@ class Result:
     created: list[str] = field(default_factory=list)
     changed: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
-    skipped: list[tuple[str, str]] = field(default_factory=list)  # (경로, 이유)
+    skipped: list[Skip] = field(default_factory=list)
+    # 확인이 필요한 것(경로, 이유). 최신화는 이것 때문에 건너뛴 것이 없지만 지식 저장소의 git 상태가 어긋난 채 남는다.
+    attention: list[tuple[str, str]] = field(default_factory=list)
+
+    def skip(self, path: str, reason: str, *, shared: bool = False) -> None:
+        self.skipped.append(Skip(path, reason, shared))
 
     @property
     def complete(self) -> bool:
@@ -84,7 +100,7 @@ class Result:
 
     @property
     def unchanged(self) -> bool:
-        return not (self.created or self.changed or self.removed or self.skipped)
+        return not (self.created or self.changed or self.removed or self.skipped or self.attention)
 
 
 # --- 루트 저장소가 정한 것 ---------------------------------------------------------------
@@ -125,8 +141,11 @@ def untracked_sources(root: Path) -> list[str]:
 
 
 def _git(root: Path, *args: str) -> bytes:
+    """루트 저장소(`root`)에서 git을 부른다. 환경 변수가 가리키는 다른 저장소나 인덱스, `root` 위의 저장소를 읽지 않는다(`gitenv`)."""
     try:
-        result = subprocess.run(["git", "--literal-pathspecs", *args], cwd=root, capture_output=True, check=False)
+        result = subprocess.run(
+            ["git", "--literal-pathspecs", *args], cwd=root, env=gitenv.environment(root.resolve().parent), capture_output=True, check=False
+        )
     except FileNotFoundError as exc:
         raise OntoError("git이 없어 루트 저장소가 추적하는 파일을 알 수 없다") from exc
     if result.returncode != 0:
@@ -141,7 +160,7 @@ def sync_repository(workspace: Workspace, repository: Repository, sources: dict[
     result = Result(repository.directory)
     path = repository.path
     if path.is_symlink() or not (path / ".git").exists():
-        result.skipped.append((workspace.relative(path), "초기화되지 않은 서브모듈이거나 지식 저장소가 아니라 건너뛰었다. `just setup`으로 초기화한다"))
+        result.skip(workspace.relative(path), "초기화되지 않은 서브모듈이거나 지식 저장소가 아니라 건너뛰었다. `just setup`으로 초기화한다")
         return result
 
     # `.gitignore`가 먼저다. 제외하지 못한 채 `.onto/`를 복사하면 루트 관리 파일이 지식 저장소의 git 상태에 나타나 커밋될 수 있다.
@@ -162,7 +181,7 @@ def _report_tracked(repo: Path, result: Result) -> None:
     """
     for _, target_dir in MANAGED_TREES:
         if _is_tracked(repo, target_dir):
-            result.skipped.append(
+            result.attention.append(
                 (
                     f"{target_dir}/",
                     f"이 저장소의 git이 이미 추적하고 있어 `.gitignore`가 제외하지 못하고 변경이 git 상태에 나타난다. "
@@ -172,8 +191,14 @@ def _report_tracked(repo: Path, result: Result) -> None:
 
 
 def _is_tracked(repo: Path, relative: str) -> bool:
+    """지식 저장소 `repo`의 git이 `relative` 아래를 추적하는가. 읽는 저장소는 `repo`이고, 환경 변수나 위의 저장소가 대신하지 않는다(`gitenv`)."""
     try:
-        listing = subprocess.run(["git", "--literal-pathspecs", "-C", str(repo), "ls-files", "-z", "--", relative], capture_output=True, check=False)
+        listing = subprocess.run(
+            ["git", "--literal-pathspecs", "-C", str(repo), "ls-files", "-z", "--", relative],
+            env=gitenv.environment(repo.resolve().parent),
+            capture_output=True,
+            check=False,
+        )
     except FileNotFoundError:
         return False
     return listing.returncode == 0 and bool(listing.stdout.strip(b"\0"))
@@ -182,7 +207,7 @@ def _is_tracked(repo: Path, relative: str) -> bool:
 def _update_gitignore(repo: Path, result: Result) -> bool:
     """`.gitignore`의 표시된 블록을 루트 관리 파일의 경로로 바꾼다. 블록 밖과 커밋 여부는 따지지 않는다. 고치지 못하면 `False`."""
     if reason := _blocked(repo, GITIGNORE):
-        result.skipped.append((GITIGNORE, reason))
+        result.skip(GITIGNORE, reason)
         return False
     path = repo / GITIGNORE
     try:
@@ -190,13 +215,13 @@ def _update_gitignore(repo: Path, result: Result) -> bool:
         try:
             updated = replace_block(existing or b"", GITIGNORE_BLOCK, IGNORED_PATHS)
         except BlockError as exc:
-            result.skipped.append((GITIGNORE, f"{exc}. `.onto/`를 복사하면 지식 저장소의 git 상태에 나타나므로 이 저장소는 최신화하지 않았다"))
+            result.skip(GITIGNORE, f"{exc}. `.onto/`를 복사하면 지식 저장소의 git 상태에 나타나므로 이 저장소는 최신화하지 않았다")
             return False
         if updated != existing:
             _write(path, updated, like=path if existing is not None else None)
             (result.created if existing is None else result.changed).append(GITIGNORE)
     except OSError as exc:
-        result.skipped.append((GITIGNORE, f"읽거나 쓸 수 없다({exc.strerror})"))
+        result.skip(GITIGNORE, f"읽거나 쓸 수 없다({exc.strerror})")
         return False
     return True
 
@@ -204,7 +229,7 @@ def _update_gitignore(repo: Path, result: Result) -> bool:
 def _create_ontology_yaml(repo: Path, name: str, result: Result) -> bool:
     """`docs/ontology/ontology.yaml`이 없으면 만든다. 있으면 한 글자도 건드리지 않는다. 구성이 있으면(있었거나 만들었으면) `True`."""
     if reason := _blocked(repo, ONTOLOGY_YAML_PATH):
-        result.skipped.append((ONTOLOGY_YAML_PATH, reason))
+        result.skip(ONTOLOGY_YAML_PATH, reason)
         return False
     path = repo / ONTOLOGY_YAML
     if path.exists():
@@ -212,7 +237,7 @@ def _create_ontology_yaml(repo: Path, name: str, result: Result) -> bool:
     try:
         _write(path, _ontology_yaml(name).encode())
     except OSError as exc:
-        result.skipped.append((ONTOLOGY_YAML_PATH, f"쓸 수 없다({exc.strerror})"))
+        result.skip(ONTOLOGY_YAML_PATH, f"쓸 수 없다({exc.strerror})")
         return False
     result.created.append(ONTOLOGY_YAML_PATH)
     return True
@@ -247,7 +272,7 @@ def _create_index(workspace: Workspace, repository: Repository, result: Result) 
     인덱스를 만드는 조건은 `build`와 같다(`commands._rules.ensure_valid`). `build`가 만드는 인덱스를 최신화가 못 만든다고 하지 않는다.
     """
     if reason := _blocked(repository.path, INDEX_PATH):
-        result.skipped.append((INDEX_PATH, reason))
+        result.skip(INDEX_PATH, reason)
         return
     if (repository.path / INDEX_PATH).exists():
         return  # 컴파일은 느리다. 인덱스가 이미 있으면 읽지 않는다
@@ -258,16 +283,16 @@ def _create_index(workspace: Workspace, repository: Repository, result: Result) 
         ensure_valid(only, compiled)  # `build`와 같은 판정이다. 규칙에서 오류인 읽기 문제가 있을 때만 멈추고, 경고이거나 꺼진 문제의 파일은 건너뛰고 만든다
     except OntoError as exc:
         more = f" 외 {len(exc.messages) - 1}개" if len(exc.messages) > 1 else ""
-        result.skipped.append((INDEX_PATH, f"읽을 수 없는 파일이 있어 인덱스를 만들지 못했다: {exc.messages[0]}{more}. 고친 뒤 `onto build`로 만든다"))
+        result.skip(INDEX_PATH, f"읽을 수 없는 파일이 있어 인덱스를 만들지 못했다: {exc.messages[0]}{more}. 고친 뒤 `onto build`로 만든다")
         return
     content = next((content for content in index.collect(compiled) if content.index_file == record.index_file), None)
     if content is None:
-        result.skipped.append((INDEX_PATH, "저장소 이름을 알 수 없어 인덱스를 만들지 못했다"))
+        result.skip(INDEX_PATH, "저장소 이름을 알 수 없어 인덱스를 만들지 못했다")
         return
     try:
         _write(workspace.root / record.index_file, index.render(content).encode())
     except OSError as exc:
-        result.skipped.append((INDEX_PATH, f"쓸 수 없다({exc.strerror})"))
+        result.skip(INDEX_PATH, f"쓸 수 없다({exc.strerror})")
         return
     result.created.append(INDEX_PATH)
 
@@ -290,7 +315,7 @@ def _copy_managed_files(repo: Path, sources: dict[str, Source], result: Result) 
     """루트 관리 파일을 루트의 내용으로 맞춘다. 마지막 최신화 뒤에 손으로 고친 파일은 덮어쓰거나 지우지 않고 보고한다."""
     for _, target_dir in MANAGED_TREES:
         if reason := _blocked(repo, target_dir, directory=True):
-            result.skipped.append((f"{target_dir}/", f"{reason}. 루트 관리 파일을 복사하지 않았다"))
+            result.skip(f"{target_dir}/", f"{reason}. 루트 관리 파일을 복사하지 않았다")
             return
     recorded = _read_record(repo)
     record = dict(recorded)
@@ -299,7 +324,7 @@ def _copy_managed_files(repo: Path, sources: dict[str, Source], result: Result) 
     # 복사보다 먼저 지운다. 루트에서 파일이 디렉토리로(또는 반대로) 바뀌면 옛 경로가 새 경로를 막고 있어서, 나중에 지우면 한 번 더 실행해야 한다.
     for target in sorted(set(recorded) - set(sources)):
         if reason := _blocked(repo, target):
-            result.skipped.append((target, reason))
+            result.skip(target, reason, shared=True)
             continue
         path = repo / target
         try:
@@ -307,18 +332,18 @@ def _copy_managed_files(repo: Path, sources: dict[str, Source], result: Result) 
             if current is None:
                 del record[target]
             elif current != recorded[target]:
-                result.skipped.append((target, _hand_edited(True, removed_from_root=True)))
+                result.skip(target, _hand_edited(True, removed_from_root=True))
             else:
                 path.unlink()
                 _remove_empty_parents(repo, path)
                 del record[target]
                 result.removed.append(target)
         except OSError as exc:
-            result.skipped.append((target, f"읽거나 지울 수 없다({exc.strerror})"))
+            result.skip(target, f"읽거나 지울 수 없다({exc.strerror})")
 
     for target, source in sorted(sources.items()):
         if reason := _blocked(repo, target):
-            result.skipped.append((target, reason))
+            result.skip(target, reason, shared=True)
             continue
         path = repo / target
         try:
@@ -327,11 +352,11 @@ def _copy_managed_files(repo: Path, sources: dict[str, Source], result: Result) 
                 record[target] = current
                 continue
             if current is not None and current != recorded.get(target):
-                result.skipped.append((target, _hand_edited(target in recorded)))
+                result.skip(target, _hand_edited(target in recorded))
                 continue
             _write(path, source.content, executable=source.executable)
         except OSError as exc:
-            result.skipped.append((target, f"읽거나 쓸 수 없다({exc.strerror})"))
+            result.skip(target, f"읽거나 쓸 수 없다({exc.strerror})")
             continue
         record[target] = source.fingerprint
         (result.created if current is None else result.changed).append(target)
@@ -340,7 +365,7 @@ def _copy_managed_files(repo: Path, sources: dict[str, Source], result: Result) 
         try:
             _write(repo / RECORD_FILE, (json.dumps(record, indent=2, sort_keys=True) + "\n").encode())
         except OSError as exc:
-            result.skipped.append((RECORD_FILE, f"쓸 수 없다({exc.strerror})"))
+            result.skip(RECORD_FILE, f"쓸 수 없다({exc.strerror})")
 
 
 def _hand_edited(has_record: bool, *, removed_from_root: bool = False) -> str:
