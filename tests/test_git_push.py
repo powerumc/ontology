@@ -6,6 +6,11 @@ ROOT = "루트 저장소"
 STATES = ("푸시됨", "올릴 것 없음", "건너뜀", "실패")
 
 
+def _root(sandbox):
+    """푸시 관문을 끈 루트 저장소. 이 파일은 푸시의 순서와 중단 조건을 본다. 관문은 `test_git_push_gate.py`가 보고, 관문이 꺼져 있어도 순서와 중단 조건이 같다는 약속은 여기서 확인된다."""
+    return sandbox.root(push_gate=False)
+
+
 def _push(sandbox, clone, **kwargs):
     return sandbox.just("git", "push", cwd=clone, **kwargs)
 
@@ -108,7 +113,7 @@ done
 
 
 def test_인자_없이_just_git만_부르면_푸시하지_않고_모듈의_명령_목록을_보여_준다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -126,7 +131,7 @@ def test_인자_없이_just_git만_부르면_푸시하지_않고_모듈의_명�
 
 
 def test_미푸시_커밋이_있는_지식_저장소를_모두_올린_뒤_루트_저장소를_올리고_저장소별_결과를_요약한다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     docs = sandbox.knowledge_remote("docs")
     quiet = sandbox.knowledge_remote("quiet")
@@ -155,7 +160,7 @@ def test_미푸시_커밋이_있는_지식_저장소를_모두_올린_뒤_루트
 
 
 def test_지식_저장소_하나가_푸시에_실패하면_루트_저장소는_올리지_않고_실패한_저장소와_이유를_보고한다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     docs = sandbox.knowledge_remote("docs")
     root.register(billing)
@@ -182,7 +187,7 @@ def test_지식_저장소_하나가_푸시에_실패하면_루트_저장소는_�
 
 
 def test_지식_저장소의_원격에_접속할_수_없어도_실패로_보고하고_루트_저장소는_올리지_않는다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -201,7 +206,7 @@ def test_지식_저장소의_원격에_접속할_수_없어도_실패로_보고�
 
 
 def test_루트_저장소의_푸시가_거부되면_실패로_보고하고_0이_아닌_종료_코드로_끝나며_지식_저장소는_이미_올라가_있다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -224,7 +229,7 @@ def test_루트_저장소의_푸시가_거부되면_실패로_보고하고_0이_
 
 
 def test_루트가_다른_브랜치의_푸시하지_않은_서브모듈_커밋을_가리키면_루트_저장소를_올리지_않고_실패로_보고한다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -247,7 +252,7 @@ def test_루트가_다른_브랜치의_푸시하지_않은_서브모듈_커밋�
 
 
 def test_detached_HEAD의_서브모듈_커밋을_루트가_가리키면_그_저장소는_건너뛰고_루트_저장소는_올리지_않는다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -269,7 +274,7 @@ def test_detached_HEAD의_서브모듈_커밋을_루트가_가리키면_그_저�
 
 
 def test_루트가_가리키는_서브모듈_커밋이_이미_원격에_있으면_올릴_것이_없는_지식_저장소가_있어도_루트를_올린다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -288,7 +293,7 @@ def test_루트가_가리키는_서브모듈_커밋이_이미_원격에_있으�
 
 def test_루트의_원격이_이미_기록한_서브모듈_커밋은_로컬에_받아_오지_않았어도_다시_확인하지_않고_루트를_올린다(sandbox):
     """루트만 그냥 pull해서 포인터가 앞서 갔고, 지식 저장소는 아직 받지 않았다. 푸시가 새로 알리는 포인터가 아니다."""
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -305,7 +310,7 @@ def test_루트의_원격이_이미_기록한_서브모듈_커밋은_로컬에_�
 
 
 def test_초기화하지_않은_지식_저장소는_건너뛰고_루트가_기록한_커밋이_원격의_것과_같으면_루트는_올린다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     root.register(sandbox.knowledge_remote("billing"))
     clone = root.clone()  # 서브모듈을 초기화하지 않았다
     root_head = _local_commit(sandbox, clone, "NOTES.md")
@@ -320,7 +325,7 @@ def test_초기화하지_않은_지식_저장소는_건너뛰고_루트가_기�
 
 
 def test_초기화하지_않은_지식_저장소의_포인터가_원격의_것과_다르면_확인할_수_없어_루트를_올리지_않는다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.clone()
@@ -343,7 +348,7 @@ def test_초기화하지_않은_지식_저장소의_포인터가_원격의_것�
 
 
 def test_미커밋_변경은_올라가지_않고_그런_저장소를_목록으로_보고하며_커밋도_스테이징도_하지_않는다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     docs = sandbox.knowledge_remote("docs")
     root.register(billing)
@@ -379,7 +384,7 @@ def test_미커밋_변경은_올라가지_않고_그런_저장소를_목록으�
 
 
 def test_작업_브랜치는_같은_이름의_원격_브랜치로_올리고_원격에_없으면_만든다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -398,7 +403,7 @@ def test_작업_브랜치는_같은_이름의_원격_브랜치로_올리고_원�
 
 
 def test_원격에_이미_있는_작업_브랜치는_이어서_올린다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -419,7 +424,7 @@ def test_원격에_이미_있는_작업_브랜치는_이어서_올린다(sandbox
 
 
 def test_올릴_것이_없는_저장소는_원격에_접속하지_않아_원격을_쓸_수_없어도_실패하지_않는다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     docs = sandbox.knowledge_remote("docs")
     root.register(billing)
@@ -440,7 +445,7 @@ def test_올릴_것이_없는_저장소는_원격에_접속하지_않아_원격�
 
 
 def test_모든_저장소에_올릴_것이_없으면_아무것도_바꾸지_않고_성공한다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -458,7 +463,7 @@ def test_모든_저장소에_올릴_것이_없으면_아무것도_바꾸지_않�
 
 
 def test_지식_저장소가_하나도_없어도_루트_저장소를_올리고_성공한다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     clone = root.clone()
     head = _local_commit(sandbox, clone, "NOTES.md")
 
@@ -473,7 +478,7 @@ def test_지식_저장소가_하나도_없어도_루트_저장소를_올리고_�
 
 
 def test_루트_저장소가_detached_HEAD이면_올리지_않고_건너뛴다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     clone = root.clone()
     sandbox.git("checkout", "--detach", cwd=clone)
     _local_commit(sandbox, clone, "NOTES.md")
@@ -488,7 +493,7 @@ def test_루트_저장소가_detached_HEAD이면_올리지_않고_건너뛴다(s
 
 
 def test_gitmodules를_읽지_못하면_이유를_알리고_루트_저장소는_올리지_않으며_0이_아닌_종료_코드로_끝난다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     root.register(sandbox.knowledge_remote("billing"))
     clone = root.set_up_clone()
     _local_commit(sandbox, clone, "NOTES.md")
@@ -504,7 +509,7 @@ def test_gitmodules를_읽지_못하면_이유를_알리고_루트_저장소는_
 
 
 def test_하위_디렉토리에서_불러도_루트_저장소를_기준으로_올린다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -521,7 +526,7 @@ def test_하위_디렉토리에서_불러도_루트_저장소를_기준으로_�
 
 def test_루트가_가리킨_뒤_등록을_해제해_저장소가_없어진_커밋은_확인할_수_없어_루트를_올리지_않는다(sandbox):
     """`just repo remove --force`는 스테이징까지만 한다. 커밋한 포인터는 HEAD에 남아 있는데 지식 저장소의 등록은 인덱스에서 빠진다."""
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -540,7 +545,7 @@ def test_루트가_가리킨_뒤_등록을_해제해_저장소가_없어진_커�
 
 def test_작업_트리의_gitmodules에서_등록이_빠져_있어도_올라가는_루트_커밋이_가리키는_커밋을_확인한다(sandbox):
     """무엇을 검사할지는 미커밋 상태(작업 트리의 `.gitmodules`, 인덱스)가 아니라 올라가는 커밋이 정한다."""
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -560,7 +565,7 @@ def test_작업_트리의_gitmodules에서_등록이_빠져_있어도_올라가�
 
 def test_함께_올라가는_중간_루트_커밋이_원격에_없는_서브모듈_커밋을_가리키면_루트_저장소를_올리지_않는다(sandbox):
     """서브모듈에서 커밋을 고쳐 쓰면(amend) 앞 루트 커밋은 사라진 커밋을 가리킨 채 이력에 남는다. 받는 사람이 그 커밋을 체크아웃하면 서브모듈을 받지 못한다."""
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -590,7 +595,7 @@ def test_병합_커밋이_충돌을_풀며_기록한_서브모듈_커밋도_원�
 
     `log.diffMerges`가 결합 형식이면 병합 커밋의 raw 줄이 부모 하나의 형식(열의 위치)과 달라지는데, 이 설정에 기대지 않는다.
     """
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -620,7 +625,7 @@ def test_병합_커밋이_충돌을_풀며_기록한_서브모듈_커밋도_원�
 
 def test_log_showRoot가_꺼져_있어도_부모_없는_첫_루트_커밋이_기록한_서브모듈_커밋을_확인한다(sandbox):
     """원격에 같은 이름의 브랜치가 없는 고아 브랜치는 올라가는 범위에 부모 없는 커밋이 있다. 설정이 그 커밋의 diff를 숨기지 못한다."""
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -643,7 +648,7 @@ def test_log_showRoot가_꺼져_있어도_부모_없는_첫_루트_커밋이_기
 
 def test_새_루트_작업_브랜치는_초기화하지_않은_지식_저장소의_포인터가_그대로면_거부하지_않고_올린다(sandbox):
     """같은 이름의 원격 브랜치가 없어도, 이 브랜치의 커밋이 포인터를 바꾸지 않았으면 확인할 것이 없다."""
-    root = sandbox.root()
+    root = _root(sandbox)
     root.register(sandbox.knowledge_remote("billing"))
     clone = root.clone()  # 서브모듈을 초기화하지 않았다
     sandbox.git("checkout", "-b", "feature", cwd=clone)
@@ -660,7 +665,7 @@ def test_새_루트_작업_브랜치는_초기화하지_않은_지식_저장소�
 
 
 def test_푸시하지_않은_커밋_수를_세지_못한_지식_저장소가_있으면_실패로_보고하고_루트_저장소는_올리지_않는다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -687,7 +692,7 @@ def test_푸시하지_않은_커밋_수를_세지_못한_지식_저장소가_있
 
 def test_건너뛴_저장소에_푸시하지_않은_커밋이_남으면_종료_코드는_0이어도_요약_끝에서_눈에_띄게_알린다(sandbox):
     """건너뜀은 정상 결과다. 그 커밋을 루트가 가리키면 루트 푸시가 실패하므로 안전하다. 그래도 커밋한 작업이 공유되지 않았다는 사실은 보여야 한다."""
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     docs = sandbox.knowledge_remote("docs")
     root.register(billing)
@@ -711,7 +716,7 @@ def test_건너뛴_저장소에_푸시하지_않은_커밋이_남으면_종료_�
 
 
 def test_origin이_없어_건너뛴_저장소도_커밋이_원격에_없다고_요약_끝에서_알린다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     root.register(sandbox.knowledge_remote("billing"))
     clone = root.set_up_clone()
     sandbox.git("remote", "remove", "origin", cwd=_sub(clone))
@@ -725,7 +730,7 @@ def test_origin이_없어_건너뛴_저장소도_커밋이_원격에_없다고_�
 
 
 def test_올리지_않은_커밋이_남은_건너뜀이_없으면_그런_알림을_하지_않는다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     root.register(sandbox.knowledge_remote("billing"))
     clone = root.set_up_clone()
 
@@ -750,7 +755,7 @@ def test_올리지_않은_커밋이_남은_건너뜀이_없으면_그런_알림�
     ],
 )
 def test_사용자의_push_설정이_켜져_있어도_브랜치만_같은_이름으로_올리고_태그와_추적_설정은_건드리지_않는다(sandbox, key, value):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()
@@ -775,7 +780,7 @@ def test_사용자의_push_설정이_켜져_있어도_브랜치만_같은_이름
 
 
 def test_diff_설정이_서브모듈_변경을_숨겨도_루트가_원격에_없는_서브모듈_커밋을_가리키면_올리지_않는다(sandbox):
-    root = sandbox.root()
+    root = _root(sandbox)
     billing = sandbox.knowledge_remote("billing")
     root.register(billing)
     clone = root.set_up_clone()

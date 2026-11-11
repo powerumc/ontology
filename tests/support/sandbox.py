@@ -226,12 +226,14 @@ class Sandbox:
         """가짜 지식 저장소와 그 로컬 bare 원격을 만든다. 기본 브랜치는 `main`이다."""
         return KnowledgeRemote(self, name, files)
 
-    def root(self, *, name: str = "root", source: Path = SOURCE_REPO) -> RootRepo:
+    def root(self, *, name: str = "root", source: Path = SOURCE_REPO, push_gate: bool = True) -> RootRepo:
         """루트 저장소를 만든다. `source`(기본은 이 저장소)의 추적 파일을 복사해 커밋하고 bare 원격에 푸시한다.
 
-        한 테스트에서 둘 이상 만들려면 `name`을 달리 준다.
+        한 테스트에서 둘 이상 만들려면 `name`을 달리 준다. `push_gate=False`이면 루트 기본 규칙(`onto/rules.yaml`)의 푸시 관문을
+        끈 채로 첫 커밋을 만든다. 푸시 관문은 푸시 전에 스크립트 검사를 돌려 도구의 가상환경을 만들므로, 관문과 상관없는 푸시
+        테스트가 그 시간을 치르지 않게 한다.
         """
-        return RootRepo(self, name, source)
+        return RootRepo(self, name, source, push_gate=push_gate)
 
 
 def _which_or_fail(tool: str) -> str:
@@ -333,7 +335,7 @@ class RootRepo:
     새로 클론한 상태를 만들려면 `clone()`을 쓴다. 서브모듈 등록은 이 임시 저장소에서만 한다.
     """
 
-    def __init__(self, sandbox: Sandbox, name: str, source: Path) -> None:
+    def __init__(self, sandbox: Sandbox, name: str, source: Path, *, push_gate: bool = True) -> None:
         self._sandbox = sandbox
         self._name = name
         self._clones = 0
@@ -343,6 +345,8 @@ class RootRepo:
         sandbox.git("init", "--bare", "--initial-branch=main", self.origin, cwd=self.origin)
         sandbox.git("init", "--initial-branch=main", cwd=self.work)
         copy_tracked_files(sandbox, source, self.work)
+        if not push_gate:
+            _disable_push_gate(self.work / "onto" / "rules.yaml")
         sandbox.git("remote", "add", "origin", self.origin, cwd=self.work)
         sandbox.git("add", "-A", cwd=self.work)
         sandbox.git("commit", "-m", "init", cwd=self.work)
@@ -420,6 +424,14 @@ class RootRepo:
         dest = self.clone()
         self._sandbox.just("setup", cwd=dest, check=True)
         return dest
+
+
+def _disable_push_gate(rules_file: Path) -> None:
+    """루트 기본 규칙 파일의 푸시 관문을 끈다."""
+    text = rules_file.read_text(encoding="utf-8")
+    gate_on = "push-gate:\n  enabled: true\n"
+    assert gate_on in text, "루트 기본 규칙에서 푸시 관문을 찾지 못했다"
+    rules_file.write_text(text.replace(gate_on, "push-gate:\n  enabled: false\n"), encoding="utf-8")
 
 
 def _write(path: Path, text: str) -> None:
