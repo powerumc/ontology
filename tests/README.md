@@ -72,3 +72,17 @@ def test_예(onto_cli):
 지식 저장소는 인덱스가 있어야 스크립트 검사를 통과한다(없는 것도 `index-mismatch`다). 그래서 `onto_cli.root()`는 기본으로 견본을 쓴 뒤 `build`를 한 번 실행해 인덱스를 갖춘다(읽을 수 없는 파일이 든 견본은 `build`가 멈춰 인덱스 없이 남는다). 다른 검사 항목의 테스트에 인덱스 문제가 끼지 않게 하는 약속이다. 인덱스가 없는 견본이 필요하면 `onto_cli.root(repos, indexed=False)`로 만든다. `build`가 인덱스를 새로 만드는지 보는 테스트(`test_onto_index.py`의 대부분, 작업 트리에 생기는 것을 비교하는 테스트)는 반드시 `indexed=False`여야 한다. 미리 만들어 둔 인덱스는 `build`가 쓰지 않아도 같은 글자라 아무것도 확인하지 못한다.
 
 `just`를 거치는 테스트(`test_onto_just.py`)의 견본은 `sandbox.knowledge_remote`가 만든 저장소라 이 받침이 닿지 않는다. 인덱스가 있어야 하면 `just onto build`를 먼저 실행한다.
+
+### 최신화(`test_onto_sync.py`)
+
+`just onto sync [이름]`은 루트 저장소의 `onto/`를 지식 저장소의 `.onto/`로 복사한다. 루트 저장소(`sandbox.root()`)에 지식 저장소를 서브모듈로 붙이고(`root.register(sandbox.knowledge_remote(…))`) `sandbox.just("onto", "sync", …, cwd=root.work)`를 부르는 가장 높은 이음매에서 본다. 이 저장소의 `Justfile`을 직접 가리키지 않는다.
+
+- 테스트는 루트의 기능을 `root.work / "onto"`에서 고쳐 시험한다. 복사하는 것은 루트가 **추적하는** `onto/` 파일이라, 새 파일은 `git add`해야 복사된다(없어진 파일은 `git rm`하거나 작업 트리에서 지운다).
+- `.onto/.sync-record.json`은 마지막 최신화가 파일마다 쓴 내용의 기록이고, 손으로 고친 파일을 가려내는 데 쓴다. 루트에서 온 파일이 아니라 `copied`에서 뺀다.
+- 다시 쓰지 않았는지는 수정 시각으로 본다. 파일의 시각을 `os.utime`으로 먼 과거로 돌려 두고 다시 실행해 시각이 그대로인지 비교한다.
+- 지식 저장소 안에서 `just -f .onto/Justfile …`을 부르면 도구가 `.onto/` 안에 가상환경과 `__pycache__`를 만든다. 작업 트리를 앞뒤로 비교하는 테스트는 이를 빼고 비교한다.
+- `just repo add`가 등록 직후 최신화를 자동으로 실행하는 것은 `test_repo_add.py`가 본다. 그래서 등록하면 지식 저장소에 미커밋 파일(`.gitignore`, `docs/ontology/`)이 생기고, 방금 등록한 저장소를 바로 떼려면 `repo remove --force`가 필요하다(`test_repo_remove.py`).
+
+### 템플릿과 규약 문서(`test_onto_templates.py`)
+
+`onto/template/`의 견본과 규약 문서가 보여 주는 예는 도구에 돌려 확인한다(`onto_cli`). 견본의 키가 모두 그 클래스의 페이지가 쓸 수 있는 것인지, 규약 문서의 하위 클래스 선언이 받아들여지는지를 스크립트 검사가 판단한다. 견본을 더하거나 고치면 이 테스트가 걸러 낸다.

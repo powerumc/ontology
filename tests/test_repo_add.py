@@ -1,5 +1,8 @@
 """`just repo add <url> [이름] [브랜치]`: 지식 저장소를 `projects/<이름>/`에 서브모듈로 붙이고 추적 브랜치를 기록한다."""
 
+import os
+import shutil
+
 import pytest
 
 
@@ -384,3 +387,59 @@ def test_gitmodules가_병합_충돌_상태이면_이유를_알리고_거부하�
     assert "충돌" in result.stderr
     assert sandbox.snapshot(root.work) == before
     assert not (root.work / "projects" / "invoice").exists()
+
+
+# --- 등록 직후의 최신화 ---------------------------------------------------------------------
+
+
+def test_등록한_직후_새_지식_저장소에_루트의_기능이_복사되고_커밋되지_않는다(sandbox):
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    tip = billing.commit()
+
+    result = _add(sandbox, root, billing.url)
+
+    sub = root.work / "projects" / "billing"
+    assert result.returncode == 0, result.stderr
+    assert (sub / ".onto" / "Justfile").is_file() and (sub / ".onto" / "onto_tool" / "cli.py").is_file()
+    assert (sub / "docs" / "ontology" / "ontology.yaml").is_file()
+    assert "최신화: 지식 저장소 1개" in result.stdout  # 최신화의 요약이 이어서 나온다
+    assert sandbox.head(sub) == tip  # 지식 저장소에 커밋하지 않는다
+    status = sandbox.git("status", "--porcelain", "--untracked-files=all", cwd=sub).stdout
+    assert ".onto" not in status and ".gitignore" in status
+    assert _staged(sandbox, root) == {".gitmodules", "projects/billing"}  # 루트 저장소에도 등록만 스테이징한다
+
+
+def test_이미_구성이_있는_지식_저장소를_등록해도_저장소_소유_파일은_바뀌지_않는다(sandbox):
+    root = sandbox.root()
+    ontology_yaml = 'name: "billing"\nscope: "team:payments"\ntitle: "결제"\n'
+    plan = "---\nclass: Plan\ntitle: 출시 계획\nabout: project\n---\n\n본문\n"
+    billing = sandbox.knowledge_remote(
+        "billing", files={"README.md": "# billing\n", "docs/ontology/ontology.yaml": ontology_yaml, "docs/ontology/plan/launch.md": plan}
+    )
+
+    result = _add(sandbox, root, billing.url)
+
+    sub = root.work / "projects" / "billing"
+    assert result.returncode == 0, result.stderr
+    assert (sub / "docs" / "ontology" / "ontology.yaml").read_text(encoding="utf-8") == ontology_yaml
+    assert (sub / "docs" / "ontology" / "plan" / "launch.md").read_text(encoding="utf-8") == plan
+    assert (sub / ".onto" / "Justfile").is_file()
+
+
+def test_루트의_기능을_복사하지_못해도_등록은_남고_다시_실행하는_방법을_알린다(sandbox):
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    broken = sandbox.new_dir("elsewhere", "broken-uv")  # 실행하면 실패하는 uv가 PATH 맨 앞에 있다
+    (broken / "uv").write_text("#!/bin/sh\necho 'uv를 실행할 수 없다' >&2\nexit 1\n", encoding="utf-8")
+    (broken / "uv").chmod(0o755)
+    env = {**sandbox.env, "PATH": f"{broken}{os.pathsep}{sandbox.env['PATH']}"}
+
+    result = sandbox.run([shutil.which("just"), "repo", "add", billing.url], cwd=root.work, check=False, env=env)
+
+    assert result.returncode != 0
+    assert "uv를 실행할 수 없다" in result.stderr  # 복사하지 못한 이유가 보인다
+    assert "just onto sync billing" in result.stderr
+    assert (root.work / "projects" / "billing" / "README.md").is_file()  # 등록은 되돌리지 않는다
+    assert _staged(sandbox, root) == {".gitmodules", "projects/billing"}
+    assert not (root.work / "projects" / "billing" / ".onto").exists()
