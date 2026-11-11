@@ -12,6 +12,7 @@ from support.onto_cli import ONTOLOGY_DIR, page, repo, snapshot
 PAGES = "projects/billing/docs/ontology"
 PLAN_FILE = f"{PAGES}/plan/auth-redesign.md"
 PROJECT_FILE = f"{PAGES}/ontology.yaml"
+REPOSITORY = "https://onto.invalid/vocab#repository"  # 컴파일이 모든 엔티티에 적는, 엔티티가 온 지식 저장소의 이름
 
 
 def billing(*pages, **project):
@@ -349,7 +350,7 @@ def test_공통_어휘가_클래스_여덟_개를_정의한다(onto_cli):
     )
 
 
-def test_공통_어휘가_관계_일곱_개를_정의한다(onto_cli):
+def test_공통_어휘가_관계_일곱_개와_추론으로만_생기는_역관계_네_개를_정의한다(onto_cli):
     root = onto_cli.root()
 
     rows = onto_cli.query(
@@ -360,6 +361,7 @@ def test_공통_어휘가_관계_일곱_개를_정의한다(onto_cli):
 
     assert [name for (name,) in rows] == sorted(
         ["partOf", "dependsOn", "implements", "governs", "supersedes", "derivedFrom", "about"]
+        + ["hasPart", "implementedBy", "governedBy", "supersededBy"]
     )
 
 
@@ -542,7 +544,11 @@ def test_페이지의_정의되지_않은_키는_그래프에_들어가지_않�
         root, "SELECT DISTINCT (STR(?p) AS ?predicate) WHERE { ?e a onto:Plan ; ?p ?o } ORDER BY ?predicate"
     )
 
-    assert rows == [["http://purl.org/dc/terms/title"], ["http://www.w3.org/1999/02/22-rdf-syntax-ns#type"]]
+    assert rows == [
+        ["http://purl.org/dc/terms/title"],
+        ["http://www.w3.org/1999/02/22-rdf-syntax-ns#type"],
+        [REPOSITORY],
+    ]
 
 
 def test_ontology_yaml의_다른_키는_Project의_사실이_되지_않고_제목이_없어도_이름으로_채우지_않는다(onto_cli):
@@ -555,7 +561,11 @@ def test_ontology_yaml의_다른_키는_Project의_사실이_되지_않고_제�
     )
     title = onto_cli.query(without_title, "SELECT ?e ?t WHERE { ?e a onto:Project . OPTIONAL { ?e dcterms:title ?t } }")
 
-    assert predicates == [["http://purl.org/dc/terms/title"], ["http://www.w3.org/1999/02/22-rdf-syntax-ns#type"]]
+    assert predicates == [
+        ["http://purl.org/dc/terms/title"],
+        ["http://www.w3.org/1999/02/22-rdf-syntax-ns#type"],
+        [REPOSITORY],
+    ]
     assert title == [[PROJECT_FILE, ""]]
 
 

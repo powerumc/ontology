@@ -2,7 +2,8 @@
 
 import json
 
-from rdflib import Graph
+from rdflib import Graph, URIRef
+from rdflib.namespace import OWL, RDF
 
 from .paths import VOCAB_DIR
 
@@ -16,3 +17,12 @@ def load_context() -> dict:
     """frontmatter 키를 RDF에 대응시키는 JSON-LD context. `@context`의 내용(용어 정의)을 돌려준다."""
     return json.loads((VOCAB_DIR / "context.jsonld").read_text(encoding="utf-8"))["@context"]
 
+
+def common_classes(graph: Graph) -> dict[str, URIRef]:
+    """`load_vocab`으로 어휘를 실은 `graph`에서 공통 어휘의 클래스를 `{이름: IRI}`로 꺼낸다. 이름은 IRI에서 네임스페이스를 뗀 것이다."""
+    namespace = str(dict(graph.namespaces())["onto"])
+    return {
+        str(cls)[len(namespace) :]: cls
+        for cls in graph.subjects(RDF.type, OWL.Class)
+        if isinstance(cls, URIRef) and str(cls).startswith(namespace)
+    }
