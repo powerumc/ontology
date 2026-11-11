@@ -197,14 +197,90 @@ def test_관계가_여럿이면_가리키는_값마다_하나씩_보고하고_�
     assert sorted(shown) == ["dst:component/b", "dst:component/b", "dst:project"]
 
 
-def test_공유_범위가_틀린_저장소는_값_오류_하나만_보고하고_그_저장소와의_참조는_비교하지_않는다(onto_cli):
+def test_공유_범위가_틀린_저장소는_값_오류를_보고하고_비교에서는_private으로_본다(onto_cli):
     repos = pair("public", "internal")
-    repos["src"].update(page("component/b", "Component", title="B", partOf="project", dependsOn="dst:component/b"))
     repos["dst"].update(page("component/c", "Component", title="C", partOf="project", dependsOn="src:component/a"))
 
     findings = found(onto_cli, onto_cli.root(repos))
 
-    assert findings == [(ERROR, "dst", yaml_file("dst"), "invalid-scope")]
+    assert findings == [
+        (ERROR, "dst", yaml_file("dst"), "invalid-scope"),
+        (ERROR, "src", file("component/a", "src"), "scope-violation"),  # `public`이 `private`으로 본 저장소를 가리킨다. 반대 방향은 된다
+    ]
+
+
+# --- 범위를 알 수 없는 저장소와 저장소를 가리키는 두 이름 ----------------------------------
+# 범위를 알 수 없는 등록된 저장소(온톨로지 층이 없다, `ontology.yaml`을 읽을 수 없다, `scope` 값이 틀렸다)는 가장 좁은 `private`으로 본다.
+# 그 저장소의 문제는 저장소 규칙으로 끌 수 있는 항목이나 경고로만 보고되므로, 그것만 믿으면 저장소 이름이 드러난 채 통과한다.
+# 참조는 저장소를 `name`으로도 서브모듈 디렉토리 이름으로도 가리킬 수 있다.
+
+
+def team_repo(body: str = "본문\n", *, rules: object = None, **fields) -> dict[str, str]:
+    """`team`(`team:pay`) 지식 저장소. 페이지 `component/b`가 `fields`(관계)와 본문 `body`를 가진다."""
+    project = {"scope": "team:pay", **({"rules": rules} if rules else {})}
+    return repo(
+        "team",
+        page("component/a", "Component", title="A", partOf="project"),
+        page("component/b", "Component", title="B", partOf="project", body=body, **fields),
+        **project,
+    )
+
+
+def secret_repo(name: str = "secret", title: str = "X", **project) -> dict[str, str]:
+    """`private` 지식 저장소. `name`이 서브모듈 디렉토리 이름과 다를 수 있다."""
+    return repo(name, page("component/x", "Component", title=title, partOf="project"), **{"scope": "private", **project})
+
+
+MUTE_BROKEN = {"checks": {"broken-reference": {"enabled": False}, "unregistered-repository": {"enabled": False}}}
+
+
+def violations(onto_cli, repos) -> list[tuple[str, str, str, str]]:
+    return [finding for finding in found(onto_cli, onto_cli.root(repos)) if finding[3] == "scope-violation"]
+
+
+def test_name과_디렉토리_이름이_다른_저장소를_디렉토리_이름으로_가리켜도_공유_범위를_따진다(onto_cli):
+    """디렉토리 이름 `secret`이 팀 저장소에 남는다. `broken-reference`와 `repository-name-mismatch`를 저장소 규칙으로 꺼도 `scope-violation`은 남는다."""
+    mismatch_off = {"checks": {"repository-name-mismatch": {"enabled": False}}}
+    repos = {
+        "team": team_repo(dependsOn="secret:component/x", rules=MUTE_BROKEN),
+        "secret": secret_repo("hidden", rules=mismatch_off),
+    }
+
+    result, findings = validate(onto_cli, onto_cli.root(repos))
+
+    assert [finding[:4] for finding in findings] == [(ERROR, "team", file("component/b", "team"), "scope-violation")]
+    assert result.returncode == 1
+
+
+def test_name과_디렉토리_이름이_다른_저장소를_name으로_가리켜도_공유_범위를_따진다(onto_cli):
+    repos = {"team": team_repo(dependsOn="hidden:component/x"), "secret": secret_repo("hidden")}
+
+    assert violations(onto_cli, repos) == [(ERROR, "team", file("component/b", "team"), "scope-violation")]
+
+
+def test_온톨로지_층이_없는_저장소는_private으로_보고_그_저장소의_경고와_상관없이_잡는다(onto_cli):
+    repos = {"team": team_repo(dependsOn="secret:component/x", rules=MUTE_BROKEN), "secret": {"README.md": "온톨로지 층이 없다\n"}}
+
+    result, findings = validate(onto_cli, onto_cli.root(repos))
+
+    assert [finding[:4] for finding in findings if finding[3] == "scope-violation"] == [(ERROR, "team", file("component/b", "team"), "scope-violation")]
+    assert result.returncode == 1
+
+
+def test_ontology_yaml을_읽을_수_없는_저장소는_private으로_보고_잡는다(onto_cli):
+    unreadable = {f"{ONTOLOGY_DIR}/ontology.yaml": "name: [닫히지 않았다\n"}
+    repos = {"team": team_repo(dependsOn="secret:component/x", rules=MUTE_BROKEN), "secret": unreadable}
+
+    findings = found(onto_cli, onto_cli.root(repos))
+
+    assert (ERROR, "team", file("component/b", "team"), "scope-violation") in findings
+
+
+def test_범위를_알_수_없는_저장소를_더_넓은_저장소가_가리키지_않으면_문제가_없다(onto_cli):
+    """`private`으로 보므로 `private` 저장소와 같다. 층이 없는 저장소를 가리키는 `private`은 통과한다."""
+    repos = {"mine": repo("mine", page("component/a", "Component", title="A", partOf="project", dependsOn="secret:component/x")), "secret": {"README.md": "x\n"}}
+
+    assert violations(onto_cli, repos) == []
 
 
 def test_자기_저장소의_이름으로_가리켜도_같은_범위라_통과한다(onto_cli):
@@ -256,10 +332,21 @@ FILE_PATHS = [
     "component/core.md",
     "shop:docs/ontology/component/api.md",
     "shop:../billing/component/core",
+    "file:///Users/me/projects/secret/docs/x.md",
+    "FILE:///Users/me/x",
+    "file:relative/x",
+    "docs/ontology/component/a",
+    "docs/ontology/plan/x",
+    "projects/secret/docs/ontology/component/x",
+    "secret/component/x",
+    "componet/api",
+    "api",
+    "shop:docs/ontology/component/api",
 ]
 FILE_PATH_IDS = [
     "저장소_안_경로", "상위_디렉토리", "루트_기준_경로", "절대_경로", "홈_경로", "윈도우_드라이브", "윈도우_상대_경로", "점으로_시작", "중간_상위_조각",
-    "확장자가_있는_식별자", "저장소_이름이_붙은_경로", "저장소_이름이_붙은_상위_경로",
+    "확장자가_있는_식별자", "저장소_이름이_붙은_경로", "저장소_이름이_붙은_상위_경로", "file_주소", "대문자_file_주소", "상대_file_주소",
+    "온톨로지_층_경로", "온톨로지_층의_계획_경로", "projects_경로", "클래스_디렉토리가_아닌_첫_조각", "클래스_디렉토리_오타", "첫_조각만", "저장소_이름이_붙은_층_경로",
 ]
 
 
@@ -272,6 +359,30 @@ def test_관계의_값이_식별자나_교차_참조가_아니라_파일_경로�
     assert [finding[:4] for finding in findings] == [(ERROR, "billing", file("component/gateway"), "path-reference")]
     assert "dependsOn" in findings[0][4] and path in findings[0][4]  # 어느 관계의 어느 값인지 알려 준다
     assert result.returncode == 1
+
+
+@pytest.mark.parametrize("path", FILE_PATHS, ids=FILE_PATH_IDS)
+def test_파일_경로는_저장소_규칙으로_끌_수_있는_항목을_꺼도_path_reference로_남는다(onto_cli, path):
+    """`path-reference`가 보지 않는 모양은 `broken-reference`나 `unregistered-repository`에만 걸려, 그 항목을 끄면 통과했다."""
+    repos = related(partOf="project", dependsOn=path)
+    repos["billing"] = repo(
+        "billing",
+        page("component/gateway", "Component", title="게이트웨이", partOf="project", dependsOn=path),
+        page("component/core", "Component", title="코어", partOf="project"),
+        scope="private",
+        rules=MUTE_BROKEN,
+    )
+
+    result, findings = validate(onto_cli, onto_cli.root(repos))
+
+    assert [finding[:4] for finding in findings] == [(ERROR, "billing", file("component/gateway"), "path-reference")]
+    assert result.returncode == 1
+
+
+def test_파일_경로가_아닌_값은_식별자_모양이어도_첫_조각이_클래스_디렉토리가_아니면_오류의_설명이_그_이유를_알린다(onto_cli):
+    findings = validate(onto_cli, onto_cli.root(related(partOf="project", dependsOn="componet/api")))[1]
+
+    assert findings[0][3] == "path-reference" and "클래스 디렉토리" in findings[0][4]
 
 
 @pytest.mark.parametrize(
@@ -379,6 +490,12 @@ OUTSIDE_LINKS = {
     "이미지": f"![그림]({OUTSIDE}assets/diagram.png)",
     "제목이_붙은_링크": f'[x]({OUTSIDE}x.md "제목")',
     "꺾쇠_안의_경로": f"[x](<{OUTSIDE}my file.md>)",
+    "역슬래시_상대_경로": "[x](..\\..\\..\\..\\shop\\docs\\x.md)",
+    "역슬래시_절대_경로": "[x](\\Users\\me\\x.md)",
+    "따옴표_없는_html_href_경로": f"<a href={OUTSIDE}x.md>설계</a>",
+    "따옴표_없는_html_src_경로": f"<img src={OUTSIDE}a.png>",
+    "주석_뒤의_링크": f"<!-- 메모 -->\n[x]({OUTSIDE}x.md)\n",
+    "목록_안의_들여쓴_울타리_뒤의_링크": f"- 항목\n\n      ```\n      코드\n      ```\n\n[x]({OUTSIDE}x.md)\n",
     "퍼센트_인코딩": f"[x]({OUTSIDE}my%20file.md)",
     "조각이_붙은_링크": f"[x]({OUTSIDE}x.md#section)",
     "참조_정의": f"[설계][ref]\n\n[ref]: {OUTSIDE}x.md\n",
@@ -422,6 +539,11 @@ INSIDE_LINKS = {
     "mailto": "[x](mailto:me@example.com)",
     "프로토콜_생략_주소": "[x](//example.com/a)",
     "자동_링크_주소": "<https://example.com/a>",
+    "역슬래시_안쪽": "[x](..\\term\\a.md)",
+    "따옴표_없는_html_주소": "<a href=https://example.com/a>x</a>",
+    "html_주석": f"<!-- [x]({OUTSIDE}x.md) -->",
+    "여러_줄_html_주석": f"<!--\n[x]({OUTSIDE}x.md)\n<a href='{OUTSIDE}y.md'>y</a>\n-->\n",
+    "목록_안의_들여쓴_울타리": f"- 항목\n\n      ```\n      [x]({OUTSIDE}x.md)\n      ```\n",
     "빈_링크": "[x]()",
     "링크가_아닌_대괄호": "배열은 a[1]이고 (../../../../a.md) 괄호는 그냥 글이다.",
     "html_주소": '<a href="https://example.com/x">x</a>',
@@ -492,6 +614,108 @@ def test_생성된_인덱스는_페이지가_아니라서_링크_검사를_받�
     index.write_text(original + f"\n[x]({OUTSIDE}x.md)\n", encoding="utf-8")
 
     assert [finding[3] for finding in validate(onto_cli, root)[1]] == ["index-mismatch"]
+
+
+# --- 다른 저장소를 가리키는 심볼릭 링크 페이지 --------------------------------------------------
+# 페이지 파일이 지식 저장소 밖(다른 지식 저장소)의 파일을 가리키는 심볼릭 링크이면 그 파일을 페이지로 읽지 않는다. 읽으면 비공개
+# 저장소의 제목이 팀 저장소의 그래프와 커밋되는 인덱스에 실리고, 링크 자체가 다른 저장소의 경로를 담는다. 오류는 `outside-link`다.
+
+SECRET_TITLE = "비밀 프로젝트의 X"
+
+
+def linked_root(onto_cli):
+    """`team`에 `component/y.md`가 `secret`의 페이지를 가리키는 심볼릭 링크로 든 견본 루트."""
+    root = onto_cli.root({"team": team_repo(), "secret": secret_repo(title=SECRET_TITLE)})
+    (root / "projects/team" / ONTOLOGY_DIR / "component/y.md").symlink_to(root / "projects/secret" / ONTOLOGY_DIR / "component/x.md")
+    return root
+
+
+def test_다른_저장소의_페이지를_가리키는_심볼릭_링크_페이지는_읽지_않고_오류로_알린다(onto_cli):
+    root = linked_root(onto_cli)
+
+    result, findings = validate(onto_cli, root)
+
+    assert [finding[:4] for finding in findings] == [(ERROR, "team", file("component/y", "team"), "outside-link")]
+    assert SECRET_TITLE not in result.stdout + result.stderr  # 링크의 내용은 읽지 않는다
+    assert result.returncode == 1
+
+
+def test_심볼릭_링크_페이지가_있으면_build도_멈추고_인덱스에_비공개_제목이_실리지_않는다(onto_cli):
+    root = linked_root(onto_cli)
+    index = root / "projects/team" / ONTOLOGY_DIR / "index.md"
+    before = index.read_text(encoding="utf-8")
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode == 1 and file("component/y", "team") in result.stderr and "심볼릭 링크" in result.stderr
+    assert index.read_text(encoding="utf-8") == before and SECRET_TITLE not in before
+
+
+def test_루트_규칙이_심볼릭_링크_페이지를_경고로_낮추면_build가_그_페이지를_건너뛰고_알린다(onto_cli):
+    onto_cli.set_root_check("outside-link", severity="warning")
+    root = linked_root(onto_cli)
+
+    built = onto_cli.run(root, "build")
+    team_entities = [row[0] for row in onto_cli.query(root, 'SELECT ?e WHERE { ?e onto:repository "team" }')]
+
+    assert built.returncode == 0 and "outside-link" in built.stderr
+    assert file("component/y", "team") not in team_entities and file("component/b", "team") in team_entities
+
+
+# --- 본문에 교차 참조 모양으로 쓴 링크 ---------------------------------------------------------
+# `[글](<저장소 이름>:<식별자>)`는 관계의 값과 같은 교차 참조라 같은 규칙으로 공유 범위를 따진다.
+
+BODY_CROSS_REFERENCES = {
+    "인라인_링크": "[비밀](secret:component/x)",
+    "이미지": "![그림](secret:component/x)",
+    "참조_정의": "[설명][r]\n\n[r]: secret:component/x\n",
+    "html_href": '<a href="secret:component/x">x</a>',
+    "따옴표_없는_html_href": "<a href=secret:component/x>x</a>",
+    "자동_링크": "<secret:component/x>",
+    "조각이_붙은_링크": "[x](secret:component/x#section)",
+    "공백이_든_저장소_이름": "[x]( secret:component/x )",
+}
+
+
+@pytest.mark.parametrize("body", BODY_CROSS_REFERENCES.values(), ids=BODY_CROSS_REFERENCES.keys())
+def test_본문의_링크가_더_좁은_저장소를_교차_참조로_가리키면_scope_violation으로_잡는다(onto_cli, body):
+    repos = {"team": team_repo(body), "secret": secret_repo()}
+
+    result, findings = validate(onto_cli, onto_cli.root(repos))
+
+    assert [finding[:4] for finding in findings] == [(ERROR, "team", file("component/b", "team"), "scope-violation")]
+    assert "본문의 링크" in findings[0][4] and "secret:component/x" in findings[0][4]
+    assert result.returncode == 1
+
+
+def test_본문의_교차_참조_링크는_더_넓은_저장소와_같은_팀과_진짜_스킴이면_통과한다(onto_cli):
+    body = (
+        "[공개](open:component/x) [같은 팀](mate:component/x) [웹](https://example.com/secret:a) [메일](mailto:me@example.com) "
+        "[http](http://example.com) [없는 저장소](ghost:component/x)\n"
+    )
+    repos = {
+        "team": team_repo(body),
+        "open": repo("open", page("component/x", "Component", title="공개 X", partOf="project"), scope="public"),
+        "mate": repo("mate", page("component/x", "Component", title="팀 X", partOf="project"), scope="team:pay"),
+    }
+
+    assert violations(onto_cli, repos) == []
+
+
+def test_본문의_교차_참조_링크도_다른_팀이면_잡고_name과_디렉토리_이름_어느_쪽이든_본다(onto_cli):
+    repos = {
+        "team": team_repo("[다른 팀](other:component/x) [이름](hidden:component/x)\n"),
+        "other": repo("other", page("component/x", "Component", title="다른 X", partOf="project"), scope="team:legal"),
+        "secret": secret_repo("hidden"),
+    }
+
+    assert violations(onto_cli, repos) == [(ERROR, "team", file("component/b", "team"), "scope-violation")] * 2
+
+
+def test_본문의_교차_참조_링크는_코드_안이면_보지_않는다(onto_cli):
+    repos = {"team": team_repo("`[x](secret:component/x)`\n\n```\n[y](secret:component/x)\n```\n"), "secret": secret_repo()}
+
+    assert violations(onto_cli, repos) == []
 
 
 # --- 루트 전용: 지식 저장소의 규칙으로 끄거나 낮출 수 없다 -------------------------------------

@@ -82,13 +82,12 @@ SCOPE_VIOLATION = Check(
 
 PATH_REFERENCE = Check(
     "path-reference",
-    "관계의 값이 식별자나 교차 참조가 아니라 파일 경로다(저장소 밖을 가리키는 경로는 지식 저장소가 단독으로 열리면 깨진다)",
+    "관계의 값이 식별자도 교차 참조도 아니다(파일 경로, file: 주소, 첫 조각이 클래스 디렉토리가 아닌 값. 저장소 밖을 가리키는 경로는 저장소가 단독으로 열리면 깨진다)",
     root_only=True,
 )
-
 OUTSIDE_LINK = Check(
-    "outside-link",
-    "페이지 본문의 링크가 지식 저장소 밖의 파일(절대 경로, file: 주소, 저장소의 루트 위로 나가는 상대 경로)을 가리킨다",
+    compiler.OUTSIDE_LINK,
+    "페이지 본문의 링크(절대 경로, file: 주소, 저장소의 루트 위로 나가는 상대 경로)나 페이지 파일(심볼릭 링크)이 지식 저장소 밖의 파일을 가리킨다",
     root_only=True,
 )
 

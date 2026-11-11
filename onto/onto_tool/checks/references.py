@@ -1,4 +1,4 @@
-"""관계의 값(참조)을 훑는 검사 항목: 깨진 참조, 등록되지 않은 지식 저장소, 파일 경로.
+"""관계의 값(참조)을 훑는 검사 항목: 깨진 참조, 등록되지 않은 지식 저장소, 식별자도 교차 참조도 아닌 값(파일 경로).
 
 그래프가 아니라 페이지의 frontmatter 원문에서 본다. 등록되지 않은 저장소 이름을 쓴 교차 참조는 컴파일에서 오류 없이
 그 문자열 그대로의 IRI가 되어 그래프만으로는 깨진 참조와 구별되지 않기 때문이다. 참조를 엔티티의 IRI로 바꾸는 규칙은
@@ -8,10 +8,18 @@
 - 읽을 수 없는 페이지: 있는 페이지로 친다(읽을 수 없는 파일로 한 번만 보고된다).
 - `ontology.yaml`을 읽을 수 없는 지식 저장소: `name`을 몰라 엔티티의 IRI를 만들 수 없다. 그 저장소로 가는 참조는 건너뛴다.
 
-관계의 값은 식별자(`component/api`)나 교차 참조(`billing:component/api`)여야 한다. 파일 경로(`docs/design.md`,
-`../shop/docs/ontology/component/api.md`)는 저장소 밖의 파일을 가리키거나(지식 저장소가 단독으로 열리면 깨진다) 다른 저장소의 위치를
-드러내므로 `path-reference`로 잡는다. 가리키는 엔티티가 있으면 파일 경로 모양이어도 식별자로 본다(언어 규칙의 `identifier-pattern`이
-점을 허용하는 저장소). 파일 경로는 깨진 참조나 등록되지 않은 지식 저장소로 다시 보고하지 않는다.
+관계의 값은 식별자(`component/api`, `project`)나 교차 참조(`billing:component/api`)여야 한다. 그 밖의 값은 `path-reference`로 잡는다. 이 항목은
+루트 전용이다. 저장소 밖의 파일을 가리키는 경로는 지식 저장소가 단독으로 열리면 깨지고 다른 저장소의 위치를 드러내는데, 같은 값을 깨진 참조나
+등록되지 않은 지식 저장소로만 보고하면 그 항목을 저장소 규칙으로 꺼서 통과시킬 수 있기 때문이다. 식별자도 교차 참조도 아닌 값은 다음이다.
+
+- 파일 경로의 모양: 절대 경로(`/…`, `~…`, `C:\…`), `file:` 주소, 역슬래시, `.`이나 `..` 조각, 확장자로 끝나는 마지막 조각
+- 주소(`https://…`)
+- 첫 조각이 페이지를 두는 클래스 디렉토리(`component/`, `plan/` …)가 아닌 식별자 모양(`docs/ontology/plan/x`, `projects/billing/…`, `componet/api`).
+  페이지는 언제나 클래스 디렉토리 아래에 있고(하위 클래스의 페이지도 공통 조상 클래스의 디렉토리다) `Project`의 식별자는 `project`다.
+  그래서 첫 조각이 그 밖이면 식별자가 아니다. 클래스 디렉토리 이름의 오타도 이렇게 잡힌다.
+
+가리키는 엔티티가 있으면 모양과 상관없이 식별자로 본다(언어 규칙의 `identifier-pattern`이 점을 허용하는 저장소, 클래스 디렉토리 밖에 잘못
+둔 페이지). 이런 값은 깨진 참조나 등록되지 않은 지식 저장소로 다시 보고하지 않는다.
 """
 
 import re
@@ -19,26 +27,36 @@ from collections.abc import Iterator
 
 from ..compiler import PROJECT_IDENTIFIER, Compiled
 from ..iri import entity_iri, resolve_reference
+from ..keys import PAGE_CLASS_DIRECTORIES
 from ..rules import RuleSet
 from .catalog import BROKEN_REFERENCE, PATH_REFERENCE, UNREGISTERED_REPOSITORY
 from .model import Issue
 
 _DRIVE = re.compile(r"[A-Za-z]:[\\/]")  # `C:\work`, `C:/work`
+_FILE_URL = re.compile(r"file:", re.IGNORECASE)
 _EXTENSION = re.compile(r"[^/.]\.[A-Za-z0-9]+$")  # 식별자의 마지막 조각이 `design.md`처럼 확장자로 끝난다
+CLASS_DIRECTORIES = tuple(PAGE_CLASS_DIRECTORIES.values())
 
 
-def is_file_path(reference: str) -> bool:
-    """관계의 값이 식별자나 교차 참조가 아니라 파일 경로의 모양인가.
+def not_a_reference(reference: str) -> str | None:
+    """관계의 값 `reference`가 식별자도 교차 참조도 아니면 그 이유를, 식별자나 교차 참조의 모양이면 None을 돌려준다.
 
-    절대 경로(`/…`, `~…`, `C:\\…`), 역슬래시, `.`이나 `..` 조각, 확장자로 끝나는 마지막 조각이 파일 경로의 모양이다.
-    `://`가 든 주소는 파일 경로가 아니다. 가리키는 엔티티가 있는지는 따지지 않는다. 부른 쪽이 본다.
+    가리키는 엔티티가 있는지는 따지지 않는다. 부른 쪽이 본다.
     """
+    if _FILE_URL.match(reference):
+        return "`file:` 주소다"
     if "://" in reference:
-        return False
+        return "주소다"
     if reference.startswith(("/", "~", "\\")) or _DRIVE.match(reference) or "\\" in reference:
-        return True
+        return "파일 경로다"
     identifier = reference.partition(":")[2] if ":" in reference else reference  # 교차 참조의 저장소 이름은 뗀다
-    return any(segment in (".", "..") for segment in identifier.split("/")) or bool(_EXTENSION.search(identifier.rsplit("/", 1)[-1]))
+    segments = identifier.split("/")
+    if any(segment in (".", "..") for segment in segments) or _EXTENSION.search(segments[-1]):
+        return "파일 경로다"
+    if identifier != PROJECT_IDENTIFIER and segments[0] not in CLASS_DIRECTORIES:
+        shown = ", ".join(f"`{directory}/`" for directory in CLASS_DIRECTORIES)
+        return f"파일 경로이거나 식별자가 아니다(식별자의 첫 조각은 페이지를 두는 클래스 디렉토리({shown}) 가운데 하나여야 한다)"
+    return None
 
 
 def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
@@ -61,11 +79,12 @@ def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
                 where = f"`{key}`의 값 `{target}`"
                 repository, separator, _ = target.partition(":")
                 repository = repository.strip()
-                if is_file_path(target) and resolve_reference(record.name, target) not in entities:
+                reason = not_a_reference(target)
+                if reason and resolve_reference(record.name, target) not in entities:
                     yield Issue(
                         PATH_REFERENCE,
                         page.file,
-                        f"{where}: 식별자나 교차 참조가 아니라 파일 경로다. 같은 지식 저장소의 엔티티는 식별자(`component/api`)로, "
+                        f"{where}: 식별자나 교차 참조가 아니다({reason}). 같은 지식 저장소의 엔티티는 식별자(`component/api`)로, "
                         "다른 지식 저장소의 엔티티는 교차 참조(`<저장소 이름>:<식별자>`)로 가리킨다",
                     )
                 elif separator and repository not in registered:

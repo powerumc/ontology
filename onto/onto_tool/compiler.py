@@ -16,6 +16,7 @@ import json
 import re
 from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from rdflib import Graph, URIRef
 from rdflib.namespace import OWL, RDFS
@@ -61,6 +62,9 @@ INVALID_ONTOLOGY_YAML = "invalid-ontology-yaml"
 # 한 저장소의 제목이 다른 저장소의 커밋되는 인덱스에 들어가는 길이라, 읽을 수 없는 파일처럼 `build`와 `query`를 멈춘다.
 # 겹친 저장소를 가려내는 것은 컴파일이라, 이 항목도 루트 전용이다.
 DUPLICATE_REPOSITORY_NAME = "duplicate-repository-name"
+# 페이지 파일이 지식 저장소 밖의 파일을 가리키는 심볼릭 링크다. 읽지 않는다. 페이지 본문의 링크가 저장소 밖을 가리키는 문제와 같은 항목이다.
+# 다른 저장소의 페이지를 링크로 가져오면 그 제목이 이 저장소의 그래프와 커밋되는 인덱스에 실리고 링크가 다른 저장소의 경로를 담는다. 루트 전용이다.
+OUTSIDE_LINK = "outside-link"
 
 
 @dataclass(frozen=True)
@@ -285,8 +289,14 @@ def _read_repository(
 
     read.record.misnamed_pages = [workspace.relative(path) for path in find_misnamed_pages(repository.ontology_dir)]
     _read_index(repository, read.record)
+    repository_root = repository.path.resolve()
     for identifier, path in find_pages(repository.ontology_dir):
         file = workspace.relative(path)
+        if not _inside(path, repository_root):
+            read.problems.append(
+                Problem(file, "페이지 파일이 지식 저장소 밖의 파일을 가리키는 심볼릭 링크라 읽지 않는다. 다른 저장소의 지식은 교차 참조로 가리킨다", OUTSIDE_LINK)
+            )
+            continue
         meta: dict[str, object] | None
         body = ""
         values: dict[str, object] = {}
@@ -335,6 +345,14 @@ def _read_repository(
     if notice:
         read.notices.append(f"{read.record.path}: {notice}")
     return read
+
+
+def _inside(path: Path, root: Path) -> bool:
+    """`path`가 심볼릭 링크를 모두 따라간 곳이 `root`(지식 저장소의 실제 경로) 안인가. 따라갈 수 없으면 안이 아니다."""
+    try:
+        return path.resolve().is_relative_to(root)
+    except (OSError, RuntimeError):
+        return False
 
 
 def _source(read: _RepositoryRead, repository: str, entry: SourceEntry) -> str:
