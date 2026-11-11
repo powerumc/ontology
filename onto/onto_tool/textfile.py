@@ -5,6 +5,7 @@
 `값을 읽을 수 없다: <이유>`(`2026-02-30`처럼 날짜 모양이지만 없는 날짜) 가운데 하나다. 파일이 없는 것이 정상인 곳은 부르기 전에 확인한다.
 """
 
+import os
 import re
 from pathlib import Path
 
@@ -23,6 +24,21 @@ def split_lines(text: str) -> list[str]:
     if lines[-1] == "":
         lines.pop()
     return lines
+
+
+def is_missing(path: Path) -> bool:
+    """`path`를 열면 `FileNotFoundError`가 나는가: 파일이 없거나, 가리키는 곳이 없는 심볼릭 링크다.
+
+    순환하는 링크(`ELOOP`)나 디렉토리가 아닌 것의 안(`ENOTDIR`)은 없는 파일이 아니라 읽을 수 없는 파일이다. `Path.exists()`는 그것들도 거짓이라 없는 파일로
+    잘못 읽고, 그 결과가 Python 버전에 따라 다르다. 없는 것이 정상인 파일(`skipped.yaml`)과 없으면 따로 알리는 파일(루트 기본 규칙)은 읽기 전에 이것으로 가른다.
+    """
+    try:
+        os.stat(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def read_text(path: Path, error: type[Exception]) -> str:

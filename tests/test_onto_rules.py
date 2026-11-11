@@ -785,6 +785,16 @@ def test_루트_기본_규칙을_읽을_수_없으면_파일을_알리며_오류
     assert "rules.yaml" in result.stderr and "Traceback" not in result.stderr
 
 
+def test_루트_기본_규칙이_순환하는_링크이면_없는_파일이_아니라_읽을_수_없는_파일로_알린다(onto_cli):
+    onto_cli.replace_root_rules_with_loop()
+
+    result = onto_cli.run(onto_cli.root({}), "validate")
+
+    assert result.returncode == 1
+    assert "rules.yaml" in result.stderr and "읽을 수 없다" in result.stderr
+    assert "파일이 없다" not in result.stderr and "Traceback" not in result.stderr
+
+
 # --- S1-08 재리뷰 지적 -----------------------------------------------------------
 
 RAW_PAGE = {f"{ONTOLOGY_DIR}/component/raw.md": "frontmatter가 없는 본문\n"}

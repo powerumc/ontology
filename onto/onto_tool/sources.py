@@ -43,7 +43,7 @@ from . import gitenv
 from .keys import SOURCE_ENTRY_KEYS
 from .pages import FrontmatterError, ValueKindError
 from .rules import Sources
-from .textfile import load_yaml_text
+from .textfile import is_missing, load_yaml_text
 from .workspace import ONTOLOGY_DIR
 
 # git 해시: SHA-1이 내는 40자리 소문자 16진수
@@ -138,8 +138,8 @@ def _outside_reason(path: str) -> str | None:
 
 
 def load_skipped(path: Path) -> object:
-    """넘긴 문서의 목록(`skipped.yaml`)의 값을 검증 없이 읽는다. 파일이 없거나 비어 있으면 `None`이다. 읽을 수 없으면 `FrontmatterError`다."""
-    if not path.exists():
+    """넘긴 문서의 목록(`skipped.yaml`)의 값을 검증 없이 읽는다. 파일이 없거나(가리키는 곳이 없는 링크 포함) 비어 있으면 `None`이다. 읽을 수 없으면(순환하는 링크 포함) `FrontmatterError`다."""
+    if is_missing(path):
         return None
     return load_yaml_text(path, FrontmatterError)
 

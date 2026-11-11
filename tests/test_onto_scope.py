@@ -844,6 +844,81 @@ def test_가리키는_파일이_없는_skipped_yaml_심볼릭_링크도_저장�
     assert findings == [(ERROR, "team", f"projects/team/{ONTOLOGY_DIR}/skipped.yaml", "outside-link")]
 
 
+def test_가리키는_파일이_없는_ontology_yaml_심볼릭_링크도_저장소_밖을_가리키면_오류로_알린다(onto_cli):
+    """링크 파일 자체가 다른 저장소나 기기의 경로를 담는다. 온톨로지 층이 없다는 경고만으로는 푸시 관문을 통과해 그 경로가 팀 저장소에 올라간다."""
+    root = onto_cli.root({"team": team_repo()})
+    link = root / "projects/team" / ONTOLOGY_DIR / "ontology.yaml"
+    link.unlink()
+    link.symlink_to("/Users/me/private-notes/ontology.yaml")
+
+    result, findings = validate(onto_cli, root)
+
+    assert (ERROR, "team", yaml_file("team"), "outside-link") in [finding[:4] for finding in findings]
+    assert "심볼릭 링크" in next(finding[4] for finding in findings if finding[3] == "outside-link")
+    assert result.returncode == 1
+    assert onto_cli.run(root, "build").returncode == 1
+
+
+def test_저장소_안을_가리키는_깨진_ontology_yaml_링크는_저장소_밖_링크로_알리지_않는다(onto_cli):
+    root = onto_cli.root({"team": team_repo()})
+    link = root / "projects/team" / ONTOLOGY_DIR / "ontology.yaml"
+    link.unlink()
+    link.symlink_to("ontology.missing.yaml")
+
+    result, findings = validate(onto_cli, root)
+
+    assert "outside-link" not in [finding[3] for finding in findings]
+    assert "missing-ontology-layer" in [finding[3] for finding in findings]
+    assert result.returncode == 0
+
+
+def test_순환하는_skipped_yaml_링크는_없는_파일이_아니라_읽을_수_없는_파일로_알린다(onto_cli):
+    root = onto_cli.root({"team": team_repo()})
+    (root / "projects/team" / ONTOLOGY_DIR / "skipped.yaml").symlink_to("skipped.yaml")
+
+    result, findings = validate(onto_cli, root)
+
+    skipped = f"projects/team/{ONTOLOGY_DIR}/skipped.yaml"
+    assert [finding[:4] for finding in findings] == [(ERROR, "team", skipped, "unreadable-file")]
+    assert result.returncode == 1
+    assert onto_cli.run(root, "build").returncode == 1
+
+
+def test_가리키는_파일이_없는_skipped_yaml_링크가_저장소_안을_가리키면_넘긴_문서가_없는_것으로_본다(onto_cli):
+    root = onto_cli.root({"team": team_repo()})
+    (root / "projects/team" / ONTOLOGY_DIR / "skipped.yaml").symlink_to("skipped.missing.yaml")
+
+    assert found(onto_cli, root) == []
+
+
+def test_rules는_저장소_밖을_가리키는_ontology_yaml을_읽지_않고_컴파일처럼_오류로_알린다(onto_cli):
+    """읽으면 다른 저장소의 `rules` 덮어쓰기가 이 저장소의 규칙으로 보인다. `validate`가 실제로 쓰는 규칙과 어긋난다."""
+    mute = {"checks": {"orphan-page": {"enabled": False}}}
+    root = onto_cli.root({"team": team_repo(), "secret": secret_repo(rules=mute)})
+    link = root / "projects/team" / ONTOLOGY_DIR / "ontology.yaml"
+    link.unlink()
+    link.symlink_to(root / "projects/secret" / ONTOLOGY_DIR / "ontology.yaml")
+
+    result = onto_cli.run(root, "rules", "team")
+
+    assert result.returncode == 1
+    assert yaml_file("team") in result.stderr and "심볼릭 링크" in result.stderr
+    assert "orphan-page" not in result.stdout + result.stderr  # 다른 저장소의 설정은 읽지 않는다
+    assert "Traceback" not in result.stderr
+
+
+def test_rules는_가리키는_파일이_없어도_저장소_밖을_가리키는_ontology_yaml_링크를_읽지_않고_오류로_알린다(onto_cli):
+    root = onto_cli.root({"team": team_repo()})
+    link = root / "projects/team" / ONTOLOGY_DIR / "ontology.yaml"
+    link.unlink()
+    link.symlink_to("/Users/me/private-notes/ontology.yaml")
+
+    result = onto_cli.run(root, "rules", "team")
+
+    assert result.returncode == 1
+    assert yaml_file("team") in result.stderr and "심볼릭 링크" in result.stderr
+
+
 # --- 본문에 교차 참조 모양으로 쓴 링크 ---------------------------------------------------------
 # `[글](<저장소 이름>:<식별자>)`는 관계의 값과 같은 교차 참조라 같은 규칙으로 공유 범위를 따진다.
 

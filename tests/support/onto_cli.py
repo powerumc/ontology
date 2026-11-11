@@ -100,8 +100,15 @@ class OntoCli:
         self._rules_file.unlink()
         self._rules_file.mkdir()
 
+    def replace_root_rules_with_loop(self) -> None:
+        """루트 기본 규칙 파일 자리를 자기 자신을 가리키는 심볼릭 링크로 바꿔 읽을 수 없게 한다(파일이 없는 것과 다르다). 테스트가 끝나면 되돌려진다."""
+        self._rules_file.unlink()
+        self._rules_file.symlink_to(self._rules_file.name)
+
     def restore_root_rules(self) -> None:
-        if self._rules_file.is_dir():
+        if self._rules_file.is_symlink():
+            self._rules_file.unlink()
+        elif self._rules_file.is_dir():
             self._rules_file.rmdir()
         if self._original_rules is not None:
             self.write_root_rules(self._original_rules)

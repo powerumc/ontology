@@ -2,11 +2,15 @@
 
 import argparse
 import json
+import os
 
 from ..checks import rule_set
+from ..compiler import LINK_OUTSIDE
 from ..errors import OntoError
 from ..keys import RULES_KEY
 from ..ontology_yaml import OntologyYamlError, read_ontology_yaml, undefined_keys_message
+from ..paths import is_inside, real_path
+from ..textfile import is_missing
 from ..workspace import ONTOLOGY_YAML, Within
 from ._rules import root_rules
 from ._workspace import open_workspace
@@ -37,7 +41,11 @@ def run(args: argparse.Namespace) -> int:
             raise OntoError(f"지식 저장소 `{name}`가 없다(있는 것: {', '.join(known) or '없음'})")
         yaml_file = known[name].path / ONTOLOGY_YAML
         where = workspace.display(yaml_file)
-        if not yaml_file.exists():
+        # 컴파일이 읽지 않는 ontology.yaml(저장소 밖을 가리키는 심볼릭 링크)은 여기서도 읽지 않는다. 읽으면 다른 저장소의 덮어쓰기가 이 저장소의 규칙으로 보여
+        # `validate`가 실제로 쓰는 규칙과 어긋난다. 가리키는 파일이 없는 링크도 같다.
+        if os.path.lexists(yaml_file) and not is_inside(yaml_file, real_path(known[name].path)):
+            raise OntoError(f"{where}: {LINK_OUTSIDE.format('ontology.yaml')}")
+        if is_missing(yaml_file):
             raise OntoError(f"{where}: 온톨로지 층이 없다")
         try:
             data = read_ontology_yaml(yaml_file)

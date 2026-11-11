@@ -43,6 +43,7 @@ from .pages import (
     read_page,
     scalar_values,
 )
+from .paths import is_inside, real_path
 from .sources import SourceEntry, document_hashes, load_skipped, outside_paths, parse_entries, parse_skipped
 from .workspace import ONTOLOGY_DIR, ONTOLOGY_YAML, PROJECTS_DIR, SKIPPED_YAML, Repository, Within, Workspace
 
@@ -72,7 +73,7 @@ DUPLICATE_REPOSITORY_NAME = "duplicate-repository-name"
 # 다른 저장소의 페이지를 링크로 가져오면 그 제목이 이 저장소의 그래프와 커밋되는 인덱스에 실리고 링크가 다른 저장소의 경로를 담는다. 루트 전용이다.
 OUTSIDE_LINK = "outside-link"
 # 설정 파일(`ontology.yaml`, `skipped.yaml`)이 저장소 밖의 파일을 가리키는 심볼릭 링크일 때의 설명. 읽지 않는다.
-_LINK_OUTSIDE = "{}이 지식 저장소 밖의 파일을 가리키는 심볼릭 링크라 읽지 않는다. 다른 저장소의 설정과 원본 문서는 가져오지 않는다. 다른 저장소의 지식은 교차 참조로 가리킨다"
+LINK_OUTSIDE = "{}이 지식 저장소 밖의 파일을 가리키는 심볼릭 링크라 읽지 않는다. 다른 저장소의 설정과 원본 문서는 가져오지 않는다. 다른 저장소의 지식은 교차 참조로 가리킨다"
 
 
 @dataclass(frozen=True)
@@ -209,9 +210,13 @@ def compile_workspace(workspace: Workspace) -> Compiled:
     reads: list[_RepositoryRead] = []
 
     for repository in workspace.repositories():
-        if not (repository.path / ONTOLOGY_YAML).is_file():
+        yaml_path = repository.path / ONTOLOGY_YAML
+        if not yaml_path.is_file():
             record = _record(workspace, repository, has_layer=False)
             warnings.append(f"{record.label}: 온톨로지 층({ONTOLOGY_YAML.as_posix()})이 없어 건너뛰었다")
+            if os.path.lexists(yaml_path) and not is_inside(yaml_path, real_path(repository.path)):
+                # 가리키는 파일이 없어 읽을 것은 없지만, 링크가 담은 경로(다른 저장소나 기기의 위치)는 지식 저장소와 함께 올라간다. 페이지와 같다.
+                problems.append(Problem(record.yaml_file, LINK_OUTSIDE.format("ontology.yaml"), OUTSIDE_LINK))
             records.append(record)
             continue
         read = _read_repository(workspace, repository, context, common_classes)
@@ -299,10 +304,10 @@ def _read_repository(
     """지식 저장소 하나를 JSON-LD 객체로 읽는다. 읽을 수 없는 파일은 모아 두고 나머지를 계속 읽는다."""
     read = _RepositoryRead(_record(workspace, repository, has_layer=True))
     yaml_file = read.record.yaml_file
-    repository_root = repository.path.resolve()
-    if not _inside(repository.path / ONTOLOGY_YAML, repository_root):
+    repository_root = real_path(repository.path)
+    if not is_inside(repository.path / ONTOLOGY_YAML, repository_root):
         # 읽으면 다른 지식 저장소의 이름과 설정이 이 저장소의 것이 된다. 페이지 파일과 같다.
-        read.problems.append(Problem(yaml_file, _LINK_OUTSIDE.format("ontology.yaml"), OUTSIDE_LINK))
+        read.problems.append(Problem(yaml_file, LINK_OUTSIDE.format("ontology.yaml"), OUTSIDE_LINK))
         return read
     try:
         data = read_ontology_yaml(repository.path / ONTOLOGY_YAML)
@@ -336,7 +341,7 @@ def _read_repository(
     _read_index(repository, read.record)
     for path in find_dangling_page_links(repository.ontology_dir):
         # 가리키는 파일이 없어 읽을 것은 없지만, 링크 파일이 담은 대상(다른 저장소의 이름, 절대 경로)은 지식 저장소를 단독으로 열어도 남는다.
-        if not _inside(path, repository_root):
+        if not is_inside(path, repository_root):
             read.problems.append(
                 Problem(
                     workspace.relative(path),
@@ -346,7 +351,7 @@ def _read_repository(
             )
     for identifier, path in find_pages(repository.ontology_dir):
         file = workspace.relative(path)
-        if not _inside(path, repository_root):
+        if not is_inside(path, repository_root):
             read.problems.append(
                 Problem(file, "페이지 파일이 지식 저장소 밖의 파일을 가리키는 심볼릭 링크라 읽지 않는다. 다른 저장소의 지식은 교차 참조로 가리킨다", OUTSIDE_LINK)
             )
@@ -393,8 +398,8 @@ def _read_repository(
             read.problems.append(Problem(file, f"frontmatter를 읽을 수 없다: {exc}", _kind(exc)))
 
     skipped_path = repository.path / SKIPPED_YAML
-    if os.path.lexists(skipped_path) and not _inside(skipped_path, repository_root):
-        read.problems.append(Problem(read.record.skipped_file, _LINK_OUTSIDE.format("넘긴 문서의 목록(skipped.yaml)"), OUTSIDE_LINK))
+    if os.path.lexists(skipped_path) and not is_inside(skipped_path, repository_root):
+        read.problems.append(Problem(read.record.skipped_file, LINK_OUTSIDE.format("넘긴 문서의 목록(skipped.yaml)"), OUTSIDE_LINK))
     else:
         try:
             skipped = load_skipped(skipped_path)
@@ -420,14 +425,6 @@ def _outside_sources(file: str, label: str, value: object) -> list[Problem]:
         )
         for path, reason in outside_paths(value)
     ]
-
-
-def _inside(path: Path, root: Path) -> bool:
-    """`path`가 심볼릭 링크를 모두 따라간 곳이 `root`(지식 저장소의 실제 경로) 안인가. 따라갈 수 없으면 안이 아니다."""
-    try:
-        return path.resolve().is_relative_to(root)
-    except (OSError, RuntimeError):
-        return False
 
 
 def _source(read: _RepositoryRead, repository: str, entry: SourceEntry) -> str:

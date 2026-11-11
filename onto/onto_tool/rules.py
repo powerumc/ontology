@@ -19,7 +19,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from .textfile import load_yaml_text
+from .textfile import is_missing, load_yaml_text
 
 SEVERITIES = ("error", "warning")
 DUPLICATE_NAME_SOURCES = ("title", "aliases")
@@ -272,7 +272,7 @@ class _Reader:
 
 def load_root_rules(path: Path, *, known_checks: Collection[str]) -> Rules:
     """루트 기본 규칙 파일을 읽는다. 읽을 수 없거나, 모르는 키나 틀린 값이 있거나, 키가 빠졌으면 `RulesError`다."""
-    if not path.exists():
+    if is_missing(path):
         raise RulesError("루트 기본 규칙 파일이 없다")
     data = load_yaml_text(path, RulesError)
     reader = _Reader((), (), complete=True)
