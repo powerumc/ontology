@@ -5,6 +5,10 @@
 # - 판정은 모든 저장소에 같은 기준을 쓴다. 미푸시·뒤처짐은 `origin`의 같은 이름 브랜치와 비교한다.
 #   `push`가 현재 브랜치를 같은 이름의 원격 브랜치로 올리기 때문이다. 원격 정보는 마지막으로 받은(fetch) 시점의 것이다.
 # - 함수는 변수를 돌려주지 않고 출력한다. 실패하면 0이 아닌 값을 돌려주므로 호출하는 쪽이 `|| …`로 처리한다.
+# - 초기화되지 않은 서브모듈은 빈 디렉토리라 `git -C <경로>`가 위로 올라가 루트 저장소를 읽는다. 경로를 받는 함수는 이를
+#   막으려고 먼저 repo_initialized를 확인하고, 초기화되지 않았으면 아무것도 읽지 않고 실패한다. 그래도 호출하는 쪽이
+#   repo_initialized를 먼저 보고 "초기화되지 않음"을 따로 다루어야 한다(실패를 다른 실패와 구별할 수 없다).
+# - 사용자의 git 설정(diff.renames, diff.ignoreSubmodules 등)에 따라 결과가 달라지지 않도록, 읽는 명령은 필요한 옵션을 직접 준다.
 
 NL=$(printf '\nx')
 NL=${NL%x}
@@ -47,6 +51,7 @@ EOF
 tracking_branch() {
     tb_branch=$(git config -f .gitmodules --get "submodule.$1.branch" || true)
     if [ -z "$tb_branch" ]; then
+        repo_initialized "$2" || return 1
         tb_branch=$(git -C "$2" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
         tb_branch=${tb_branch#origin/}
     fi
@@ -60,23 +65,27 @@ repo_initialized() {
 
 # 현재 브랜치 이름. detached HEAD이면 아무것도 적지 않는다.
 repo_branch() {
+    repo_initialized "$1" || return 1
     git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null || true
 }
 
 # 미커밋 변경을 `git status --porcelain` 줄로 적는다(추적하지 않는 파일 포함, 무시되는 파일 제외).
 # 서브모듈 안의 변경은 그 저장소 쪽에서 센다. 여기서는 서브모듈 포인터(새 커밋)가 달라진 것만 변경으로 본다.
 repo_changes() {
+    repo_initialized "$1" || return 1
     GIT_OPTIONAL_LOCKS=0 git -C "$1" -c core.quotePath=false status --porcelain --untracked-files=all --ignore-submodules=dirty
 }
 
 # 원격(origin)에 브랜치 $2가 있는가. 마지막으로 받은 원격 정보 기준이다.
 repo_has_remote_branch() {
+    repo_initialized "$1" || return 1
     git -C "$1" rev-parse --verify --quiet "refs/remotes/origin/$2" >/dev/null 2>&1
 }
 
 # 푸시하지 않은 커밋 수. 브랜치 $2가 원격에 있으면 origin/$2 이후의 커밋, 없으면(새 작업 브랜치, detached HEAD)
 # origin의 어느 브랜치에도 없는 커밋이다. $2가 비어 있으면 detached HEAD로 본다.
 repo_unpushed_count() {
+    repo_initialized "$1" || return 1
     if [ -n "${2:-}" ] && repo_has_remote_branch "$1" "$2"; then
         git -C "$1" rev-list --count "refs/remotes/origin/$2..HEAD"
     else
@@ -86,17 +95,21 @@ repo_unpushed_count() {
 
 # 원격보다 뒤처진 커밋 수: origin/$2에는 있고 HEAD에는 없는 커밋. 브랜치가 원격에 없으면 실패한다.
 repo_behind_count() {
+    repo_initialized "$1" || return 1
     repo_has_remote_branch "$1" "$2" || return 1
     git -C "$1" rev-list --count "HEAD..refs/remotes/origin/$2"
 }
 
 # 루트 저장소에서 서브모듈 포인터가 바뀌었으나 커밋하지 않은 경로를 한 줄에 하나씩 적는다.
-# 스테이징한 것(등록·제거 포함)과 하지 않은 것(서브모듈이 새 커밋으로 올라간 것)을 모두 적는다.
-# `git diff`는 인덱스를 새로 쓰므로(GIT_OPTIONAL_LOCKS=0도 소용없다) 인덱스를 읽기만 하는 diff-files와 diff --cached를 쓴다.
+# 스테이징한 것(등록·제거·옮기기 포함)과 하지 않은 것(서브모듈이 새 커밋으로 올라간 것)을 모두 적는다.
+# 옮긴 서브모듈은 옛 경로(제거)와 새 경로(추가)를 따로 적는다. 이름 바꾸기 탐지를 끄므로 diff.renames 설정과 무관하다.
+# `git diff`는 인덱스를 새로 쓰므로(GIT_OPTIONAL_LOCKS=0도 소용없다) 인덱스를 읽기만 하는 diff-files와 diff-index를 쓴다.
+# HEAD가 아직 없으면(첫 커밋 전) 빈 트리와 비교한다.
 pointer_changes() {
+    pc_head=$(git rev-parse --verify --quiet HEAD || git hash-object -t tree /dev/null)
     {
-        git -c core.quotePath=false diff-files --ignore-submodules=dirty --raw 2>/dev/null || true
-        git -c core.quotePath=false diff --cached --raw 2>/dev/null || true
+        git -c core.quotePath=false diff-files --raw --no-renames --ignore-submodules=dirty 2>/dev/null || true
+        git -c core.quotePath=false diff-index --cached --raw --no-renames --ignore-submodules=none "$pc_head" 2>/dev/null || true
     } | awk -F '\t' '$1 ~ /^:(160000 [0-7]+|[0-7]+ 160000) / { print $2 }' | sort -u
 }
 

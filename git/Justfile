@@ -51,12 +51,14 @@ pull:
         printf '%s\n' "$1" | sed -n '/./{p;q;}'
     }
 
-    # pull_one <경로> <표시 이름> <추적 브랜치>
-    # 추적 브랜치가 비어 있으면(루트 저장소) 현재 브랜치를 올린다. 결과는 record로 남기고 항상 0으로 돌아온다.
+    # pull_one <경로> <표시 이름> <서브모듈 이름>
+    # 서브모듈 이름이 비어 있으면(루트 저장소) 현재 브랜치를 origin의 같은 이름 브랜치로 올린다.
+    # 지식 저장소는 추적 브랜치에 있을 때만 올린다. 추적 브랜치는 fetch 뒤에 정한다(.gitmodules에 기록이 없으면
+    # 원격의 기본 브랜치인 origin/HEAD가 추적 브랜치인데, fetch가 이를 되살린다). 결과는 record로 남기고 항상 0으로 돌아온다.
     pull_one() {
         po_path=$1
         po_label=$2
-        po_track=$3
+        po_name=$3
 
         if ! repo_initialized "$po_path"; then
             need_setup=1
@@ -73,9 +75,17 @@ pull:
             return 0
         fi
 
+        po_track=
+        if [ -n "$po_name" ]; then
+            po_track=$(tracking_branch "$po_name" "$po_path")
+        fi
         po_branch=$(repo_branch "$po_path")
         if [ -z "$po_branch" ]; then
             record skipped "$po_label" "detached HEAD($(git -C "$po_path" rev-parse --short HEAD 2>/dev/null))라 fetch만 했다"
+            return 0
+        fi
+        if [ -n "$po_name" ] && [ -z "$po_track" ]; then
+            record skipped "$po_label" "추적 브랜치를 알 수 없어 fetch만 했다. .gitmodules에 branch가 없고 원격의 기본 브랜치도 알 수 없다"
             return 0
         fi
         if [ -n "$po_track" ] && [ "$po_branch" != "$po_track" ]; then
@@ -111,9 +121,14 @@ pull:
             return 0
         fi
 
-        # fast-forward가 가능하다. 받아 올 변경과 겹치는 미커밋 변경이 있으면 git이 아무것도 바꾸지 않고 거부한다.
+        # fast-forward가 가능하다. 받아 올 변경과 겹치는 로컬 작업이 있으면 git이 아무것도 바꾸지 않고 거부해야 한다.
+        # 사용자의 git 설정과 기본값이 그 약속을 깨지 않도록 명령줄에서 고정한다(명령줄 옵션이 설정보다 우선한다).
+        # - --no-autostash: merge.autoStash나 branch.<이름>.mergeOptions가 켜져 있으면 미커밋 변경을 스태시했다가 다시 적용해
+        #   겹치는 변경이 조용히 섞이거나 충돌 표시와 함께 남는다.
+        # - --no-overwrite-ignore: 기본은 .gitignore가 제외한 파일을 받아 올 파일로 덮어쓴다. 되돌릴 수 없는 로컬 작업이다.
+        # - -c submodule.recurse=false: 서브모듈 작업 트리를 건드리지 않는다.
         # 거부 이유를 읽으므로 메시지 언어를 고정한다.
-        if po_out=$(LC_ALL=C git -C "$po_path" -c submodule.recurse=false merge --ff-only --quiet "$po_remote_ref" 2>&1); then
+        if po_out=$(LC_ALL=C git -C "$po_path" -c submodule.recurse=false merge --ff-only --no-autostash --no-overwrite-ignore --quiet "$po_remote_ref" 2>&1); then
             po_count=$(git -C "$po_path" rev-list --count "$po_head..$po_remote" 2>/dev/null) || po_count=?
             record updated "$po_label" "$(printf %.7s "$po_head")..$(printf %.7s "$po_remote"), 커밋 ${po_count}개"
             if [ "$po_path" != . ]; then
@@ -127,7 +142,7 @@ pull:
                 record skipped "$po_label" "받아 올 변경과 같은 파일에 미커밋 변경이 있어 fast-forward가 거부되었다: ${po_files% }"
                 ;;
             *"untracked working tree files would be overwritten"*)
-                record skipped "$po_label" "받아 올 파일과 겹치는 추적하지 않는 파일이 있어 fast-forward가 거부되었다: ${po_files% }"
+                record skipped "$po_label" "받아 올 파일과 겹치는 추적하지 않거나 무시되는 파일이 있어 fast-forward가 거부되었다: ${po_files% }"
                 ;;
             *)
                 record skipped "$po_label" "fast-forward에 실패했다: $(first_line "$po_out")"
@@ -149,7 +164,7 @@ pull:
     while IFS="$TAB" read -r repo_path repo_name; do
         [ -n "$repo_path" ] || continue
         echo "받는 중: $repo_path"
-        pull_one "$repo_path" "$repo_path" "$(tracking_branch "$repo_name" "$repo_path")" </dev/null
+        pull_one "$repo_path" "$repo_path" "$repo_name" </dev/null
     done <<EOF
     $repos
     EOF

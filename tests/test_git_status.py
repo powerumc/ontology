@@ -228,3 +228,18 @@ def test_하위_디렉토리에서_불러도_루트_저장소를_기준으로_�
 
     assert result.returncode == 0, result.stderr
     assert "브랜치 main" in _line(result, "projects/billing")
+
+
+def test_서브모듈을_옮겨_스테이징했으면_옛_경로와_새_경로를_모두_포인터_변경으로_알린다(sandbox):
+    """이름 바꾸기 탐지는 사용자의 diff 설정에 달려 있다. 탐지에 기대면 새 경로가 빠진다."""
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    clone = root.set_up_clone()
+    sandbox.git("mv", "projects/billing", "projects/billing2", cwd=clone)
+
+    result = _status(sandbox, clone)
+
+    assert result.returncode == 0, result.stderr
+    notice = next(line for line in result.stdout.splitlines() if "서브모듈 포인터" in line)
+    assert "projects/billing2" in notice
+    assert "projects/billing " in notice + " "  # 옛 경로(제거)도 적힌다

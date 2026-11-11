@@ -1,5 +1,7 @@
 """`just git pull`: 루트 저장소와 모든 지식 저장소를 fast-forward로만 최신으로 올리고, 저장소별 결과를 요약한다."""
 
+import pytest
+
 ROOT = "루트 저장소"
 
 
@@ -489,3 +491,113 @@ def test_받는_동안_어떤_저장소에도_커밋을_만들지_않는다(sand
     assert sandbox.git("rev-list", "--count", "--merges", "HEAD", cwd=sub).stdout.strip() == "0"
     assert sandbox.git("rev-list", "--count", "--all", cwd=clone).stdout.strip() == root_commits
     assert sandbox.git("rev-list", "--count", "HEAD", cwd=sub).stdout == sandbox.git("rev-list", "--count", latest, cwd=billing.seed).stdout
+
+
+# --- 사용자의 git 설정이 약속을 깨지 않는다 -----------------------------------------------------
+
+
+def _enable_autostash(sandbox, how, repo):
+    """미커밋 변경을 스태시했다가 다시 적용하게 하는 git 설정을 켠다. 받기가 이 설정을 따르면 겹치는 변경이 섞인다."""
+    if how == "전역_autoStash":
+        sandbox.git("config", "--global", "merge.autoStash", "true", cwd=repo)
+    else:
+        sandbox.git("config", "branch.main.mergeOptions", "--autostash", cwd=repo)
+
+
+@pytest.mark.parametrize("how", ["전역_autoStash", "브랜치_mergeOptions"])
+@pytest.mark.parametrize("target", ["지식_저장소", "루트_저장소"])
+def test_merge_autoStash가_켜져_있어도_겹치는_미커밋_변경은_섞지_않고_건너뛴다(sandbox, target, how):
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    root.register(billing)
+    clone = root.set_up_clone()
+    repo, name = (_sub(clone), "projects/billing") if target == "지식_저장소" else (clone, ROOT)
+    _enable_autostash(sandbox, how, repo)
+    (repo / "README.md").write_text("# 내가 고치는 중\n", encoding="utf-8")
+    head = sandbox.head(repo)
+    before = sandbox.git("status", "--porcelain", cwd=repo).stdout
+    new_readme = {"README.md": "# 원격이 고친 README\n"}
+    if target == "지식_저장소":
+        billing.commit(files=new_readme)
+    else:
+        root.commit(new_readme)
+
+    result = _pull(sandbox, clone)
+
+    assert result.returncode == 0, result.stderr
+    assert sandbox.head(repo) == head
+    assert (repo / "README.md").read_text(encoding="utf-8") == "# 내가 고치는 중\n"  # 충돌 표시도, 섞인 내용도 없다
+    assert sandbox.git("status", "--porcelain", cwd=repo).stdout == before
+    assert sandbox.git("stash", "list", cwd=repo).stdout == ""
+    state, line = _outcomes(result)[name]
+    assert state == "건너뜀" and "README.md" in line and "미커밋" in line
+
+
+def test_받아_올_파일과_같은_경로의_무시되는_로컬_파일은_덮어쓰지_않고_건너뛴_것으로_보고한다(sandbox):
+    """`.gitignore`가 제외한 파일도 git에 없는 로컬 작업이다. 되돌릴 수 없으므로 추적하지 않는 파일처럼 지키고 거부한다."""
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing", files={"README.md": "# billing\n", ".gitignore": "scratch/\n"})
+    root.register(billing)
+    clone = root.set_up_clone()
+    sub = _sub(clone)
+    (sub / "scratch").mkdir()
+    (sub / "scratch" / "todo.md").write_text("개인 메모\n", encoding="utf-8")
+    head = sandbox.head(sub)
+    billing.commit(files={".gitignore": "", "scratch/todo.md": "# 원격의 파일\n"})  # 원격이 무시 규칙을 풀고 같은 경로를 커밋했다
+
+    result = _pull(sandbox, clone)
+
+    assert result.returncode == 0, result.stderr
+    assert sandbox.head(sub) == head
+    assert (sub / "scratch" / "todo.md").read_text(encoding="utf-8") == "개인 메모\n"
+    state, line = _outcomes(result)["projects/billing"]
+    assert state == "건너뜀" and "scratch/todo.md" in line and "무시" in line
+
+
+# --- 추적 브랜치를 알 수 없는 경우 -------------------------------------------------------------
+
+
+def _forget_remote_head(sandbox, sub):
+    """서브모듈에서 `origin/HEAD`를 지운다. `.gitmodules`에 추적 브랜치가 없으면 추적 브랜치를 알 길이 그것뿐이다."""
+    sandbox.git("remote", "set-head", "origin", "-d", cwd=sub)
+
+
+def test_추적_브랜치를_받기_전의_origin_HEAD로_알아내지_않아_작업_브랜치를_올리지_않는다(sandbox):
+    """기록된 추적 브랜치가 없으면 원격의 기본 브랜치가 추적 브랜치다. fetch가 `origin/HEAD`를 되살려 주므로 fetch 뒤에 정한다."""
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    root.register(billing)  # -b 없이 등록해 .gitmodules에 추적 브랜치가 없다
+    clone = root.set_up_clone()
+    sub = _sub(clone)
+    sandbox.git("checkout", "-b", "feature", cwd=sub)
+    feature_head = sandbox.head(sub)
+    billing.commit(branch="feature")  # 원격의 feature가 앞서 있다
+    _forget_remote_head(sandbox, sub)
+
+    result = _pull(sandbox, clone)
+
+    assert result.returncode == 0, result.stderr
+    assert sandbox.branch(sub) == "feature" and sandbox.head(sub) == feature_head
+    state, line = _outcomes(result)["projects/billing"]
+    assert state == "건너뜀" and "feature" in line and "main" in line and "fetch만" in line
+
+
+def test_추적_브랜치를_끝내_알_수_없으면_현재_브랜치를_올리지_않고_fetch만_하고_건너뛴다(sandbox):
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    root.register(billing)
+    clone = root.set_up_clone()
+    sub = _sub(clone)
+    sandbox.git("checkout", "-b", "feature", cwd=sub)
+    feature_head = sandbox.head(sub)
+    latest = billing.commit(branch="feature")
+    billing.set_default_branch("gone")  # 원격의 기본 브랜치가 가리키는 브랜치가 없어 fetch도 origin/HEAD를 만들지 못한다
+    _forget_remote_head(sandbox, sub)
+
+    result = _pull(sandbox, clone)
+
+    assert result.returncode == 0, result.stderr
+    assert sandbox.branch(sub) == "feature" and sandbox.head(sub) == feature_head  # 루트처럼 현재 브랜치를 올리지 않았다
+    assert _remote_tip(sandbox, sub, "feature") == latest  # fetch는 했다
+    state, line = _outcomes(result)["projects/billing"]
+    assert state == "건너뜀" and "추적 브랜치를 알 수 없" in line
