@@ -18,6 +18,19 @@ export NL TAB
 # 루트 저장소의 표시 이름. 지식 저장소는 경로를 그대로 쓴다.
 ROOT_LABEL="루트 저장소"
 
+# 첫 번째 비어 있지 않은 줄.
+first_line() {
+    printf '%s\n' "$1" | sed -n '/./{p;q;}'
+}
+
+# print_group <이름> <줄 목록>: 줄마다 `<이름>: <줄>`로 적는다. 목록이 비어 있으면 아무것도 적지 않는다.
+print_group() {
+    [ -n "$2" ] || return 0
+    printf '%s' "$2" | while IFS= read -r pg_line; do
+        printf '%s: %s\n' "$1" "$pg_line"
+    done
+}
+
 # 등록된 지식 저장소를 한 줄에 하나씩 `<경로><탭><서브모듈 이름>`으로 적는다. 서브모듈 이름은 .gitmodules의 이름이다.
 # 등록은 .gitmodules의 항목이고, 루트가 기록한 커밋(gitlink)이 없는 항목은 건너뛴다(`just setup`과 같은 기준).
 # .gitmodules를 읽지 못하면 이유를 stderr에 적고 실패한다.
@@ -116,4 +129,50 @@ pointer_changes() {
 # 루트 저장소가 기록한 서브모듈 $1의 커밋과 실제로 체크아웃된 커밋이 다른가(스테이징하지 않은 포인터 변경). 서브모듈 안의 미커밋 변경은 보지 않는다.
 pointer_changed() {
     ! git diff-files --quiet --ignore-submodules=dirty -- "$1"
+}
+
+# 루트 저장소의 커밋 $2(기본은 HEAD)가 경로 $1에 기록한 서브모듈 커밋을 적는다. 그 커밋에 서브모듈 기록이 없으면(커밋 전의
+# 등록, 첫 커밋 전, 없는 브랜치) 실패한다.
+recorded_commit() {
+    rcm_line=$(git --literal-pathspecs ls-tree "${2:-HEAD}" -- "$1" 2>/dev/null) || return 1
+    # 출력은 "<모드> <종류> <해시><탭><경로>"이고, 서브모듈은 160000 commit이다.
+    case $rcm_line in
+        "160000 commit "*) ;;
+        *) return 1 ;;
+    esac
+    rcm_rest=${rcm_line#160000 commit }
+    printf '%s\n' "${rcm_rest%%"$TAB"*}"
+}
+
+# 지식 저장소 $1의 origin 브랜치 어디에든 커밋 $2가 있는가. 마지막으로 받거나 푸시한 원격 정보 기준이고 원격에 접속하지 않는다.
+# 저장소에 그 커밋이 아예 없어도(for-each-ref가 실패한다) 원격에 없는 것이다.
+repo_has_remote_commit() {
+    repo_initialized "$1" || return 1
+    rhc_refs=$(git -C "$1" for-each-ref --contains "$2" --format='%(refname)' refs/remotes/origin 2>/dev/null) || return 1
+    [ -n "$rhc_refs" ]
+}
+
+# 루트 저장소의 HEAD가 기록한 서브모듈 커밋 가운데 원격에 있다고 확인되지 않는 것을 `<경로> <짧은 해시>`로 한 줄에 하나씩 적는다.
+# 푸시하면 원격의 루트 저장소가 원격에 없는 커밋을 가리키게 되는 지식 저장소를 찾는 것이다. 표준 입력으로 knowledge_repos의 출력을
+# 받고, $1은 루트 저장소의 현재 브랜치다.
+# - 루트의 origin/$1이 이미 같은 커밋을 기록하고 있으면 푸시가 새로 알리는 것이 아니라서 넘어간다. 그 커밋을 로컬에 아직 받아 오지
+#   않았거나 저장소를 초기화하지 않았어도 마찬가지다.
+# - 초기화된 지식 저장소: 그 저장소의 원격 추적 참조에 기록된 커밋이 있어야 한다. 마지막으로 받거나 푸시한 시점의 정보라서, 그 사이에
+#   원격에 올라간 커밋은 없는 것으로 보고 거부하는 쪽(안전한 쪽)으로 틀린다.
+# - 초기화되지 않은 지식 저장소: 확인할 저장소가 없으므로 확인할 수 없는 것으로 적는다.
+# - HEAD에 기록이 없는 등록(아직 커밋하지 않은 것)은 푸시되지 않으므로 보지 않는다.
+unpublished_pointers() {
+    up_branch=$1
+    while IFS="$TAB" read -r up_path _; do
+        [ -n "$up_path" ] || continue
+        up_sha=$(recorded_commit "$up_path") || continue
+        [ "$(recorded_commit "$up_path" "refs/remotes/origin/$up_branch")" != "$up_sha" ] || continue
+        if repo_initialized "$up_path"; then
+            ! repo_has_remote_commit "$up_path" "$up_sha" || continue
+            up_note=
+        else
+            up_note=" (초기화되지 않아 확인할 수 없다)"
+        fi
+        printf '%s %s%s\n' "$up_path" "$(printf %.7s "$up_sha")" "$up_note"
+    done
 }

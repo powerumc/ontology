@@ -47,10 +47,6 @@ pull:
         esac
     }
 
-    first_line() {
-        printf '%s\n' "$1" | sed -n '/./{p;q;}'
-    }
-
     # pull_one <경로> <표시 이름> <서브모듈 이름>
     # 서브모듈 이름이 비어 있으면(루트 저장소) 현재 브랜치를 origin의 같은 이름 브랜치로 올린다.
     # 지식 저장소는 추적 브랜치에 있을 때만 올린다. 추적 브랜치는 fetch 뒤에 정한다(.gitmodules에 기록이 없으면
@@ -171,12 +167,6 @@ pull:
     EOF
 
     # --- 요약 ---
-    print_group() {
-        [ -n "$2" ] || return 0
-        printf '%s' "$2" | while IFS= read -r pg_line; do
-            printf '%s: %s\n' "$1" "$pg_line"
-        done
-    }
     echo
     echo "== 요약 =="
     print_group 갱신됨 "$updated"
@@ -199,6 +189,185 @@ pull:
         echo "루트 저장소의 서브모듈 포인터가 바뀌었습니다. 커밋하지 않았습니다. 확인한 뒤 직접 커밋하세요:"
         printf '%s' "$pointers" | sed 's/^/  /'
     fi
+    if [ "$need_setup" = 1 ]; then
+        echo
+        echo "초기화되지 않은 서브모듈이 있습니다. just setup으로 초기화하세요."
+    fi
+
+    if [ -n "$failed" ] || [ "$list_failed" = 1 ]; then
+        exit 1
+    fi
+
+# push: 이미 커밋된 것만 올린다. 지식 저장소를 먼저 하나씩 올리고, 모두 성공하면 루트 저장소를 올린다.
+# 순서와 중단 조건이 이 명령의 약속이다.
+# - 지식 저장소: 올릴 커밋이 있는 곳만 현재 브랜치를 origin의 같은 이름 브랜치로 올린다. 원격에 없는 브랜치는 만든다.
+#   올릴 것이 없는 곳은 건드리지 않는다(원격에 접속하지도 않는다). 하나가 실패해도 나머지는 계속 올린다.
+# - 루트 저장소: 지식 저장소가 하나라도 실패했거나, 루트의 HEAD가 원격에서 확인되지 않는 서브모듈 커밋을 가리키면 올리지 않는다.
+#   (원격의 루트 저장소가 원격에 없는 커밋을 가리키게 되기 때문이다.)
+# - 미커밋 변경은 올라가지 않는다. 그런 저장소는 올리기 전에 목록으로 알린다. 어떤 저장소도 커밋하거나 스테이징하지 않는다.
+# 끝에 저장소별 결과(푸시됨, 올릴 것 없음, 건너뜀, 실패와 그 이유)를 요약한다. 실패가 있으면 1로 끝난다.
+# 스크립트 검사를 푸시 관문으로 끼우는 자리는 레시피 안에 표시해 두었다(#15).
+
+# 루트 저장소와 모든 지식 저장소의 커밋한 것을 푸시한다. 지식 저장소가 먼저다.
+[no-exit-message]
+push:
+    #!/usr/bin/env sh
+    # 한 저장소의 문제로 나머지가 멈추지 않도록 -e는 쓰지 않는다. 실패할 수 있는 명령은 그때마다 직접 처리한다.
+    set -u
+    . "{{source_directory()}}/lib.sh"
+
+    pushed=
+    nothing=
+    skipped=
+    failed=
+    failed_repos=
+    need_setup=0
+    list_failed=0
+
+    # record <pushed|nothing|skipped|failed> <표시 이름> [상세]
+    record() {
+        line=$2
+        if [ -n "${3:-}" ]; then
+            line="$line — $3"
+        fi
+        case $1 in
+            pushed) pushed="$pushed$line$NL" ;;
+            nothing) nothing="$nothing$line$NL" ;;
+            skipped) skipped="$skipped$line$NL" ;;
+            failed) failed="$failed$line$NL" ;;
+        esac
+    }
+
+    # git이 푸시를 거부하거나 실패한 이유를 한 줄로 추린다. 거부 줄(` ! [rejected] …`), fatal, error 순으로 찾는다.
+    push_failure_reason() {
+        pf_reason=$(printf '%s\n' "$1" | grep -m1 -E '^ *! ' || true)
+        [ -n "$pf_reason" ] || pf_reason=$(printf '%s\n' "$1" | grep -m1 -E '^(fatal|error):' || true)
+        [ -n "$pf_reason" ] || pf_reason=$(first_line "$1")
+        printf '%s\n' "$pf_reason" | sed 's/^ *//; s/  */ /g'
+    }
+
+    # push_one <경로> <표시 이름>
+    # 경로 `.`는 루트 저장소다. 결과는 record로 남기고 항상 0으로 돌아온다.
+    push_one() {
+        po_path=$1
+        po_label=$2
+
+        if ! repo_initialized "$po_path"; then
+            need_setup=1
+            record skipped "$po_label" "초기화되지 않았다. just setup으로 초기화하세요"
+            return 0
+        fi
+        if ! git -C "$po_path" remote get-url origin >/dev/null 2>&1; then
+            record skipped "$po_label" "origin 원격이 없다"
+            return 0
+        fi
+        if ! git -C "$po_path" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+            record nothing "$po_label" "커밋이 아직 없다"
+            return 0
+        fi
+        po_branch=$(repo_branch "$po_path")
+        if ! po_count=$(repo_unpushed_count "$po_path" "$po_branch"); then
+            record failed "$po_label" "푸시하지 않은 커밋 수를 세지 못했다"
+            return 0
+        fi
+        if [ "$po_count" = 0 ]; then
+            record nothing "$po_label"
+            return 0
+        fi
+        if [ -z "$po_branch" ]; then
+            record skipped "$po_label" "detached HEAD($(git -C "$po_path" rev-parse --short HEAD 2>/dev/null))라 푸시하지 않았다. 원격에 없는 커밋 ${po_count}개가 있다. 브랜치로 옮긴 뒤 푸시하세요"
+            return 0
+        fi
+
+        if [ "$po_path" = . ]; then
+            # 루트 저장소는 지식 저장소가 모두 올라간 뒤에, 가리키는 커밋이 원격에 있을 때만 올린다.
+            if [ "$list_failed" = 1 ]; then
+                record skipped "$po_label" "지식 저장소의 목록을 읽지 못해 어느 저장소를 먼저 올려야 하는지 알 수 없어 푸시하지 않았다"
+                return 0
+            fi
+            if [ -n "$failed_repos" ]; then
+                record skipped "$po_label" "지식 저장소 푸시에 실패해 푸시하지 않았다: ${failed_repos% }"
+                return 0
+            fi
+            po_dangling=$(printf '%s\n' "$repos" | unpublished_pointers "$po_branch")
+            if [ -n "$po_dangling" ]; then
+                record failed "$po_label" "원격에서 확인되지 않는 서브모듈 커밋을 가리켜 푸시하지 않았다. 그 저장소에서 커밋을 푸시한 뒤 다시 하세요: $(printf '%s' "$po_dangling" | tr '\n' ',' | sed 's/,/, /g')"
+                return 0
+            fi
+        fi
+
+        po_new=
+        if ! repo_has_remote_branch "$po_path" "$po_branch"; then
+            po_new=" (원격에 새로 만듦)"
+        fi
+        echo "푸시 중: $po_label ($po_branch)"
+        # 현재 브랜치를 같은 이름의 원격 브랜치로 올린다. 브랜치를 명시해 push.default나 추적 브랜치 설정이 대상을 바꾸지 못하게 하고,
+        # 서브모듈은 따라 올리지 않는다(push.recurseSubmodules). 이유를 읽으므로 메시지 언어를 고정한다.
+        if po_out=$(LC_ALL=C git -C "$po_path" push --no-recurse-submodules origin "refs/heads/$po_branch:refs/heads/$po_branch" 2>&1 </dev/null); then
+            record pushed "$po_label" "$po_branch$po_new, 커밋 ${po_count}개"
+        else
+            record failed "$po_label" "푸시에 실패했다: $(push_failure_reason "$po_out")"
+            if [ "$po_path" != . ]; then
+                failed_repos="$failed_repos$po_path "
+            fi
+        fi
+        return 0
+    }
+
+    # 올리기 전에 미커밋 변경이 있는 저장소를 알린다. 그 변경은 올라가지 않는다.
+    # scan_uncommitted <경로> <표시 이름>
+    scan_uncommitted() {
+        repo_initialized "$1" || return 0
+        if ! su_changes=$(repo_changes "$1"); then
+            uncommitted="$uncommitted$2: 미커밋 변경을 확인하지 못했다$NL"
+        elif [ -n "$su_changes" ]; then
+            uncommitted="$uncommitted$2: $(printf '%s\n' "$su_changes" | wc -l | tr -d ' ')개$NL"
+        fi
+    }
+
+    if ! repos=$(knowledge_repos </dev/null); then
+        list_failed=1
+        repos=
+    fi
+
+    # --- 미커밋 변경 보고 ---
+    uncommitted=
+    scan_uncommitted . "$ROOT_LABEL"
+    while IFS="$TAB" read -r repo_path repo_name; do
+        [ -n "$repo_path" ] || continue
+        scan_uncommitted "$repo_path" "$repo_path" </dev/null
+    done <<EOF
+    $repos
+    EOF
+    if [ -n "$uncommitted" ]; then
+        echo "미커밋 변경이 있는 저장소. 이 변경은 올라가지 않습니다(커밋한 것만 올립니다):"
+        printf '%s' "$uncommitted" | sed 's/^/  /'
+        echo
+    fi
+
+    # --- 푸시 관문 자리(#15) ---
+    # 여기까지는 아무것도 바꾸지 않았다. 푸시 전에 스크립트 검사를 돌려 오류가 있으면, 요약 없이 여기서 `exit 1`로 끝내면
+    # 어떤 저장소도 올라가지 않는다. 강제 옵션과 루트 기본 규칙의 관문 켜고 끄기도 이 자리에서 다룬다.
+    # 아래 순서(지식 저장소가 먼저, 모두 성공하면 루트)와 중단 조건은 관문이 꺼져 있거나 넘겨져도 그대로다.
+
+    # --- 지식 저장소를 먼저 ---
+    while IFS="$TAB" read -r repo_path repo_name; do
+        [ -n "$repo_path" ] || continue
+        push_one "$repo_path" "$repo_path" </dev/null
+    done <<EOF
+    $repos
+    EOF
+
+    # --- 모두 성공한 뒤에 루트 저장소 ---
+    push_one . "$ROOT_LABEL" </dev/null
+
+    # --- 요약 ---
+    echo
+    echo "== 요약 =="
+    print_group 푸시됨 "$pushed"
+    print_group "올릴 것 없음" "$nothing"
+    print_group 건너뜀 "$skipped"
+    print_group 실패 "$failed"
     if [ "$need_setup" = 1 ]; then
         echo
         echo "초기화되지 않은 서브모듈이 있습니다. just setup으로 초기화하세요."
