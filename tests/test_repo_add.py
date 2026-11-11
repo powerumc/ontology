@@ -187,6 +187,12 @@ PUBLIC_ORIGIN_NOTATIONS = [
     "git://github.com/powerumc/ontology.git",
     "https://user:token@github.com/powerumc/ontology.git",
     "https://GitHub.com/PowerUmc/Ontology.git",
+    "git@github.com:/powerumc/ontology.git",  # scp 꼴의 경로 앞 슬래시
+    "https://github.com//powerumc/ontology.git",  # 겹친 슬래시
+    "https://www.github.com/powerumc/ontology",  # www 호스트
+    "ssh://git@ssh.github.com:443/powerumc/ontology.git",  # GitHub이 안내하는 443 포트 접속
+    "git+ssh://git@github.com/powerumc/ontology.git",
+    "ssh+git://git@github.com/powerumc/ontology",
 ]
 
 
@@ -198,6 +204,42 @@ def test_origin이_공개_원본이면_표기와_무관하게_거부하고_아�
     result = _rejected_leaving_everything_unchanged(sandbox, root, sandbox.knowledge_remote("billing").url)
 
     assert "공개 원본" in result.stderr  # 이유를 알린다
+
+
+@pytest.mark.parametrize(
+    "origin",
+    ["git@github-personal:powerumc/ontology.git", "ssh://git@github-personal/powerumc/ontology.git"],
+)
+def test_ssh_설정의_호스트_별칭으로_적은_공개_원본도_거부한다(sandbox, origin):
+    """여러 GitHub 계정을 쓰는 사람은 `~/.ssh/config`의 `Host` 별칭으로 주소를 적는다. 별칭을 풀어 호스트를 본다."""
+    sandbox.ssh_alias("github-personal", "github.com")
+    root = sandbox.root()
+    sandbox.git("remote", "set-url", "origin", origin, cwd=root.work)
+
+    result = _rejected_leaving_everything_unchanged(sandbox, root, sandbox.knowledge_remote("billing").url)
+
+    assert "공개 원본" in result.stderr
+
+
+def test_ssh_호스트_별칭이_다른_호스트를_가리키면_등록된다(sandbox):
+    sandbox.ssh_alias("work-github", "git.example.invalid")
+    root = sandbox.root()
+    sandbox.git("remote", "set-url", "origin", "git@work-github:powerumc/ontology.git", cwd=root.work)
+
+    result = _add(sandbox, root, sandbox.knowledge_remote("billing").url)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_insteadOf로_줄여_쓴_공개_원본_주소도_거부한다(sandbox):
+    """`git remote get-url`은 `url.<기준>.insteadOf` 축약을 푼 주소를 준다."""
+    sandbox.git("config", "--global", "url.git@github.com:powerumc/.insteadOf", "gh:", cwd=sandbox.base)
+    root = sandbox.root()
+    sandbox.git("remote", "set-url", "origin", "gh:ontology.git", cwd=root.work)
+
+    result = _rejected_leaving_everything_unchanged(sandbox, root, sandbox.knowledge_remote("billing").url)
+
+    assert "공개 원본" in result.stderr
 
 
 def test_푸시할_주소가_공개_원본이어도_거부한다(sandbox):
@@ -317,3 +359,13 @@ def test_gitmodules를_읽지_못하면_거부하고_아무것도_바꾸지_않�
     result = _rejected_leaving_everything_unchanged(sandbox, root, sandbox.knowledge_remote("docs").url)
 
     assert ".gitmodules" in result.stderr
+
+
+@pytest.mark.parametrize("url", ["../billing.git", "./billing.git", ".."])
+def test_상대_URL은_받지_않고_거부한다(sandbox, url):
+    """`git submodule add`는 상대 URL을 루트의 origin 기준으로, 사전 확인은 현재 디렉토리 기준으로 푼다. 받지 않는다."""
+    root = sandbox.root()
+
+    result = _rejected_leaving_everything_unchanged(sandbox, root, url)
+
+    assert "상대" in result.stderr

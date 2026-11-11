@@ -36,6 +36,24 @@ def _sub_state(sandbox, sub):
     }
 
 
+def _gitdir(root, name="billing"):
+    """루트의 `.git/modules` 안에 있는 서브모듈 저장소. 작업 트리가 없어도 남아 있다."""
+    return root.work / ".git" / "modules" / "projects" / name
+
+
+def _gitdir_state(sandbox, root, name="billing"):
+    """서브모듈 저장소의 브랜치·태그·스태시. 작업 트리가 없어도 읽는다. 저장소가 없으면 `None`."""
+    gitdir = _gitdir(root, name)
+    if not gitdir.exists():
+        return None
+    # core.worktree가 가리키는 작업 트리가 없으면 git이 움직이지 못하므로 있는 디렉토리를 작업 트리로 준다.
+    git = ["--git-dir", gitdir, "--work-tree", root.work]
+    return {
+        "refs": sandbox.git(*git, "for-each-ref", cwd=root.work).stdout,
+        "stash": sandbox.git(*git, "reflog", "show", "--format=%gd %gs", "refs/stash", cwd=root.work, check=False).stdout,
+    }
+
+
 def _refused_leaving_everything_unchanged(sandbox, root, *args, name="billing", sub_readable=True):
     """제거를 거부했는지, 루트 저장소와 지식 저장소 어느 쪽도 바뀌지 않았는지 확인하고 결과를 돌려준다.
 
@@ -44,11 +62,14 @@ def _refused_leaving_everything_unchanged(sandbox, root, *args, name="billing", 
     sub = _sub(root, name)
     root_before = sandbox.snapshot(root.work)
     sub_before = _sub_state(sandbox, sub) if sub_readable and (sub / ".git").exists() else None
+    gitdir_before = _gitdir_state(sandbox, root, name) if sub_readable else None
 
     result = _remove(sandbox, root, name, *args)
 
     assert result.returncode != 0
     assert sandbox.snapshot(root.work) == root_before
+    if sub_readable:
+        assert _gitdir_state(sandbox, root, name) == gitdir_before
     if sub_before is not None:
         assert _sub_state(sandbox, sub) == sub_before
     return result
@@ -339,12 +360,17 @@ def test_무시되는_파일만_있으면_제거를_막지_않는다(sandbox):
     exclude.write_text(".onto/\n", encoding="utf-8")
     (sub / ".onto").mkdir()
     (sub / ".onto" / "Justfile").write_text("# 복사된 기능\n", encoding="utf-8")
+    (sub / ".claude" / "skills" / "onto-ingest").mkdir(parents=True)
+    (sub / ".claude" / "skills" / "onto-ingest" / "SKILL.md").write_text("# 복사된 스킬\n", encoding="utf-8")
+    exclude.write_text(".onto/\n.claude/skills/onto-*/\n", encoding="utf-8")
     assert sandbox.git("status", "--porcelain", cwd=sub).stdout == ""
 
     result = _remove(sandbox, root, "billing")
 
     assert result.returncode == 0, result.stderr
     assert not _sub(root).exists()
+    assert ".onto" not in result.stdout + result.stderr  # 루트 관리 파일은 알릴 필요가 없다
+    assert "onto-ingest" not in result.stdout + result.stderr
 
 
 def test_거부할_때는_이유와_강제_옵션이_있다는_것을_알린다(sandbox):
@@ -561,3 +587,195 @@ def test_버려지는_작업이_많으면_일부만_보이고_전체_개수를_�
     assert "25개" in result.stderr and "12개" in result.stderr  # 전체 개수
     assert result.stderr.count("draft-") < 25 and result.stderr.count("작업 work-") < 12  # 목록은 줄여서 보인다
     assert "외 5개" in result.stderr and "외 2개" in result.stderr  # 보이지 않는 개수
+
+
+# --- 작업 트리가 없어도 git 내부의 서브모듈 저장소에 남은 작업을 지킨다 -------------------
+
+
+def _commit_not_pushed(sandbox, root):
+    _local_commit(sandbox, _sub(root))
+
+
+def _stash_a_change(sandbox, root):
+    sub = _sub(root)
+    (sub / "README.md").write_text("# 치워 둔 변경\n", encoding="utf-8")
+    sandbox.git("stash", cwd=sub)
+
+
+def _deinit_after_committing_pointer(sandbox, root):
+    """흔한 수동 제거 절차. 포인터를 커밋하면 `-f` 없이도 deinit이 성공한다."""
+    sandbox.git("add", "projects/billing", cwd=root.work)
+    sandbox.git("commit", "--allow-empty", "-m", "point billing at local work", cwd=root.work)
+    sandbox.git("submodule", "deinit", "projects/billing", cwd=root.work)
+
+
+def _delete_work_tree(sandbox, root):
+    shutil.rmtree(_sub(root))
+
+
+@pytest.mark.parametrize("drop_work_tree", [_deinit_after_committing_pointer, _delete_work_tree], ids=["deinit", "rm_rf"])
+@pytest.mark.parametrize(
+    ("leave_work", "reported"),
+    [(_commit_not_pushed, "작업 local.md"), (_stash_a_change, "스태시")],
+    ids=["푸시하지_않은_커밋", "스태시"],
+)
+def test_작업_트리가_없어도_서브모듈_저장소에_남은_작업이_있으면_거부하고_강제하면_출력에_남기고_제거한다(
+    sandbox, leave_work, reported, drop_work_tree
+):
+    """작업 트리를 먼저 치웠어도 미푸시 커밋과 스태시는 `.git/modules`의 저장소에만 있다. 제거가 그것을 지운다."""
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    leave_work(sandbox, root)
+    drop_work_tree(sandbox, root)
+    assert not (_sub(root) / ".git").exists()  # 작업 트리에는 서브모듈 저장소로 이어지는 것이 없다
+
+    refused = _refused_leaving_everything_unchanged(sandbox, root)
+    assert reported in refused.stderr and "--force" in refused.stderr
+    assert _gitdir(root).is_dir()
+
+    forced = _remove(sandbox, root, "billing", "--force")
+
+    state = sandbox.snapshot(root.work)
+    assert forced.returncode == 0, forced.stderr
+    assert reported in forced.stdout + forced.stderr  # 버려지는 것을 남긴다
+    assert not _gitdir(root).exists()
+    assert state["modules"] == [] and state["config"] == "" and state["gitmodules"] is None
+
+
+def test_작업_트리가_없어도_푸시까지_마친_저장소는_제거를_막지_않는다(sandbox):
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    _deinit_after_committing_pointer(sandbox, root)
+
+    result = _remove(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stderr
+    assert not _gitdir(root).exists()
+
+
+# --- git이 어느 저장소에 어떤 이름으로 두었든 그 저장소를 지운다 ---------------------------
+
+
+def test_gitmodules_항목이_없고_서브모듈_이름이_경로와_다르면_git_내부의_저장소와_설정도_지운다(sandbox):
+    """이름을 `.gitmodules`에서 알 수 없으면 경로로 짐작하지 않고, 작업 트리의 `.git`이 가리키는 저장소로 정한다."""
+    root = sandbox.root()
+    billing = sandbox.knowledge_remote("billing")
+    sandbox.git("submodule", "add", "--name", "legacy-name", billing.url, "projects/billing", cwd=root.work)
+    sandbox.git("add", "-A", cwd=root.work)
+    sandbox.git("commit", "-m", "add billing as legacy-name", cwd=root.work)
+    sandbox.git("config", "-f", ".gitmodules", "--remove-section", "submodule.legacy-name", cwd=root.work)
+    assert sandbox.snapshot(root.work)["modules"] == ["modules/legacy-name"]
+
+    result = _remove(sandbox, root, "billing")
+
+    state = sandbox.snapshot(root.work)
+    assert result.returncode == 0, result.stderr
+    assert state["modules"] == [] and state["config"] == ""
+
+
+# --- 태그와 연결된 작업 트리 ----------------------------------------------------------
+
+
+def test_태그에만_있는_커밋도_원격에_없으면_거부한다(sandbox):
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    sub = _sub(root)
+    sandbox.git("checkout", "--detach", cwd=sub)
+    _local_commit(sandbox, sub)
+    sandbox.git("tag", "keep-me", cwd=sub)
+    sandbox.git("checkout", "main", cwd=sub)  # 그 커밋은 태그로만 이어진다
+
+    result = _refused_leaving_everything_unchanged(sandbox, root)
+
+    assert "태그" in result.stderr and "작업 local.md" in result.stderr
+
+
+def test_푸시한_태그는_제거를_막지_않는다(sandbox):
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    sub = _sub(root)
+    sandbox.git("tag", "v1", cwd=sub)  # 푸시된 커밋에 붙인 태그
+
+    result = _remove(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_연결된_작업_트리가_있으면_거부하고_경로를_알리며_강제하면_제거한다(sandbox):
+    """`git worktree add`로 서브모듈 밖에 만든 작업 트리는 제거하면 `.git`이 깨진다."""
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    linked = sandbox.new_dir("extra", "linked-billing")
+    sandbox.git("worktree", "add", "-b", "side", linked, cwd=_sub(root))
+
+    refused = _refused_leaving_everything_unchanged(sandbox, root)
+    assert str(linked) in refused.stderr and "연결된 작업 트리" in refused.stderr
+
+    forced = _remove(sandbox, root, "billing", "--force")
+
+    assert forced.returncode == 0, forced.stderr
+    assert str(linked) in forced.stdout + forced.stderr
+    assert not _gitdir(root).exists()
+
+
+# --- 무시되는 파일 ---------------------------------------------------------------------
+
+
+def _ignore(sandbox, sub, *patterns):
+    exclude = Path(sandbox.git("rev-parse", "--path-format=absolute", "--git-path", "info/exclude", cwd=sub).stdout.strip())
+    exclude.write_text("".join(f"{p}\n" for p in patterns), encoding="utf-8")
+
+
+def test_무시되는_파일은_제거를_막지_않지만_함께_지워진다고_알린다(sandbox):
+    """`.gitignore`가 제외한 사용자의 파일(로컬 메모, `.env`)은 git에 없어서 제거하면 되살릴 수 없다."""
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    sub = _sub(root)
+    _ignore(sandbox, sub, ".env", ".onto/")
+    (sub / ".env").write_text("TOKEN=secret\n", encoding="utf-8")
+    (sub / ".onto").mkdir()
+    (sub / ".onto" / "Justfile").write_text("# 복사된 기능\n", encoding="utf-8")
+    assert sandbox.git("status", "--porcelain", cwd=sub).stdout == ""
+
+    result = _remove(sandbox, root, "billing")
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, result.stderr
+    assert not _sub(root).exists()
+    assert ".env" in output and "무시" in output
+    assert ".onto" not in output
+
+
+def test_거부할_때와_강제로_제거할_때도_무시되는_파일을_알린다(sandbox):
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    sub = _sub(root)
+    _ignore(sandbox, sub, ".env")
+    (sub / ".env").write_text("TOKEN=secret\n", encoding="utf-8")
+    _add_untracked_file(sandbox, sub)
+
+    refused = _refused_leaving_everything_unchanged(sandbox, root)
+    forced = _remove(sandbox, root, "billing", "--force")
+
+    assert ".env" in refused.stderr
+    assert forced.returncode == 0, forced.stderr
+    assert ".env" in forced.stdout + forced.stderr
+
+
+# --- .gitmodules의 다른 항목은 스테이징하지 않는다 ---------------------------------------
+
+
+def test_gitmodules에_스테이징하지_않은_다른_항목의_수정은_그대로_두고_제거한_항목만_스테이징한다(sandbox):
+    root = sandbox.root()
+    root.register(sandbox.knowledge_remote("billing"))
+    root.register(sandbox.knowledge_remote("docs"))
+    sandbox.git("config", "-f", ".gitmodules", "submodule.projects/docs.branch", "dev", cwd=root.work)  # 손으로 고쳤다
+
+    result = _remove(sandbox, root, "billing")
+
+    staged = sandbox.git("diff", "--cached", "--", ".gitmodules", cwd=root.work).stdout
+    unstaged = sandbox.git("diff", "--", ".gitmodules", cwd=root.work).stdout
+    assert result.returncode == 0, result.stderr
+    assert 'submodule "projects/billing"' in staged and "branch = dev" not in staged  # 제거만 스테이징되었다
+    assert "+\tbranch = dev" in unstaged  # 손으로 고친 것은 스테이징하지 않은 채 남았다
+    assert "projects/billing" not in (root.work / ".gitmodules").read_text(encoding="utf-8")

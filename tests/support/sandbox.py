@@ -43,6 +43,32 @@ _GITCONFIG = """\
 	allow = always
 """
 
+# 테스트용 `ssh`. 접속하지 않고, `ssh -G <호스트>`에는 `sandbox.ssh_alias`로 적어 둔 별칭 표로 `hostname`을 알려 준다.
+# 사용자의 `~/.ssh/config`를 읽지 않으므로 테스트가 개발자의 ssh 설정에 따라 달라지지 않는다.
+_SSH_STUB = """\
+#!/bin/sh
+here=$(dirname "$0")
+if [ "${1:-}" != "-G" ]; then
+    echo "테스트에서는 ssh로 접속하지 않는다" >&2
+    exit 255
+fi
+shift
+if [ "${1:-}" = "--" ]; then
+    shift
+fi
+host=$1
+real=$host
+if [ -f "$here/aliases" ]; then
+    while read -r alias target; do
+        if [ "$alias" = "$host" ]; then
+            real=$target
+        fi
+    done <"$here/aliases"
+fi
+echo "host $host"
+echo "hostname $real"
+"""
+
 # `uv run`이 실행 중인 환경을 알리려고 남기는 변수. 샌드박스 안의 명령에는 필요 없다.
 _RUNNER_STATE_VARS = ("VIRTUAL_ENV", "UV", "UV_RUN_RECURSION_DEPTH")
 
@@ -72,7 +98,12 @@ class Sandbox:
             for k, v in os.environ.items()
             if not k.startswith(("GIT_", "JUST_")) and k not in _RUNNER_STATE_VARS
         }
-        env["PATH"] = _path_without_virtualenv(env.get("PATH", ""))
+        self._ssh_dir = config_dir / "bin"
+        self._ssh_dir.mkdir()
+        ssh = self._ssh_dir / "ssh"
+        ssh.write_text(_SSH_STUB, encoding="utf-8")
+        ssh.chmod(0o755)
+        env["PATH"] = os.pathsep.join([str(self._ssh_dir), _path_without_virtualenv(env.get("PATH", ""))])
         env.update(
             GIT_CONFIG_GLOBAL=str(gitconfig),  # ~/.gitconfig 와 XDG 전역 설정을 대신한다
             GIT_CONFIG_NOSYSTEM="1",
@@ -118,6 +149,11 @@ class Sandbox:
         """`repo`가 체크아웃한 브랜치 이름. detached HEAD이면 `None`."""
         result = self.git("symbolic-ref", "--quiet", "--short", "HEAD", cwd=repo, check=False)
         return result.stdout.strip() if result.returncode == 0 else None
+
+    def ssh_alias(self, alias: str, hostname: str) -> None:
+        """테스트용 `ssh -G <alias>`가 `hostname`을 알려 주게 한다. ssh 설정의 `Host`·`HostName`에 해당한다."""
+        with (self._ssh_dir / "aliases").open("a", encoding="utf-8") as f:
+            f.write(f"{alias} {hostname}\n")
 
     def snapshot(self, repo: Path) -> dict[str, object]:
         """저장소가 바뀐 흔적을 모은다. 앞뒤의 스냅샷이 같으면 그 사이에 아무것도 바뀌지 않은 것이다.

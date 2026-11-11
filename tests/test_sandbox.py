@@ -88,6 +88,19 @@ def test_테스트_환경에는_이_저장소의_가상환경이_새지_않는�
         assert (Path(sys.prefix) / "bin").resolve() not in path_entries
 
 
+def test_테스트의_ssh는_접속하지_않고_사용자의_ssh_설정을_읽지_않는다(sandbox):
+    """공개 원본 판별은 `ssh -G`로 호스트 별칭을 푼다. 개발자의 `~/.ssh/config`가 테스트 결과를 바꾸면 안 된다."""
+    sandbox.ssh_alias("my-alias", "git.example.invalid")
+
+    alias = sandbox.run(["ssh", "-G", "--", "my-alias"], cwd=sandbox.base)
+    plain = sandbox.run(["ssh", "-G", "github.com"], cwd=sandbox.base)
+    connect = sandbox.run(["ssh", "-T", "git@github.com"], cwd=sandbox.base, check=False)
+
+    assert "hostname git.example.invalid" in alias.stdout.splitlines()
+    assert "hostname github.com" in plain.stdout.splitlines()  # 별칭이 없으면 그 이름 그대로다
+    assert connect.returncode != 0  # 접속하지 않는다
+
+
 # --- 임시 디렉토리 안에서만 -------------------------------------------------
 
 
@@ -220,3 +233,10 @@ def test_저장소가_없는_디렉토리에서_위로_찾아_올라가_바깥_�
     result = inner.git("rev-parse", "--show-toplevel", cwd=plain, check=False)
 
     assert result.returncode != 0
+
+
+def test_온톨로지_도구_사본은_병렬_실행의_워커마다_따로_있다(onto_tool_dir):
+    """도구 사본과 `.build/`는 세션이 공유한다. xdist 워커가 같은 사본을 쓰면 서로의 산출물을 지운다."""
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+
+    assert any(part.startswith(f"onto-tool-{worker}") for part in onto_tool_dir.parts)

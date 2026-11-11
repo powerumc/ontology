@@ -35,3 +35,13 @@ def test_모듈의_명령은_어느_디렉토리에서_불러도_루트_저장�
     for result in (from_root, from_subdirectory, from_other_directory):
         assert result.returncode == 0, result.stderr
         assert Path(result.stdout.strip()) == root.resolve()
+
+
+def test_인자_없이_just_repo만_부르면_오류_없이_모듈의_명령_목록을_보여_준다(sandbox):
+    root = sandbox.root().work
+
+    result = sandbox.just("repo", cwd=root)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert "add" in result.stdout and "remove" in result.stdout
