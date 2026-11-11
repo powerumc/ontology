@@ -1,7 +1,6 @@
 """온톨로지 층의 페이지 파일: 위치에서 식별자를 얻고, frontmatter를 읽는다."""
 
 import datetime
-import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -13,8 +12,6 @@ FENCE = "---"
 INDEX_FILE = "index.md"  # 페이지에서 생성되는 인덱스. 페이지가 아니다.
 # 마크다운 문서에 흔히 쓰는 확장자. `.md`가 아닌 것은 페이지로 읽히지 않으므로, 페이지를 잘못 이름 붙인 것으로 본다.
 MARKDOWN_SUFFIXES = (".md", ".markdown", ".mdown", ".mkd")
-# 식별자의 경로 조각(`/`로 나눈 조각 하나)은 영어 소문자, 숫자, 하이픈만 쓴다.
-IDENTIFIER_SEGMENT = re.compile(r"[a-z0-9-]+")
 
 
 class FrontmatterError(Exception):

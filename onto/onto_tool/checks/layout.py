@@ -5,6 +5,7 @@
 참조가 엉뚱하게 깨져 원인을 찾기 어렵다.
 """
 
+import re
 from collections.abc import Iterator
 
 from rdflib import URIRef
@@ -13,17 +14,19 @@ from .. import vocab
 from ..compiler import Compiled
 from ..iri import entity_iri
 from ..keys import PAGE_CLASS_DIRECTORIES
+from ..rules import RuleSet
 from .catalog import MISNAMED_PAGE, MISPLACED_PAGE
 from .classes import ClassIndex
 from .labels import class_label
 from .model import Issue
 
 
-def find(compiled: Compiled) -> Iterator[Issue]:
+def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     namespace = vocab.onto_namespace(compiled.graph)
     directory_of = {URIRef(namespace + name): directory for name, directory in PAGE_CLASS_DIRECTORIES.items()}
     classes = ClassIndex(compiled.graph)
     for record in compiled.records:
+        identifier_form = re.compile(rules.of(record.directory).language.identifier_pattern)
         for file in record.misnamed_pages:
             yield Issue(MISNAMED_PAGE, file, "페이지처럼 보이지만 확장자가 `.md`가 아니라 페이지로 읽히지 않았다")
         if record.name is None:
@@ -41,8 +44,9 @@ def find(compiled: Compiled) -> Iterator[Issue]:
             actual = page.identifier.partition("/")[0] if "/" in page.identifier else None
             if not expected or expected == {actual}:
                 continue
-            # 대소문자만 다른 디렉토리(`Plan/`)는 식별자 형식 항목이 이미 보고한다. 디렉토리 이름 하나를 고치면 둘 다 사라지므로 겹쳐 알리지 않는다.
-            if actual is not None and {actual.lower()} == expected:
+            # 대소문자만 다른 디렉토리(`Plan/`)가 식별자 형식에도 어긋나면 식별자 형식 항목이 이미 보고한다. 디렉토리 이름 하나를
+            # 고치면 둘 다 사라지므로 겹쳐 알리지 않는다. 저장소의 규칙이 그 이름을 식별자로 허용하면 이 항목만 남는다.
+            if actual is not None and {actual.lower()} == expected and not identifier_form.fullmatch(actual):
                 continue
             where = f"`{actual}/` 아래" if actual else "온톨로지 층 최상위"
             if len(expected) > 1:

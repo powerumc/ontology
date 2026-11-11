@@ -21,7 +21,15 @@ from . import vocab
 from .errors import OntoError
 from .graphs import canonical
 from .iri import UNRESOLVED_BASE, class_iri, entity_iri, resolve_reference, unresolved_iri
-from .keys import CLASS_DECLARATION_KEYS, CLASSES_KEY, PAGE_KEYS, PROJECT_KEYS, RELATION_KEYS
+from .keys import (
+    CLASS_DECLARATION_KEYS,
+    CLASSES_KEY,
+    ONTOLOGY_YAML_KEYS,
+    PAGE_KEYS,
+    PROJECT_KEYS,
+    RELATION_KEYS,
+    RULES_KEY,
+)
 from .ontology_yaml import OntologyYamlError, read_ontology_yaml
 from .pages import (
     FrontmatterError,
@@ -48,6 +56,7 @@ UNREADABLE_FILE = "unreadable-file"  # YAML 문법 오류, frontmatter 없음, U
 INVALID_VALUE = "invalid-value"  # 읽을 수는 있지만 값의 종류가 맞지 않음
 INVALID_CLASS_DECLARATION = "invalid-class-declaration"  # `ontology.yaml`의 `classes`가 틀림
 INVALID_IDENTIFIER = "invalid-identifier"  # 페이지로 쓸 수 없는 식별자
+UNDEFINED_KEY = "undefined-key"  # `ontology.yaml`에 정의되지 않은 키(페이지의 정의되지 않은 키는 스크립트 검사가 페이지에서 찾는다)
 
 
 @dataclass(frozen=True)
@@ -80,6 +89,7 @@ class RepositoryRecord:
     yaml_file: str  # 루트 저장소 기준 `ontology.yaml` 경로
     has_layer: bool  # `ontology.yaml`이 있다. 없으면 컴파일이 건너뛴다
     name: str | None = None  # `ontology.yaml`의 `name`. 파일이 없거나 읽을 수 없으면 알 수 없다
+    rules: object = None  # `ontology.yaml`의 `rules` 값 그대로. 규칙을 읽고 검증하는 것은 스크립트 검사의 몫이다. 없으면 None
     pages: list[PageRecord] = field(default_factory=list)
     misnamed_pages: list[str] = field(default_factory=list)  # 페이지처럼 보이지만 확장자가 `.md`가 아니라 읽지 않은 파일의 경로
 
@@ -164,6 +174,13 @@ def _read_repository(
         read.problems.append(Problem(yaml_file, str(exc), UNREADABLE_FILE))
         return read
     name = read.record.name = str(data["name"])
+    read.record.rules = data.get(RULES_KEY)
+    unknown = sorted(str(key) for key in data if key not in ONTOLOGY_YAML_KEYS)
+    if unknown:
+        allowed = ", ".join(f"`{key}`" for key in sorted(ONTOLOGY_YAML_KEYS))
+        read.problems.append(
+            Problem(yaml_file, f"정의되지 않은 키 {', '.join(f'`{key}`' for key in unknown)}가 있다(쓸 수 있는 키: {allowed})", UNDEFINED_KEY)
+        )
 
     declarations, declared = _declare_classes(name, data.get(CLASSES_KEY), context, common_classes, yaml_file)
     read.nodes += declarations.nodes

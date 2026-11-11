@@ -14,11 +14,12 @@ from collections.abc import Iterator
 from ..compiler import PROJECT_IDENTIFIER, Compiled
 from ..iri import entity_iri, resolve_reference
 from ..keys import RELATION_KEYS
+from ..rules import RuleSet
 from .catalog import BROKEN_REFERENCE, UNREGISTERED_REPOSITORY
 from .model import Issue
 
 
-def find(compiled: Compiled) -> Iterator[Issue]:
+def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     records = compiled.records
     # 지식 저장소는 `name`으로도 서브모듈 디렉토리 이름으로도 가리킬 수 있다. 둘이 다르면 그 문제는 따로 보고한다.
     registered = {name for record in records for name in (record.directory, record.name) if name}

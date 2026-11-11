@@ -9,5 +9,6 @@ from pathlib import Path
 
 TOOL_DIR = Path(__file__).resolve().parents[1]
 VOCAB_DIR = TOOL_DIR / "vocab"
+RULES_FILE = TOOL_DIR / "rules.yaml"  # 루트 기본 규칙. 지식 저장소에서는 복사된 `.onto/rules.yaml`이 그 저장소의 기본값이다
 BUILD_DIR = TOOL_DIR / ".build"
 GRAPH_FILE = BUILD_DIR / "graph.ttl"

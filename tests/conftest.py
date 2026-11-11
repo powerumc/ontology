@@ -1,4 +1,5 @@
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,8 @@ def onto_tool_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture
-def onto_cli(sandbox: Sandbox, onto_tool_dir: Path) -> OntoCli:
-    """온톨로지 도구의 명령줄 진입점을 견본 페이지 디렉토리에 대고 실행한다."""
-    return OntoCli(sandbox, onto_tool_dir)
+def onto_cli(sandbox: Sandbox, onto_tool_dir: Path) -> Iterator[OntoCli]:
+    """온톨로지 도구의 명령줄 진입점을 견본 페이지 디렉토리에 대고 실행한다. 테스트가 고친 루트 기본 규칙은 끝나면 되돌린다."""
+    cli = OntoCli(sandbox, onto_tool_dir)
+    yield cli
+    cli.restore_root_rules()

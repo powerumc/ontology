@@ -13,11 +13,12 @@ from .. import vocab
 from ..compiler import PROJECT_IDENTIFIER, Compiled
 from ..iri import entity_iri
 from ..keys import RELATION_KEYS
+from ..rules import RuleSet
 from .catalog import ORPHAN_PAGE
 from .model import Issue
 
 
-def find(compiled: Compiled) -> Iterator[Issue]:
+def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     namespace = vocab.onto_namespace(compiled.graph)
     connected: set[object] = set()
     for key in RELATION_KEYS:

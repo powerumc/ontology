@@ -14,6 +14,7 @@ from rdflib.namespace import RDF, SH, XSD
 
 from .. import vocab
 from ..compiler import Compiled
+from ..rules import RuleSet
 from .catalog import BY_NAME, MISSING_PROPERTY, RELATION_DOMAIN, RELATION_RANGE
 from .classes import ClassIndex
 from .labels import class_label, entity_label
@@ -26,7 +27,7 @@ SUPERSEDES_RANGE = URIRef("https://onto.invalid/shape#supersedes-range")
 _EXPECTED_VALUE = {str(XSD.string): "문자열", str(XSD.date): "날짜(예: 2026-03-01)"}
 
 
-def find(compiled: Compiled) -> Iterator[Issue]:
+def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     # pyshacl은 불러오는 데 시간이 든다. build와 query는 쓰지 않으므로 검사할 때 불러온다.
     from pyshacl import validate
 

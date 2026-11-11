@@ -10,19 +10,25 @@ class Severity(Enum):
     ERROR = "오류"  # 반드시 고친다. 푸시 관문이 막는다.
     WARNING = "경고"  # 참고한다.
 
+    @classmethod
+    def from_rule(cls, text: str) -> "Severity":
+        """규칙 파일이 적는 심각도(`error`, `warning`)."""
+        return {"error": cls.ERROR, "warning": cls.WARNING}[text]
+
 
 @dataclass(frozen=True)
 class Check:
-    """스크립트 검사의 검사 항목 하나. 이름으로 가리키고, 심각도를 항목마다 바꿀 수 있다."""
+    """스크립트 검사의 검사 항목 하나. 이름으로 가리킨다. 켬/끔과 심각도는 규칙(`rules.yaml`)이 항목마다 정한다."""
 
     name: str
-    severity: Severity  # 기본 심각도. 규칙이 항목별로 덮어쓴다.
     summary: str  # 무엇을 잡는지 한 줄로
+    # 루트 전용 항목. 루트 기본 규칙만 켬/끔과 심각도를 정하고, 지식 저장소의 `rules`가 덮어쓰려 하면 오류다(공유 범위 검사).
+    root_only: bool = False
 
 
 @dataclass(frozen=True)
 class Issue:
-    """검사 항목이 찾은 문제 하나. 심각도는 항목과 규칙이 정하므로 여기에 없다."""
+    """검사 항목이 찾은 문제 하나. 심각도는 규칙이 정하므로 여기에 없다."""
 
     check: Check
     file: str  # 문제가 있는 페이지나 파일. 루트 저장소 기준 경로

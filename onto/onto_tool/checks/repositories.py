@@ -3,11 +3,12 @@
 from collections.abc import Iterator
 
 from ..compiler import Compiled
+from ..rules import RuleSet
 from .catalog import MISSING_ONTOLOGY_LAYER, REPOSITORY_NAME_MISMATCH
 from .model import Issue
 
 
-def find(compiled: Compiled) -> Iterator[Issue]:
+def find(compiled: Compiled, rules: RuleSet) -> Iterator[Issue]:
     for record in compiled.records:
         if not record.has_layer:
             yield Issue(
