@@ -1,0 +1,468 @@
+"""온톨로지 도구의 컴파일: 지식 저장소의 페이지가 그래프의 사실로 나타난다.
+
+온톨로지 도구의 명령줄 진입점을 견본 페이지 디렉토리에 대고 실행한다(`onto_cli`).
+"""
+
+import pytest
+
+from support.onto_cli import ONTOLOGY_DIR, page, repo
+
+PAGES = "projects/billing/docs/ontology"
+PLAN_FILE = f"{PAGES}/plan/auth-redesign.md"
+PROJECT_FILE = f"{PAGES}/ontology.yaml"
+
+
+def billing(*pages, **project):
+    return {"billing": repo("billing", *pages, **project)}
+
+
+# --- 식별자와 파일 -----------------------------------------------------------
+
+
+def test_페이지의_제목이_질의되고_결과의_엔티티는_파일_경로로_나온다(onto_cli):
+    root = onto_cli.root(billing(page("plan/auth-redesign", "Plan", title="인증 재설계")))
+
+    rows = onto_cli.query(root, "SELECT ?e ?t WHERE { ?e dcterms:title ?t }")
+
+    assert rows == [[PLAN_FILE, "인증 재설계"]]
+
+
+def test_식별자는_온톨로지_층_기준_상대_경로에서_확장자를_뺀_것이다(onto_cli):
+    root = onto_cli.root(
+        billing(
+            page("plan/auth-redesign", "Plan", title="인증 재설계"),
+            page("component/api/gateway", "Component", title="게이트웨이"),
+        )
+    )
+
+    rows = onto_cli.query(root, "SELECT (STR(?e) AS ?iri) WHERE { ?e dcterms:title ?t } ORDER BY ?iri")
+
+    assert [iri.rsplit("/billing/", 1)[1] for (iri,) in rows] == ["component/api/gateway", "plan/auth-redesign"]
+
+
+def test_별도의_id_필드는_없고_JSON_LD_예약어_키는_식별자를_바꾸지_못한다(onto_cli):
+    root = onto_cli.root(billing(page("plan/auth-redesign", "Plan", title="제목", id="other", **{"@id": "evil"})))
+
+    rows = onto_cli.query(root, "SELECT (STR(?e) AS ?iri) WHERE { ?e a onto:Plan }")
+
+    assert [iri.rsplit("/billing/", 1)[1] for (iri,) in rows] == ["plan/auth-redesign"]
+
+
+def test_페이지_아닌_파일은_엔티티가_되지_않는다(onto_cli):
+    """`index.md`는 생성물이라 frontmatter가 없다. `skipped.yaml`과 숨김 파일도 페이지가 아니다."""
+    files = billing(page("plan/auth-redesign", "Plan", title="인증 재설계"))
+    files["billing"].update(
+        {
+            f"{ONTOLOGY_DIR}/index.md": "# 인덱스\n\n- plan/auth-redesign\n",
+            f"{ONTOLOGY_DIR}/skipped.yaml": "- path: docs/old.md\n",
+            f"{ONTOLOGY_DIR}/.hidden/note.md": "frontmatter 없음\n",
+        }
+    )
+    root = onto_cli.root(files)
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode == 0, result.stderr
+    assert onto_cli.query(root, "SELECT ?e WHERE { ?e dcterms:title ?t }") == [[PLAN_FILE]]
+
+
+def test_지식_저장소_여럿이_같은_식별자를_써도_엔티티가_따로_있다(onto_cli):
+    root = onto_cli.root(
+        {
+            "billing": repo("billing", page("plan/roadmap", "Plan", title="결제 로드맵")),
+            "shop": repo("shop", page("plan/roadmap", "Plan", title="상점 로드맵")),
+        }
+    )
+
+    rows = onto_cli.query(root, "SELECT ?e ?t WHERE { ?e a onto:Plan ; dcterms:title ?t } ORDER BY ?t")
+
+    assert rows == [
+        ["projects/billing/docs/ontology/plan/roadmap.md", "결제 로드맵"],
+        ["projects/shop/docs/ontology/plan/roadmap.md", "상점 로드맵"],
+    ]
+
+
+# --- frontmatter -------------------------------------------------------------
+
+
+def test_frontmatter의_클래스_제목_설명_별칭_날짜가_그래프의_사실이_된다(onto_cli):
+    root = onto_cli.root(
+        billing(
+            page(
+                "plan/auth-redesign",
+                "Plan",
+                title="인증 재설계",
+                description="인증을 토큰 기반으로 바꾼다",
+                aliases=["인증 개편", "auth redesign"],
+                date="2026-11-01",
+            )
+        )
+    )
+
+    rows = onto_cli.query(
+        root,
+        "SELECT ?e ?title ?description ?alias ?date WHERE { ?e a onto:Plan ; dcterms:title ?title ; "
+        "dcterms:description ?description ; skos:altLabel ?alias ; dcterms:date ?date } ORDER BY ?alias",
+    )
+
+    assert rows == [
+        [PLAN_FILE, "인증 재설계", "인증을 토큰 기반으로 바꾼다", "auth redesign", "2026-11-01"],
+        [PLAN_FILE, "인증 재설계", "인증을 토큰 기반으로 바꾼다", "인증 개편", "2026-11-01"],
+    ]
+
+
+def test_따옴표_없는_YAML_날짜도_날짜_값이_된다(onto_cli):
+    files = billing()
+    files["billing"][f"{ONTOLOGY_DIR}/report/launch.md"] = "---\nclass: Report\ndate: 2026-11-01\n---\n"
+    root = onto_cli.root(files)
+
+    rows = onto_cli.query(root, "SELECT ?when (DATATYPE(?when) AS ?type) WHERE { ?e dcterms:date ?when }")
+
+    assert rows == [["2026-11-01", "http://www.w3.org/2001/XMLSchema#date"]]
+
+
+@pytest.mark.parametrize("env", [None, {"LC_ALL": "C"}], ids=["기본_로케일", "C_로케일"])
+def test_한국어_제목과_별칭이_깨지지_않고_질의된다(onto_cli, sandbox, env):
+    root = onto_cli.root(billing(page("plan/auth-redesign", "Plan", title="인증 재설계", aliases=["인증 개편", "auth"])))
+    run_env = None if env is None else {**sandbox.env, **env}
+
+    by_title = onto_cli.run(root, "query", 'SELECT ?e WHERE { ?e dcterms:title "인증 재설계" }', env=run_env)
+    aliases = onto_cli.run(root, "query", "SELECT ?e ?alias WHERE { ?e skos:altLabel ?alias }", env=run_env)
+
+    assert by_title.returncode == 0, by_title.stderr
+    assert by_title.stdout.splitlines() == ["e", PLAN_FILE]
+    assert aliases.returncode == 0, aliases.stderr
+    assert sorted(aliases.stdout.splitlines()[1:]) == sorted([f"{PLAN_FILE}\t인증 개편", f"{PLAN_FILE}\tauth"])
+
+
+def test_한국어_별칭으로도_영어_별칭으로도_같은_엔티티에_닿는다(onto_cli):
+    root = onto_cli.root(billing(page("plan/auth-redesign", "Plan", title="인증 재설계", aliases=["인증 개편", "auth redesign"])))
+
+    korean = onto_cli.query(root, 'SELECT ?e WHERE { ?e skos:altLabel "인증 개편" }')
+    english = onto_cli.query(root, 'SELECT ?e WHERE { ?e skos:altLabel "auth redesign" }')
+
+    assert korean == english == [[PLAN_FILE]]
+
+
+# (관계, 쓰는 쪽 클래스, 쓰는 쪽 식별자, 가리키는 쪽 클래스, 가리키는 쪽 식별자)
+RELATIONS = [
+    ("partOf", "Component", "component/api", "Component", "component/platform"),
+    ("dependsOn", "Component", "component/api", "Component", "component/database"),
+    ("implements", "Report", "report/launch", "Plan", "plan/auth-redesign"),
+    ("governs", "Policy", "policy/no-secrets", "Component", "component/api"),
+    ("supersedes", "Plan", "plan/auth-redesign-v2", "Plan", "plan/auth-redesign"),
+    ("about", "Decision", "decision/use-jwt", "Component", "component/api"),
+]
+
+
+@pytest.mark.parametrize("relation, from_class, from_id, to_class, to_id", RELATIONS, ids=[r[0] for r in RELATIONS])
+def test_같은_저장소_안의_관계는_쓴_방향_그대로_그래프의_사실이_된다(onto_cli, relation, from_class, from_id, to_class, to_id):
+    root = onto_cli.root(
+        billing(
+            page(from_id, from_class, title="쓰는 쪽", **{relation: [to_id]}),
+            page(to_id, to_class, title="가리키는 쪽"),
+        )
+    )
+
+    rows = onto_cli.query(root, f"SELECT ?s ?o WHERE {{ ?s onto:{relation} ?o }}")
+
+    assert rows == [[f"{PAGES}/{from_id}.md", f"{PAGES}/{to_id}.md"]]
+
+
+def test_관계의_값은_하나여도_목록이어도_된다(onto_cli):
+    root = onto_cli.root(
+        billing(
+            page("component/api", "Component", title="API", partOf="component/platform", dependsOn=["component/db", "component/cache"]),
+            page("component/platform", "Component", title="플랫폼"),
+            page("component/db", "Component", title="DB"),
+            page("component/cache", "Component", title="캐시"),
+        )
+    )
+
+    part_of = onto_cli.query(root, "SELECT ?o WHERE { ?s onto:partOf ?o }")
+    depends_on = onto_cli.query(root, "SELECT ?o WHERE { ?s onto:dependsOn ?o } ORDER BY ?o")
+
+    assert part_of == [[f"{PAGES}/component/platform.md"]]
+    assert depends_on == [[f"{PAGES}/component/cache.md"], [f"{PAGES}/component/db.md"]]
+
+
+def test_없는_엔티티를_가리키는_관계는_파일_경로가_아니라_IRI로_나온다(onto_cli):
+    root = onto_cli.root(billing(page("component/api", "Component", title="API", partOf=["component/missing"])))
+
+    rows = onto_cli.query(root, "SELECT ?o WHERE { ?s onto:partOf ?o }")
+
+    assert len(rows) == 1
+    assert rows[0][0].startswith("https://") and rows[0][0].endswith("/billing/component/missing")
+
+
+# --- Project 엔티티 ----------------------------------------------------------
+
+
+def test_Project_엔티티가_페이지_없이_ontology_yaml에서_만들어진다(onto_cli):
+    root = onto_cli.root(billing(title="결제", description="결제 서비스", aliases=["billing service"]))
+
+    rows = onto_cli.query(
+        root,
+        "SELECT ?e (STR(?e) AS ?iri) ?t ?d ?a WHERE "
+        "{ ?e a onto:Project ; dcterms:title ?t ; dcterms:description ?d ; skos:altLabel ?a }",
+    )
+
+    assert len(rows) == 1
+    file, iri, title, description, alias = rows[0]
+    assert file == PROJECT_FILE
+    assert iri.endswith("/billing/project")
+    assert (title, description, alias) == ("결제", "결제 서비스", "billing service")
+
+
+def test_ontology_yaml에_제목이_없어도_Project_엔티티는_있다(onto_cli):
+    root = onto_cli.root(billing())
+
+    assert onto_cli.query(root, "SELECT ?e WHERE { ?e a onto:Project }") == [[PROJECT_FILE]]
+
+
+def test_지식_저장소마다_Project_엔티티가_하나씩_있다(onto_cli):
+    root = onto_cli.root({"billing": repo("billing"), "shop": repo("shop")})
+
+    rows = onto_cli.query(root, "SELECT ?e WHERE { ?e a onto:Project } ORDER BY ?e")
+
+    assert rows == [["projects/billing/docs/ontology/ontology.yaml"], ["projects/shop/docs/ontology/ontology.yaml"]]
+
+
+def test_컴포넌트가_식별자_project로_Project의_일부가_된다(onto_cli):
+    root = onto_cli.root(billing(page("component/api", "Component", title="API", partOf=["project"])))
+
+    rows = onto_cli.query(root, "SELECT ?s ?o WHERE { ?s onto:partOf ?o }")
+
+    assert rows == [[f"{PAGES}/component/api.md", PROJECT_FILE]]
+
+
+# --- 지식 저장소를 찾는 곳 ---------------------------------------------------
+
+
+def test_지식_저장소가_없으면_공통_어휘만_있는_그래프가_나온다(onto_cli):
+    root = onto_cli.root()
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode == 0, result.stderr
+    assert onto_cli.query(root, "SELECT ?e WHERE { ?e a onto:Plan }") == []
+    assert onto_cli.query(root, "SELECT ?c WHERE { ?c a owl:Class }") != []
+
+
+def test_온톨로지_층이_없는_서브모듈은_알리고_건너뛴다(onto_cli):
+    files = billing(page("plan/auth-redesign", "Plan", title="인증 재설계"))
+    files["notes"] = {"README.md": "# 온톨로지 층이 없는 저장소\n"}
+    root = onto_cli.root(files)
+
+    result = onto_cli.run(root, "query", "SELECT ?e WHERE { ?e dcterms:title ?t }")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["e", PLAN_FILE]
+    assert "projects/notes" in result.stderr
+
+
+# --- 읽을 수 없는 파일 -------------------------------------------------------
+
+BAD_PAGES = {
+    "frontmatter_없음": "# 제목\n\n본문만 있다\n",
+    "닫히지_않음": "---\nclass: Plan\ntitle: 제목\n",
+    "YAML_문법_오류": "---\nclass: [Plan\ntitle: 제목\n---\n",
+    "키와_값의_목록이_아님": "---\n- Plan\n- 제목\n---\n",
+    "중첩된_값": "---\nclass: Plan\ntitle:\n  ko: 제목\n---\n",
+    "관계_값이_문자열이_아님": "---\nclass: Component\npartOf: [1, 2]\n---\n",
+}
+
+
+@pytest.mark.parametrize("command", ["build", "query"])
+@pytest.mark.parametrize("content", BAD_PAGES.values(), ids=BAD_PAGES.keys())
+def test_frontmatter를_읽을_수_없는_페이지는_파일_이름과_함께_오류로_알린다(onto_cli, command, content):
+    files = billing(page("plan/good", "Plan", title="좋은 페이지"))
+    files["billing"][f"{ONTOLOGY_DIR}/plan/broken.md"] = content
+    root = onto_cli.root(files)
+
+    result = onto_cli.run(root, command, *(["SELECT ?e WHERE { ?e a onto:Plan }"] if command == "query" else []))
+
+    assert result.returncode != 0
+    assert f"{PAGES}/plan/broken.md" in result.stderr
+    assert f"{PAGES}/plan/good.md" not in result.stderr
+    assert result.stdout == ""  # 일부만 컴파일한 결과를 내놓지 않는다
+    assert not (root / "build").exists()
+
+
+def test_UTF_8이_아닌_페이지도_파일_이름과_함께_오류로_알린다(onto_cli):
+    root = onto_cli.root(billing())
+    broken = root / PAGES / "plan" / "broken.md"
+    broken.parent.mkdir(parents=True)
+    broken.write_bytes("---\ntitle: 제목\n---\n".encode("euc-kr"))
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode != 0
+    assert f"{PAGES}/plan/broken.md" in result.stderr
+
+
+def test_읽을_수_없는_페이지가_여럿이면_모두_알린다(onto_cli):
+    files = billing()
+    files["billing"][f"{ONTOLOGY_DIR}/plan/one.md"] = BAD_PAGES["frontmatter_없음"]
+    files["billing"][f"{ONTOLOGY_DIR}/plan/two.md"] = BAD_PAGES["닫히지_않음"]
+    root = onto_cli.root(files)
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode != 0
+    assert f"{PAGES}/plan/one.md" in result.stderr
+    assert f"{PAGES}/plan/two.md" in result.stderr
+
+
+@pytest.mark.parametrize("content", ["name: [billing\n", "title: 이름이 없다\n", "- billing\n", "name: ''\n"])
+def test_읽을_수_없는_ontology_yaml도_파일_이름과_함께_오류로_알린다(onto_cli, content):
+    root = onto_cli.root({"billing": {f"{ONTOLOGY_DIR}/ontology.yaml": content}})
+
+    result = onto_cli.run(root, "build")
+
+    assert result.returncode != 0
+    assert PROJECT_FILE in result.stderr
+
+
+# --- 공통 어휘 ---------------------------------------------------------------
+
+
+def test_공통_어휘가_클래스_여덟_개를_정의한다(onto_cli):
+    root = onto_cli.root()
+
+    rows = onto_cli.query(
+        root,
+        "SELECT (STRAFTER(STR(?c), STR(onto:)) AS ?name) WHERE "
+        "{ ?c a owl:Class . FILTER(STRSTARTS(STR(?c), STR(onto:))) } ORDER BY ?name",
+    )
+
+    assert [name for (name,) in rows] == sorted(
+        ["Project", "Component", "Plan", "Policy", "Term", "Decision", "Report", "Source"]
+    )
+
+
+def test_공통_어휘가_관계_일곱_개를_정의한다(onto_cli):
+    root = onto_cli.root()
+
+    rows = onto_cli.query(
+        root,
+        "SELECT (STRAFTER(STR(?p), STR(onto:)) AS ?name) WHERE "
+        "{ ?p a owl:ObjectProperty . FILTER(STRSTARTS(STR(?p), STR(onto:))) } ORDER BY ?name",
+    )
+
+    assert [name for (name,) in rows] == sorted(
+        ["partOf", "dependsOn", "implements", "governs", "supersedes", "derivedFrom", "about"]
+    )
+
+
+def test_공통_어휘의_클래스와_관계는_고정_네임스페이스_하나를_쓴다(onto_cli):
+    """네임스페이스는 https이고 엔티티의 IRI와 겹치지 않으며, 어휘가 정의한 것은 모두 그 안에 있다."""
+    root = onto_cli.root(billing(page("plan/auth-redesign", "Plan", title="제목")))
+
+    outside = onto_cli.query(
+        root,
+        "SELECT ?t WHERE { ?t a ?kind . FILTER(?kind IN (owl:Class, owl:ObjectProperty) && !STRSTARTS(STR(?t), STR(onto:))) }",
+    )
+    namespace = onto_cli.query(root, "SELECT (STR(onto:) AS ?ns) WHERE {}")
+    entity = onto_cli.query(root, "SELECT (STR(?e) AS ?iri) WHERE { ?e a onto:Plan }")
+
+    assert outside == []
+    assert namespace[0][0].startswith("https://")
+    assert not entity[0][0].startswith(namespace[0][0])
+
+
+def test_공통_어휘가_표준_어휘를_재사용한다(onto_cli):
+    """용어는 SKOS, 출처는 PROV-O. 제목과 날짜는 DCTERMS(위의 페이지 테스트)."""
+    root = onto_cli.root()
+
+    rows = onto_cli.query(
+        root,
+        "SELECT ?term ?source ?derived WHERE { "
+        "BIND(EXISTS { onto:Term rdfs:subClassOf skos:Concept } AS ?term) "
+        "BIND(EXISTS { onto:Source rdfs:subClassOf prov:Entity } AS ?source) "
+        "BIND(EXISTS { onto:derivedFrom rdfs:subPropertyOf prov:wasDerivedFrom } AS ?derived) }",
+    )
+
+    assert rows == [["true", "true", "true"]]
+
+
+# --- 같은 입력에서는 같은 그래프 ---------------------------------------------
+
+
+def test_같은_입력에서는_작업_사본의_위치와_파일을_만든_순서와_무관하게_같은_그래프가_나온다(onto_cli):
+    pages = [
+        page("plan/auth-redesign", "Plan", title="인증 재설계", aliases=["인증 개편", "auth redesign"], partOf=["project"]),
+        page("component/api", "Component", title="API", partOf=["project"], dependsOn=["component/db"]),
+        page("component/db", "Component", title="DB", partOf=["project"]),
+    ]
+    forward = onto_cli.root({"billing": repo("billing", *pages), "shop": repo("shop", page("plan/x", "Plan", title="x"))})
+    backward = onto_cli.root({"shop": repo("shop", page("plan/x", "Plan", title="x")), "billing": repo("billing", *reversed(pages))})
+
+    for root in (forward, backward):
+        assert onto_cli.run(root, "build").returncode == 0
+    first = (forward / "build" / "graph.ttl").read_bytes()
+    second = (backward / "build" / "graph.ttl").read_bytes()
+
+    assert first == second
+    assert onto_cli.run(forward, "build").returncode == 0
+    assert (forward / "build" / "graph.ttl").read_bytes() == first
+
+
+def test_절대_IRI의_기준은_기기와_무관한_https_고정값이다(onto_cli):
+    root = onto_cli.root(
+        billing(page("plan/auth-redesign", "Plan", title="제목", partOf=["project"]), title="결제")
+    )
+
+    rows = onto_cli.query(
+        root, "SELECT (STR(?e) AS ?iri) WHERE { { ?e dcterms:title ?t } UNION { ?x onto:partOf ?e } } ORDER BY ?iri"
+    )
+    assert onto_cli.run(root, "build").returncode == 0
+    graph = (root / "build" / "graph.ttl").read_text(encoding="utf-8")
+
+    assert rows
+    for (iri,) in rows:
+        assert iri.startswith("https://")
+        assert str(root) not in iri
+    assert str(root) not in graph
+    assert "file:" not in graph
+
+
+# --- 질의의 출력 -------------------------------------------------------------
+
+
+def test_ASK_질의는_true나_false를_출력한다(onto_cli):
+    root = onto_cli.root(billing(page("plan/auth-redesign", "Plan", title="인증 재설계")))
+
+    found = onto_cli.run(root, "query", 'ASK { ?e dcterms:title "인증 재설계" }')
+    missing = onto_cli.run(root, "query", 'ASK { ?e dcterms:title "없는 제목" }')
+
+    assert (found.returncode, found.stdout.strip()) == (0, "true")
+    assert (missing.returncode, missing.stdout.strip()) == (0, "false")
+
+
+def test_CONSTRUCT_질의는_Turtle로_출력한다(onto_cli):
+    root = onto_cli.root(billing(page("plan/auth-redesign", "Plan", title="제목", about=["project"])))
+
+    result = onto_cli.run(root, "query", "CONSTRUCT { ?s onto:about ?o } WHERE { ?s onto:about ?o }")
+
+    assert result.returncode == 0, result.stderr
+    assert "onto:about" in result.stdout
+
+
+def test_질의문에_문법_오류가_있으면_0이_아닌_종료_코드로_알린다(onto_cli):
+    root = onto_cli.root(billing())
+
+    result = onto_cli.run(root, "query", "SELEC ?e WHERE { ?e a onto:Plan }")
+
+    assert result.returncode != 0
+    assert "SPARQL" in result.stderr
+    assert result.stdout == ""
+
+
+def test_값이_없는_칸은_비우고_줄바꿈과_탭이_든_값은_한_줄을_유지한다(onto_cli):
+    root = onto_cli.root(billing(page("plan/auth-redesign", "Plan", title="첫 줄\n둘째\t줄")))
+
+    result = onto_cli.run(root, "query", "SELECT ?t ?missing WHERE { ?e dcterms:title ?t . OPTIONAL { ?e dcterms:description ?missing } }")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["t\tmissing", "첫 줄\\n둘째\\t줄\t"]

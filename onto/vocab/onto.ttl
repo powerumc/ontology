@@ -1,0 +1,85 @@
+# 공통 어휘: 모든 지식 저장소가 함께 쓰는 클래스와 관계의 정의.
+# 네임스페이스는 위치와 무관한 고정값 하나다. 지식 저장소마다 사본이 있어도 같은 클래스와 관계를 가리킨다.
+# frontmatter 키와 이 어휘의 대응은 context.jsonld가 정한다.
+# 제목·날짜는 DCTERMS, 용어는 SKOS, 출처는 PROV-O를 쓴다.
+
+@prefix onto: <https://onto.invalid/vocab#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+
+<https://onto.invalid/vocab> a owl:Ontology ;
+    rdfs:comment "모듈형 온톨로지 공통 어휘"@ko ;
+    owl:versionInfo "0.1.0" .
+
+# --- 클래스 ----------------------------------------------------------------
+
+onto:Project a owl:Class ;
+    rdfs:label "Project"@en ;
+    rdfs:comment "지식 저장소 하나가 다루는 프로젝트 그 자체. 페이지 없이 ontology.yaml에서 만들어지며 식별자는 project다."@ko .
+
+onto:Component a owl:Class ;
+    rdfs:label "Component"@en ;
+    rdfs:comment "프로젝트를 이루는 시스템, 모듈, 서비스."@ko .
+
+onto:Plan a owl:Class ;
+    rdfs:label "Plan"@en ;
+    rdfs:comment "앞으로 할 일을 정한 것. 스킬이 쓴 계획 문서에서 나온 것도 여기에 속한다."@ko .
+
+onto:Policy a owl:Class ;
+    rdfs:label "Policy"@en ;
+    rdfs:comment "프로젝트에서 지켜야 하는 규칙이나 제약."@ko .
+
+onto:Term a owl:Class ;
+    rdfs:subClassOf skos:Concept ;
+    rdfs:label "Term"@en ;
+    rdfs:comment "프로젝트에서 뜻을 정해 둔 용어."@ko .
+
+onto:Decision a owl:Class ;
+    rdfs:label "Decision"@en ;
+    rdfs:comment "대안 가운데 하나를 고른 결정과 그 이유."@ko .
+
+onto:Report a owl:Class ;
+    rdfs:label "Report"@en ;
+    rdfs:comment "구현한 결과를 기록한 것."@ko .
+
+onto:Source a owl:Class ;
+    rdfs:subClassOf prov:Entity ;
+    rdfs:label "Source"@en ;
+    rdfs:comment "원본 문서를 가리키는 엔티티. 페이지를 따로 갖지 않는다."@ko .
+
+# --- 관계 ------------------------------------------------------------------
+# 페이지에는 아래에 적은 방향(쓰는 쪽 → 가리키는 쪽)만 쓴다. 역방향은 추론으로만 생긴다.
+
+onto:partOf a owl:ObjectProperty ;
+    rdfs:label "partOf"@en ;
+    rdfs:comment "A는 B의 일부다. 한 Component가 다른 Component나 Project의 일부라는 관계. Component → Component, Project."@ko .
+
+onto:dependsOn a owl:ObjectProperty ;
+    rdfs:label "dependsOn"@en ;
+    rdfs:comment "A가 동작하려면 B가 필요하다. 직접 의존만 적는다. Component, Project → Component, Project."@ko .
+
+onto:implements a owl:ObjectProperty ;
+    rdfs:label "implements"@en ;
+    rdfs:comment "이 구현 결과가 그 계획이나 결정을 실행했다. Report → Plan, Decision."@ko .
+
+onto:governs a owl:ObjectProperty ;
+    rdfs:label "governs"@en ;
+    rdfs:comment "이 정책이 그 대상에 적용된다. Policy → Project, Component."@ko .
+
+onto:supersedes a owl:ObjectProperty ;
+    rdfs:label "supersedes"@en ;
+    rdfs:comment "새 것이 옛 것을 대체한다. 같은 클래스끼리."@ko .
+
+onto:derivedFrom a owl:ObjectProperty ;
+    rdfs:subPropertyOf prov:wasDerivedFrom ;
+    rdfs:label "derivedFrom"@en ;
+    rdfs:comment "이 페이지의 근거가 된 원본 문서. 모든 페이지 → Source."@ko .
+
+onto:about a owl:ObjectProperty ;
+    rdfs:label "about"@en ;
+    rdfs:comment "이 페이지가 다루는 대상. Plan, Decision, Report, Term → Project, Component."@ko .
