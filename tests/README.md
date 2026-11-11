@@ -64,7 +64,7 @@ def test_예(onto_cli):
 
 ### 규칙(`test_onto_rules.py`)
 
-루트 기본 규칙(`onto/rules.yaml`)은 도구 사본 안의 파일이고 테스트 세션이 공유한다. `onto_cli.set_root_check(이름, enabled=…, severity=…)`와 `onto_cli.replace_in_root_rules(옛, 새)`가 그 파일을 고치고, 테스트가 끝나면 `onto_cli`가 원래대로 되돌린다. 지식 저장소의 덮어쓰기는 `repo("billing", …, rules={"checks": {"orphan-page": {"enabled": False}}})`처럼 `ontology.yaml`의 `rules`로 적는다. `rules` 명령(`onto_cli.run(root, "rules", "billing")`)이 적용되는 규칙을 JSON으로 보여 주므로, 검사에 쓰이지 않는 값(`sources`, `push-gate`, `language`의 일부)의 병합도 여기서 확인한다.
+루트 기본 규칙(`onto/rules.yaml`)은 도구 사본 안의 파일이고 테스트 세션이 공유한다. `onto_cli.set_root_check(이름, enabled=…, severity=…)`와 `onto_cli.replace_in_root_rules(옛, 새)`가 그 파일을 고치고, 테스트가 끝나면 `onto_cli`가 원래대로 되돌린다. 지식 저장소의 덮어쓰기는 `repo("billing", …, rules={"checks": {"orphan-page": {"enabled": False}}})`처럼 `ontology.yaml`의 `rules`로 적는다. `rules` 명령(`onto_cli.run(root, "rules", "billing")`)이 적용되는 규칙을 JSON으로 보여 주므로, 검사에 쓰이지 않는 값(`sources`, `push-gate`, `language`의 일부)의 병합도 여기서 확인한다. 식별자 형식(`language.identifier-pattern`)은 사용자가 쓴 정규 표현식이라, 맞지 않는 긴 식별자에서 지수 시간으로 되돌아가는 모양(`([a-z]+-?)+`)은 규칙 오류로 거부하고 그 저장소만 루트 기본 형식으로 검사한다. 끝나지 않는 입력은 `onto_cli.run(…, timeout=…)`의 시간 상한으로 가린다.
 
 ### 인덱스(`test_onto_index.py`)
 

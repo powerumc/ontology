@@ -667,11 +667,62 @@ def test_루트_기본_규칙의_식별자_형식도_참조_문법을_깨면_오
     assert result.returncode == 1 and "`language.identifier-pattern`" in result.stderr
 
 
-@pytest.mark.parametrize("pattern", ["[a-z0-9_-]+", "[A-Za-z0-9-]+", "[a-z]+"])
+@pytest.mark.parametrize(
+    "pattern",
+    ["[a-z0-9_-]+", "[A-Za-z0-9-]+", "[a-z]+", "[a-z0-9]+(-[a-z0-9]+)*", "[a-z0-9-]{1,64}", "(?:[a-z0-9]+-)*[a-z0-9]+", "[a-z0-9]+(?:\\.[a-z0-9]+)?"],
+    ids=["밑줄", "대문자", "소문자", "하이픈으로_이은_낱말", "길이_제한", "낱말과_하이픈의_반복", "선택적인_점_조각"],
+)
 def test_참조_문법을_깨지_않는_식별자_형식은_받아들인다(onto_cli, pattern):
     root = onto_cli.root({"billing": repo("billing", rules={"language": {"identifier-pattern": pattern}})})
 
     assert validate(onto_cli, root)[1] == []
+
+
+# 식별자 형식은 사용자가 쓴 정규 표현식이다. 맞지 않는 긴 식별자에서 지수 시간으로 되돌아가는 모양이면 `validate`가 끝나지 않아, 지식 저장소 하나의 규칙이
+# 루트의 검사와 푸시 관문을 모든 사람에게서 멈춘다. 그런 형식은 규칙 오류로 거부하고 그 저장소만 루트 기본 형식으로 검사한다.
+BACKTRACKING_PATTERNS = {
+    "중첩된_반복": "([a-z]+-?)+",
+    "반복의_반복": "([a-z0-9]+)*",
+    "겹치는_선택지": "(a|aa|[a-z-])+",
+    "글자_모임의_반복": "([a-z]*-?)*",
+    "이중_중첩": "(([a-z]+)+-?)",
+}
+SLOW_IDENTIFIER = "a" * 48 + "Z"  # 대문자가 들어 있어 형식에 맞지 않는다
+
+
+@pytest.mark.parametrize("pattern", BACKTRACKING_PATTERNS.values(), ids=BACKTRACKING_PATTERNS.keys())
+def test_지수_시간으로_되돌아갈_수_있는_식별자_형식은_규칙_오류로_거부한다(onto_cli, pattern):
+    root = onto_cli.root({"billing": repo("billing", rules={"language": {"identifier-pattern": pattern}})})
+
+    result = onto_cli.run(root, "validate", timeout=60)
+    findings = [tuple(line.split("\t")) for line in result.stdout.splitlines()]
+
+    assert [f[:4] for f in findings] == [(ERROR, "billing", yaml_file(), "invalid-rules")]
+    assert "`rules.language.identifier-pattern`" in findings[0][4] and "지수 시간" in findings[0][4]
+    assert result.returncode == 1
+
+
+def test_지수_시간_식별자_형식을_쓴_저장소도_끝나고_그_저장소만_루트_기본_형식으로_검사한다(onto_cli):
+    """맞지 않는 긴 식별자는 모양이 위험한 형식에서 끝나지 않는다. 형식을 거부하므로 그 저장소는 루트 기본 형식으로 검사하고 다른 저장소는 영향이 없다."""
+    slow = page(f"component/{SLOW_IDENTIFIER}", "Component", title="긴 식별자", partOf="project")
+    repos = {
+        "billing": repo("billing", slow, rules={"language": {"identifier-pattern": "([a-z]+-?)+"}}),
+        "shop": repo("shop", page("component/api", "Component", title="API", partOf="project")),
+    }
+
+    result = onto_cli.run(onto_cli.root(repos), "validate", timeout=60)
+    findings = [tuple(line.split("\t")) for line in result.stdout.splitlines()]
+
+    assert sorted((f[1], f[3]) for f in findings) == [("billing", "invalid-identifier"), ("billing", "invalid-rules")]
+    assert result.returncode == 1
+
+
+def test_루트_기본_규칙의_식별자_형식이_지수_시간으로_되돌아가는_모양이면_오류로_끝난다(onto_cli):
+    onto_cli.replace_in_root_rules('identifier-pattern: "[a-z0-9-]+"', 'identifier-pattern: "([a-z]+-?)+"')
+
+    result = onto_cli.run(onto_cli.root({}), "rules", timeout=60)
+
+    assert result.returncode == 1 and "`language.identifier-pattern`" in result.stderr and "지수 시간" in result.stderr
 
 
 @pytest.mark.parametrize(

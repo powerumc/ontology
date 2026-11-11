@@ -4,6 +4,7 @@
 중복 처리(`duplicates`), 언어 규칙(`language`). 키의 이름과 값의 종류는 아래 `_schema`가 정하는 한 곳이고, 기본값은 `rules.yaml`에 있다.
 
 - 루트 기본값은 모든 키가 있어야 한다. 모르는 키와 값의 종류가 틀린 값은 오류다(`RulesError`).
+- 식별자 형식(`language.identifier-pattern`)은 사용자가 쓴 정규 표현식이다. 문법이 틀렸거나 참조 문법을 깨거나 지수 시간으로 되돌아가는 모양이면 값 오류다.
 - 지식 저장소는 같은 구조로 바꿀 값만 적는다. 적은 값이 그 저장소의 규칙으로 루트 기본값을 덮어쓰고, 적지 않은 값은 루트를 따른다.
   모르는 키, 값의 종류가 틀린 값, 루트 전용 규칙을 덮어쓰려는 시도는 오류이고, 그럴 때 그 저장소는 덮어쓰기 없이 루트 기본값을 쓴다.
 - 이 모듈은 규칙을 읽고 합치기만 한다. 규칙을 쓰는 곳(스크립트 검사, 낡음, 푸시 관문)은 값을 `Rules`에서 꺼내 간다.
@@ -11,6 +12,8 @@
 
 import difflib
 import re
+import signal
+import threading
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from functools import cached_property
@@ -176,7 +179,61 @@ def _pattern(value: object) -> str:
             f"형식 `{value}`는 `:`나 앞뒤 공백이 든 경로 조각을 허용한다. `:`는 교차 참조(`<저장소 이름>:<식별자>`)의 경계이고 "
             "참조는 앞뒤 공백을 떼므로, 그런 식별자의 페이지는 참조로 가리킬 수 없다"
         )
+    if _backtracks_exponentially(form, value):
+        raise ValueError(
+            f"형식 `{value}`는 맞지 않는 긴 식별자에서 지수 시간으로 되돌아가는 모양이다(중첩된 반복 `([a-z]+-?)+`, 겹치는 선택지 `(a|aa)+`). "
+            "그런 형식은 스크립트 검사가 끝나지 않게 해 루트의 검사와 푸시 관문을 멈춘다. 낱말을 구분자로 이어 `[a-z0-9]+(-[a-z0-9]+)*`처럼 쓰거나 글자 모임 하나에 반복 하나만 둔다"
+        )
     return value
+
+
+# 지수 시간 검사의 입력. 식별자 조각 하나는 파일 이름이라 이 형식에 맞춰 길어질 수 있고, 맞지 않는 긴 조각에서 되돌아가기가 폭발한다.
+# 글자 하나를 되풀이하거나 두 글자를 번갈아 되풀이하고 형식이 받아들이지 않을 글자(눈사람)를 끝에 붙인 조각으로 형식을 시험한다. 모양이 안전한 형식은 이 조각에서 곧 끝난다.
+_PROBE_LENGTH = 36
+_PROBE_LETTERS = "a-0A_. 가"
+_PROBE_MISMATCH = "\u2603"
+_PROBE_SECONDS = 0.25
+_PROBE_RETRY_SECONDS = 1.5
+
+
+class _ProbeTimeout(Exception):
+    pass
+
+
+def _backtracks_exponentially(form: re.Pattern[str], source: str) -> bool:
+    """형식 `form`(문자열 `source`를 컴파일한 것)이 맞지 않는 긴 조각에서 지수 시간으로 되돌아가는가. 시험 조각을 맞춰 보고 시간 안에 끝나는지 본다.
+
+    파이썬의 정규 표현식 엔진은 시간 상한이 없어서, 알람 신호(`SIGALRM`)로 끊는다. 신호는 메인 스레드의 유닉스에서만 쓸 수 있으므로 그 밖에서는 시험하지 않는다.
+    시험하는 글자는 흔한 식별자 글자와 형식에 적힌 글자다. 모든 형식을 잡는 것이 아니라 흔한 모양(중첩된 반복, 겹치는 선택지)을 잡는다.
+    한 번 시간을 넘긴 조각은 더 긴 시간으로 한 번 더 시험한다. 바쁜 기기에서 안전한 형식을 잘못 거부하지 않기 위해서다.
+    """
+    if not hasattr(signal, "setitimer") or threading.current_thread() is not threading.main_thread():
+        return False
+    letters = list(dict.fromkeys([*_PROBE_LETTERS, *(char for char in source if char.isalnum() or char in "-_.")]))[:12]
+    probes = [letter * _PROBE_LENGTH for letter in letters]
+    probes += [(first + second) * (_PROBE_LENGTH // 2) for first in letters for second in letters if first != second]
+
+    def interrupt(signum: int, frame: object) -> None:
+        raise _ProbeTimeout
+
+    def finishes(probe: str, seconds: float) -> bool:
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        try:
+            form.fullmatch(probe + _PROBE_MISMATCH)
+        except _ProbeTimeout:
+            return False
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        return True
+
+    previous = signal.signal(signal.SIGALRM, interrupt)
+    try:
+        return any(not finishes(probe, _PROBE_SECONDS) and not finishes(probe, _PROBE_RETRY_SECONDS) for probe in probes)
+    except _ProbeTimeout:  # 알람이 시험 사이에 울려 시험 밖에서 던져졌다. 시간이 넘은 것으로 본다
+        return True
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def _text(value: object) -> str:
