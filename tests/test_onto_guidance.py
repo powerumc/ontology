@@ -271,6 +271,50 @@ def test_링크의_대상이_저장소_밖이거나_없거나_일반_파일이_�
     assert len(set(reasons.values())) == 3  # 이유가 대상의 종류마다 다르다
 
 
+def test_지침_파일이_자기를_가리키는_순환_링크이면_순환이라고_알리며_건너뛰고_다른_저장소의_최신화는_계속된다(sandbox):
+    """`CLAUDE.md -> CLAUDE.md`. 파이썬 3.11·3.12의 `Path.resolve`는 순환 링크에서 `OSError`가 아니라 `RuntimeError`를 던진다. 그래서 traceback으로 최신화 전체가 멈췄다."""
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n"})
+    shop, _ = attach(sandbox, root, "shop", files={"README.md": "# shop\n"})  # billing 뒤에 최신화된다
+    (billing / "CLAUDE.md").symlink_to("CLAUDE.md")
+
+    result = sync(sandbox, root)
+
+    assert result.returncode == 1
+    assert "Traceback" not in result.stdout + result.stderr
+    found = re.search(r"건너뜀\s+CLAUDE\.md\s+—\s+(.*)", result.stdout)
+    assert found and "순환" in found.group(1) and "심볼릭 링크" in found.group(1)
+    assert not (billing / "AGENTS.md").exists()  # 링크의 자리에 다른 파일을 새로 만들지 않는다
+    assert block_of((shop / "AGENTS.md").read_text(encoding="utf-8"))  # 뒤의 저장소는 최신화된다
+
+
+def test_두_지침_파일이_서로를_가리키는_순환_링크여도_멈추지_않고_건너뛴다(sandbox):
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n"})
+    (billing / "CLAUDE.md").symlink_to("AGENTS.md")
+    (billing / "AGENTS.md").symlink_to("CLAUDE.md")
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 1
+    assert "Traceback" not in result.stdout + result.stderr
+    assert re.search(r"건너뜀\s+(CLAUDE|AGENTS)\.md\s+—.*순환", result.stdout)
+
+
+def test_다른_후보_파일이_순환하는_링크여도_멈추지_않고_고른_파일을_갱신한다(sandbox):
+    """블록이 있는 파일을 고르고, 순환하는 다른 후보는 따라가지 않고 조용히 둔다."""
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n", "CLAUDE.md": TEAM})
+    (billing / "AGENTS.md").symlink_to("AGENTS.md")
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Traceback" not in result.stdout + result.stderr
+    assert (billing / "CLAUDE.md").read_text(encoding="utf-8").count(BEGIN) == 1
+    assert "AGENTS.md" not in result.stdout
+
+
 def test_링크의_대상이_dot_onto_안의_루트_관리_파일이면_고치지_않고_건너뛴다(sandbox):
     """링크로 루트가 관리하는 파일에 블록을 쓰게 하지 않는다."""
     root = sandbox.root()

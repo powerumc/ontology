@@ -193,7 +193,7 @@ def _guidance_target(repo: Path, name: str) -> tuple[str | None, str]:
     """지침 파일 `name`의 블록을 실제로 고칠 파일의 이름(저장소 기준 경로)과, 고칠 수 없으면 그 이유를 돌려준다.
 
     링크가 아니면 `name` 자신이다(없으면 만들 파일이다). 링크이면 끝까지 풀어서 이 저장소 안의 일반 파일일 때만 그 파일이다. 저장소 밖을 가리키거나
-    대상이 없거나(깨진 링크, 도는 링크) 일반 파일이 아니면 따라가지 않는다. `.git/`와 루트 관리 파일(`.onto/`)은 링크로 가리켜도 고치지 않는다.
+    따라갈 수 없거나(대상이 없는 깨진 링크, 순환하는 링크) 일반 파일이 아니면 따라가지 않는다. `.git/`와 루트 관리 파일(`.onto/`)은 링크로 가리켜도 고치지 않는다.
     루트가 관리하는 파일에 블록을 쓰게 하지 않고, 쓰기가 저장소 밖으로 새지 않게 한다.
     """
     if not (repo / name).is_symlink():
@@ -201,8 +201,8 @@ def _guidance_target(repo: Path, name: str) -> tuple[str | None, str]:
     root = repo.resolve()
     try:
         real = (repo / name).resolve(strict=True)
-    except OSError:
-        return None, f"`{name}`가 대상이 없는 심볼릭 링크라 따라가지 않는다"
+    except (OSError, RuntimeError):  # 순환하는 링크: 파이썬 3.13 이상은 OSError, 3.11·3.12는 RuntimeError("Symlink loop")를 던진다
+        return None, f"`{name}`가 따라갈 수 없는(대상이 없거나 순환하는) 심볼릭 링크라 따라가지 않는다"
     if not real.is_relative_to(root):
         return None, f"`{name}`가 이 저장소 밖을 가리키는 심볼릭 링크라 따라가지 않는다"
     relative = real.relative_to(root).as_posix()
