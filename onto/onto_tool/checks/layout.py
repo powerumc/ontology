@@ -33,10 +33,16 @@ def find(compiled: Compiled) -> Iterator[Issue]:
             # 컴파일이 그래프에 올린 페이지만 본다. 클래스를 알 수 없는 페이지는 클래스 문제가 따로 보고된다.
             if compiled.files.get(iri) != page.file:
                 continue
-            page_classes = {cls: directory_of[cls] for cls in classes.roots(URIRef(iri)) if cls in directory_of}
+            # 디렉토리 이름 순. 집합을 도는 순서는 프로세스마다 달라 설명이 실행마다 바뀐다.
+            page_classes = dict(
+                sorted(((cls, directory_of[cls]) for cls in classes.roots(URIRef(iri)) if cls in directory_of), key=lambda item: item[1])
+            )
             expected = set(page_classes.values())
             actual = page.identifier.partition("/")[0] if "/" in page.identifier else None
             if not expected or expected == {actual}:
+                continue
+            # 대소문자만 다른 디렉토리(`Plan/`)는 식별자 형식 항목이 이미 보고한다. 디렉토리 이름 하나를 고치면 둘 다 사라지므로 겹쳐 알리지 않는다.
+            if actual is not None and {actual.lower()} == expected:
                 continue
             where = f"`{actual}/` 아래" if actual else "온톨로지 층 최상위"
             if len(expected) > 1:

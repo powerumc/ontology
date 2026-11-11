@@ -50,6 +50,11 @@ class OntoCli:
         shutil.rmtree(self.build_dir, ignore_errors=True)
 
     @property
+    def env(self) -> dict[str, str]:
+        """도구를 실행하는 격리된 환경. `run(env=…)`에 넘길 값을 이 위에 덧붙여 만든다(`env`는 환경 전체를 대신한다)."""
+        return dict(self._sandbox.env)
+
+    @property
     def build_dir(self) -> Path:
         """도구가 산출물(컴파일한 그래프)을 두는 곳. 도구 디렉토리 안의 무시되는 디렉토리다."""
         return self._tool_dir / ".build"
