@@ -157,6 +157,11 @@ def test_8의_기본_심각도가_루트_기본_규칙의_값으로_옮겨져_�
         "stale-page": "warning",
         "missing-source": "warning",
         "missing-skipped-source": "warning",
+        # #14가 더한 공유 범위 검사(루트 전용)
+        "invalid-scope": "error",
+        "scope-violation": "error",
+        "path-reference": "error",
+        "outside-link": "error",
     }
     assert all(rule["enabled"] is True for rule in checks.values())
 
@@ -565,9 +570,9 @@ def test_저장소가_undefined_key를_끄면_페이지의_모르는_키만_보�
     assert validate(onto_cli, root)[1] == []
 
 
-def test_ontology_yaml의_문제를_보고하는_검사_항목은_루트_전용이라_저장소가_덮어쓰지_못한다(onto_cli):
+def test_루트_전용_검사_항목은_저장소가_덮어쓰지_못한다(onto_cli):
     """루트 전용 검사 항목을 지식 저장소가 덮어쓰려 하면 오류다. 덮어쓰기는 통째로 버려지고 루트 기본 규칙으로 검사한다."""
-    for name in ("invalid-ontology-yaml", "invalid-class-declaration"):
+    for name in ("invalid-ontology-yaml", "invalid-class-declaration", "invalid-scope", "scope-violation", "path-reference", "outside-link"):
         override = {"checks": {name: {"enabled": False}, "orphan-page": {"enabled": False}}}
         root = onto_cli.root({"billing": repo("billing", page("term/idle", "Term", title="한가한 용어"), rules=override)})
 

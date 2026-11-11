@@ -14,7 +14,7 @@
 
 import json
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
 
 from rdflib import Graph, URIRef
@@ -24,7 +24,7 @@ from . import vocab
 from .errors import OntoError
 from .graphs import canonical
 from .iri import UNRESOLVED_BASE, class_iri, entity_iri, resolve_reference, source_iri, unresolved_iri
-from .keys import CLASS_DECLARATION_KEYS, CLASSES_KEY, PAGE_KEYS, PROJECT_KEYS, RELATION_KEYS, RULES_KEY, SOURCE_KEY
+from .keys import CLASS_DECLARATION_KEYS, CLASSES_KEY, PAGE_KEYS, PROJECT_KEYS, RELATION_KEYS, RULES_KEY, SCOPE_KEY, SOURCE_KEY
 from .ontology_yaml import OntologyYamlError, read_ontology_yaml, undefined_keys_message
 from .pages import (
     INDEX_FILE,
@@ -33,7 +33,7 @@ from .pages import (
     find_misnamed_pages,
     find_pages,
     page_values,
-    read_frontmatter,
+    read_page,
     scalar_values,
 )
 from .sources import SourceEntry, document_hashes, parse_entries, read_skipped
@@ -83,6 +83,15 @@ class PageRecord:
     file: str  # 루트 저장소 기준 경로
     meta: dict[str, object] | None  # 읽은 frontmatter 그대로(정의되지 않은 키와 값의 종류가 틀린 값도 든다). 읽을 수 없으면 None
     sources: tuple[SourceEntry, ...] = ()  # `derivedFrom`의 항목. 없거나 모양이 틀렸으면 비어 있다(틀린 것은 문제로 따로 모인다)
+    body: str = ""  # frontmatter 뒤의 본문. 읽을 수 없으면 비어 있다
+
+    def relations(self) -> Iterator[tuple[str, str]]:
+        """페이지가 쓴 관계의 `(키, 값)`. 키마다 같은 값은 한 번만 낸다. 문자열이 아닌 값은 값의 종류가 맞지 않다고 컴파일이 이미 알렸으므로 뺀다."""
+        for key in RELATION_KEYS:
+            value = (self.meta or {}).get(key)
+            targets = value if isinstance(value, list) else [value]
+            for target in dict.fromkeys(t for t in targets if isinstance(t, str)):
+                yield key, target
 
 
 @dataclass
@@ -96,6 +105,9 @@ class RepositoryRecord:
     has_layer: bool  # `ontology.yaml`이 있다. 없으면 컴파일이 건너뛴다
     name: str | None = None  # `ontology.yaml`의 `name`. 파일이 없거나 읽을 수 없으면 알 수 없다
     rules: object = None  # `ontology.yaml`의 `rules` 값 그대로. 규칙을 읽고 검증하는 것은 스크립트 검사의 몫이다. 없으면 None
+    # `ontology.yaml`의 `scope`(공유 범위) 값 그대로. 읽고 검증하는 것은 공유 범위 검사의 몫이다. 적지 않았으면 `scope_declared`가 False다
+    scope: object = None
+    scope_declared: bool = False
     pages: list[PageRecord] = field(default_factory=list)
     misnamed_pages: list[str] = field(default_factory=list)  # 페이지처럼 보이지만 확장자가 `.md`가 아니라 읽지 않은 파일의 경로
     index_text: str | None = None  # 지금 인덱스 파일의 글자(줄바꿈은 `\n`으로 통일). 파일이 없거나 읽지 않았으면 None
@@ -240,6 +252,7 @@ def _read_repository(
         return read
     name = read.record.name = str(data["name"])
     read.record.rules = data.get(RULES_KEY)
+    read.record.scope, read.record.scope_declared = data.get(SCOPE_KEY), SCOPE_KEY in data
     if undefined := undefined_keys_message(data):
         read.problems.append(Problem(yaml_file, undefined, INVALID_ONTOLOGY_YAML))
 
@@ -265,11 +278,12 @@ def _read_repository(
     for identifier, path in find_pages(repository.ontology_dir):
         file = workspace.relative(path)
         meta: dict[str, object] | None
+        body = ""
         values: dict[str, object] = {}
         sources: tuple[SourceEntry, ...] = ()
         failure: Problem | None = None
         try:
-            meta = read_frontmatter(path)
+            meta, body = read_page(path)
         except FrontmatterError as exc:
             meta = None
             failure = Problem(file, f"frontmatter를 읽을 수 없다: {exc}", _kind(exc))
@@ -283,7 +297,7 @@ def _read_repository(
             except ValueKindError as exc:
                 failure = failure or Problem(file, f"frontmatter를 읽을 수 없다: {exc}", _kind(exc))
         # 값의 종류가 틀려도 읽은 frontmatter는 남긴다. 같은 페이지의 다른 문제(정의되지 않은 키, 깨진 참조)가 가려지지 않게 한다.
-        read.record.pages.append(PageRecord(identifier, file, meta, sources))
+        read.record.pages.append(PageRecord(identifier, file, meta, sources, body))
         if identifier == PROJECT_IDENTIFIER:
             # 같은 IRI라서 두 파일이 제목과 클래스가 둘인 엔티티 하나로 조용히 합쳐진다.
             read.problems.append(

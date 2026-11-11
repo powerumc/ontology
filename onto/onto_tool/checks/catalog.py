@@ -69,6 +69,29 @@ STALE_PAGE = Check(
 MISSING_SOURCE = Check("missing-source", "페이지의 derivedFrom이 가리키는 원본 문서가 없다")
 MISSING_SKIPPED_SOURCE = Check("missing-skipped-source", "넘긴 문서의 목록(skipped.yaml)에 적힌 원본 문서가 없다")
 
+# --- 공유 범위(루트 전용) ------------------------------------------------------------
+INVALID_SCOPE = Check(
+    "invalid-scope", "ontology.yaml의 scope(공유 범위)가 private, team, team:<팀 이름>, public 중 하나가 아니다", root_only=True
+)
+
+SCOPE_VIOLATION = Check(
+    "scope-violation",
+    "교차 참조가 공유 범위가 더 좁은 지식 저장소(public에서 team이나 private으로, team에서 private으로)나 다른 팀(team:<팀 이름>이 다른 team)의 저장소를 가리킨다",
+    root_only=True,
+)
+
+PATH_REFERENCE = Check(
+    "path-reference",
+    "관계의 값이 식별자나 교차 참조가 아니라 파일 경로다(저장소 밖을 가리키는 경로는 지식 저장소가 단독으로 열리면 깨진다)",
+    root_only=True,
+)
+
+OUTSIDE_LINK = Check(
+    "outside-link",
+    "페이지 본문의 링크가 지식 저장소 밖의 파일(절대 경로, file: 주소, 저장소의 루트 위로 나가는 상대 경로)을 가리킨다",
+    root_only=True,
+)
+
 # --- 인덱스 -------------------------------------------------------------------------
 INDEX_MISMATCH = Check(
     "index-mismatch",
@@ -101,6 +124,10 @@ CHECKS = (
     STALE_PAGE,
     MISSING_SOURCE,
     MISSING_SKIPPED_SOURCE,
+    INVALID_SCOPE,
+    SCOPE_VIOLATION,
+    PATH_REFERENCE,
+    OUTSIDE_LINK,
     INDEX_MISMATCH,
 )
 

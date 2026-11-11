@@ -74,10 +74,11 @@ def find_misnamed_pages(ontology_dir: Path) -> list[Path]:
     )
 
 
-def read_frontmatter(path: Path) -> dict[str, object]:
-    """`---`로 둘러싼 맨 앞의 YAML을 읽어 키와 값의 목록으로 돌려준다. 비어 있으면 빈 목록이다.
+def read_page(path: Path) -> tuple[dict[str, object], str]:
+    """페이지 파일을 `(frontmatter, 본문)`으로 읽는다.
 
-    값은 읽은 그대로다(날짜는 `datetime.date`, 없는 날짜는 `NonexistentDate`). 값의 종류는 `page_values`가 따진다.
+    frontmatter는 `---`로 둘러싼 맨 앞의 YAML을 읽은 키와 값의 목록이고, 비어 있으면 빈 목록이다. 값은 읽은 그대로다(날짜는
+    `datetime.date`, 없는 날짜는 `NonexistentDate`). 값의 종류는 `page_values`가 따진다. 본문은 닫는 `---` 다음 줄부터의 글이다(줄바꿈은 `\n`).
     """
     try:
         lines = path.read_text(encoding="utf-8-sig").splitlines()
@@ -94,11 +95,12 @@ def read_frontmatter(path: Path) -> dict[str, object]:
         raise FrontmatterError(f"YAML 문법 오류: {_first_line(exc)}") from exc
     except ValueError as exc:
         raise FrontmatterError(f"값을 읽을 수 없다: {exc}") from exc
+    body = "\n".join(lines[closing + 1 :])
     if meta is None:
-        return {}
+        return {}, body
     if not isinstance(meta, dict):
         raise FrontmatterError("frontmatter가 키와 값의 목록이 아니다")
-    return meta
+    return meta, body
 
 
 def page_values(meta: dict[str, object]) -> dict[str, object]:

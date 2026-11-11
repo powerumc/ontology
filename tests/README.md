@@ -80,3 +80,12 @@ def test_예(onto_cli):
 - `test_onto_sources.py`: `derivedFrom`이 그래프의 `Source` 엔티티(`onto:sourcePath`, `onto:sourceHash`)와 `onto:derivedFrom` 관계로 나타나는 것, 값의 모양, 낡음(`stale-page`, 경고)·없어진 원본 문서(`missing-source`, 경고)·없어진 넘긴 문서(`missing-skipped-source`, 경고) 검사, git 저장소에서의 해시(줄바꿈 변환, 환경 변수, 아무것도 고치지 않는 것, git 실패 시 대체), 경로 대조(대소문자, 유니코드 정규화, 심볼릭 링크).
 - `test_onto_status.py`: `status`가 새 문서와 바뀐 문서를 지식 저장소별로 보여 주는 것(보고는 문서 하나에 탭 다섯 칸), 넘긴 문서(페이지가 지금 내용을 근거로 삼았으면 넘긴 목록의 옛 항목은 무시), 대상 범위(규칙의 글롭과 제외 경로, 온톨로지 층·숨김 경로·심볼릭 링크는 항상 제외), 아무 파일도 고치지 않는 것, 깨진 `rules`를 기본값으로 대신하지 않는 것. `just onto status`는 마지막 테스트 하나만 거친다.
 - 읽을 수 없는 파일의 문제로 `build`·`query`·`status`가 멈추는 조건(그 항목이 오류일 때만)과 `validate`와의 동치는 `test_onto_rules.py`의 `test_validate가_0으로_끝나면…`이 확인한다.
+
+### 공유 범위(`test_onto_scope.py`)
+
+공유 범위 검사 항목 넷(`invalid-scope`, `scope-violation`, `path-reference`, `outside-link`)을 `onto_cli`로 본다. 모두 루트 전용이라 지식 저장소의 `rules`가 끄거나 심각도를 바꾸려 하면 `invalid-rules` 오류이고, 그래도 문제는 루트 기본 규칙의 심각도로 보고된다(이 파일이 항목마다 확인한다). 공유 범위는 `repo("billing", …, scope="team:payments")`처럼 `ontology.yaml`의 `scope`로 적는다. 적지 않은 지식 저장소는 `private`으로 본다.
+
+- 값: `private`, `team`, `team:<팀 이름>`, `public`만 통과하고 나머지(대소문자, 공백, 빈 팀 이름, 문자열이 아닌 값)는 오류다.
+- 교차 참조: 공유 범위 쌍마다 통과 여부를 표(`REFERENCES`)로 적었다. 더 넓은 범위로는 되고, 같은 범위끼리는 `private`과 `public`이면 되고 `team`이면 같은 팀(`team`과 `team`, 같은 `team:<팀 이름>`)만 된다. 가리키는 엔티티가 없어도 저장소 이름이 드러나므로 잡는다.
+- 파일 경로: 관계의 값이 절대 경로, `..` 조각, 확장자로 끝나는 경로면 `path-reference`만 보고하고 `broken-reference`나 `unregistered-repository`로 다시 보고하지 않는다.
+- 본문의 링크: 인라인 링크, 이미지, 참조 정의, 자동 링크, HTML `href`·`src`가 저장소 밖의 파일(절대 경로, `file:` 주소, 저장소 루트 위로 나가는 상대 경로)을 가리키면 `outside-link`다. 코드 블록과 인라인 코드 안, `http` 같은 주소, 저장소 안의 경로는 잡지 않는다. 견본 페이지가 `docs/ontology/component/` 아래에 있어 `../`를 세 번 오르면 저장소의 루트, 네 번 오르면 저장소 밖이다.

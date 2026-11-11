@@ -13,7 +13,8 @@ frontmatter 키와 RDF의 대응은 `vocab/context.jsonld`가 정한다. 여기 
   `name`으로 채우지 않는다. 그러므로 `Project`에는 제목을 필수로 요구하는 구조 제약을 두지 않는다.
   `name`과 공유 범위만 든 `ontology.yaml`이 최신화 직후 검사를 통과해야 하기 때문이다.
 - `ontology.yaml`의 `scope`(공유 범위)와 `rules`(규칙 덮어쓰기)는 허용되는 키다. `rules` 안의 키(`sources`, `checks`, …)는
-  `rules.py`의 스키마가 정한다. `scope`의 값을 검사하는 것은 공유 범위 검사(#14)가 한다. 지금은 키만 허용하고 읽지 않는다.
+  `rules.py`의 스키마가 정한다. `scope`의 값은 `scope.py`가 읽고, 공유 범위 검사(`checks/scopes.py`)가 값과 교차 참조를 검사한다.
+  `scope`는 컴파일된 그래프에 나타나지 않는다. 적지 않은 지식 저장소는 `private`으로 본다.
 """
 
 # 페이지 frontmatter
@@ -53,7 +54,7 @@ PROJECT_KEYS = ("title", "description", "aliases")
 # 엔티티를 서술하는 사실이 아니라 어휘의 선언이라 `Project`의 사실이 되지 않고, JSON-LD context에도 없다.
 CLASSES_KEY = "classes"
 CLASS_DECLARATION_KEYS = ("subClassOf",)
-# 공유 범위(`private`, `team`, `team:<팀 이름>`, `public`). 값의 검사는 공유 범위 검사가 한다.
+# 공유 범위(`private`, `team`, `team:<팀 이름>`, `public`). 값을 읽는 것은 `scope.py`이고 검사는 공유 범위 검사(`checks/scopes.py`)가 한다.
 SCOPE_KEY = "scope"
 # 규칙 덮어쓰기. 루트 기본 규칙(`rules.yaml`)과 같은 구조로 바꿀 값만 적는다. 읽기와 검증은 `rules.py`가 한다.
 RULES_KEY = "rules"
