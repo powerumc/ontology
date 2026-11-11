@@ -167,15 +167,52 @@ def _update_guidance(repo: Path, result: Result) -> bool:
     블록 밖과 커밋 여부는 따지지 않는다. 지침 파일에 커밋하지 않은 수정이 있어도, 직전 최신화가 넣은 블록이 있어도 블록만 고친다.
     블록의 내용이 이미 같으면 파일을 다시 쓰지 않는다. 고른 파일을 고치지 못하면 `False`다.
 
-    블록이 이미 든 다른 후보 파일은 그 자리에서 내용만 맞춘다. 블록이 없는 다른 후보 파일, 이 저장소 안의 다른 파일을 가리키는 링크,
-    일반 파일이 아닌 것은 건드리지 않는다. 블록을 새로 만들지도 지우지도 않는다.
+    지침 파일이 이 저장소 안의 일반 파일을 가리키는 심볼릭 링크이면(`ln -s AGENTS.md CLAUDE.md`) 링크를 두고 대상 파일의 블록을 고친다(`_guidance_target`).
+    보고도 대상 이름으로 한다. 저장소 밖을 가리키거나 대상이 없거나 일반 파일이 아닌 링크는 따라가지 않고 건너뛴다.
+
+    블록이 이미 든 다른 후보 파일은 그 자리에서 내용만 맞춘다. 두 후보가 같은 파일(한쪽이 다른 쪽의 링크)이면 한 번만 고친다.
+    블록이 없는 다른 후보 파일, 따라갈 수 없는 링크, 일반 파일이 아닌 것은 건드리지 않는다. 블록을 새로 만들지도 지우지도 않는다.
     """
     chosen = guidance.choose(repo)
-    done = _update_block(repo, chosen, guidance.BLOCK, guidance.BODY, result)
+    target, reason = _guidance_target(repo, chosen)
+    if target is None:
+        result.skip(chosen, reason)
+    done = target is not None and _update_block(repo, target, guidance.BLOCK, guidance.BODY, result)
+    handled = {target}
     for name in guidance.CANDIDATES:
-        if name != chosen and _holds_block(repo, name):
-            _update_block(repo, name, guidance.BLOCK, guidance.BODY, result)
+        if name == chosen:
+            continue
+        other, _ = _guidance_target(repo, name)
+        if other is not None and other not in handled and _holds_block(repo, other):
+            handled.add(other)
+            _update_block(repo, other, guidance.BLOCK, guidance.BODY, result)
     return done
+
+
+def _guidance_target(repo: Path, name: str) -> tuple[str | None, str]:
+    """지침 파일 `name`의 블록을 실제로 고칠 파일의 이름(저장소 기준 경로)과, 고칠 수 없으면 그 이유를 돌려준다.
+
+    링크가 아니면 `name` 자신이다(없으면 만들 파일이다). 링크이면 끝까지 풀어서 이 저장소 안의 일반 파일일 때만 그 파일이다. 저장소 밖을 가리키거나
+    대상이 없거나(깨진 링크, 도는 링크) 일반 파일이 아니면 따라가지 않는다. `.git/`와 루트 관리 파일(`.onto/`)은 링크로 가리켜도 고치지 않는다.
+    루트가 관리하는 파일에 블록을 쓰게 하지 않고, 쓰기가 저장소 밖으로 새지 않게 한다.
+    """
+    if not (repo / name).is_symlink():
+        return name, ""
+    root = repo.resolve()
+    try:
+        real = (repo / name).resolve(strict=True)
+    except OSError:
+        return None, f"`{name}`가 대상이 없는 심볼릭 링크라 따라가지 않는다"
+    if not real.is_relative_to(root):
+        return None, f"`{name}`가 이 저장소 밖을 가리키는 심볼릭 링크라 따라가지 않는다"
+    relative = real.relative_to(root).as_posix()
+    if relative.split("/")[0] in (".git", MANAGED_DIR):
+        return None, f"`{name}`가 `{relative}`를 가리키는 심볼릭 링크라 따라가지 않는다. 루트 관리 파일과 git의 파일에는 블록을 쓰지 않는다"
+    if not real.is_file():
+        return None, f"`{name}`가 일반 파일이 아닌 것을 가리키는 심볼릭 링크라 따라가지 않는다"
+    if reason := blocked(repo, relative):
+        return None, f"`{name}`가 가리키는 `{relative}`를 고칠 수 없다(심볼릭 링크를 따라가지 않는다): {reason}"
+    return relative, ""
 
 
 def _holds_block(repo: Path, relative: str) -> bool:

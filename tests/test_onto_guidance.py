@@ -178,6 +178,116 @@ def test_두_번_연속_실행하면_두_번째는_지침_파일을_다시_쓰�
     assert "바뀐 것이 없다" in result.stdout
 
 
+# --- 이 저장소 안의 파일을 가리키는 링크인 지침 파일 ------------------------------------------
+
+
+def test_CLAUDE_md가_이_저장소의_AGENTS_md를_가리키는_링크이면_대상_파일의_블록을_고치고_링크는_그대로_둔다(sandbox):
+    """`ln -s AGENTS.md CLAUDE.md`는 두 도구가 같은 지침을 읽게 하는 흔한 구성이다. 저장소 밖에 쓸 위험이 없다."""
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n", "AGENTS.md": TEAM})
+    (billing / "CLAUDE.md").symlink_to("AGENTS.md")
+
+    first = sync(sandbox, root, "billing")
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert (billing / "CLAUDE.md").is_symlink() and os.readlink(billing / "CLAUDE.md") == "AGENTS.md"  # 링크는 그대로다
+    text = (billing / "AGENTS.md").read_text(encoding="utf-8")
+    assert text.startswith(TEAM) and block_of(text[len(TEAM) :])  # 대상 파일 끝에 블록 하나
+    assert (billing / "CLAUDE.md").read_text(encoding="utf-8") == text  # 링크로 읽어도 같다
+    assert "바꿈  AGENTS.md" in first.stdout and "건너뜀" not in first.stdout  # 보고는 대상 이름이다
+    # 두 번째 실행은 아무것도 바꾸지 않는다
+    os.utime(billing / "AGENTS.md", ns=(1_000_000_000, 1_000_000_000))
+    second = sync(sandbox, root, "billing")
+    assert second.returncode == 0, second.stderr
+    assert "바뀐 것이 없다" in second.stdout
+    assert (billing / "AGENTS.md").stat().st_mtime_ns == 1_000_000_000 and (billing / "AGENTS.md").read_text(encoding="utf-8") == text
+
+
+def test_최신화가_만든_AGENTS_md에_나중에_CLAUDE_md_링크가_생겨도_블록이_갱신되고_건너뛰지_않는다(sandbox):
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n"})
+    assert sync(sandbox, root, "billing").returncode == 0  # AGENTS.md가 블록만 담아 생긴다
+    (billing / "CLAUDE.md").symlink_to("AGENTS.md")  # 나중에 팀이 링크를 만들었다
+    bump_block(root)
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = (billing / "AGENTS.md").read_text(encoding="utf-8")
+    assert "## 온톨로지 층 v2" in block_of(text) and text.count(BEGIN) == 1  # 있던 자리에서 갱신되고 하나뿐이다
+    assert os.readlink(billing / "CLAUDE.md") == "AGENTS.md"
+    assert "건너뜀" not in result.stdout
+    assert result.stdout.count("바꿈  AGENTS.md") == 1  # 두 후보가 같은 파일이라 한 번만 고친다
+
+
+def test_두_후보가_같은_파일이어도_이미_있는_블록을_한_번만_갱신한다(sandbox):
+    stale = f"{TEAM}\n<!-- onto:begin 옛 설명 -->\n옛 안내\n<!-- onto:end -->\n"
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n", "AGENTS.md": stale})
+    (billing / "CLAUDE.md").symlink_to("AGENTS.md")
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = (billing / "AGENTS.md").read_text(encoding="utf-8")
+    assert text.startswith(TEAM) and "옛 안내" not in text and text.count(BEGIN) == 1
+    assert result.stdout.count("바꿈  AGENTS.md") == 1
+
+
+def test_링크의_대상이_이_저장소_안의_다른_일반_파일이면_그_파일의_블록을_고친다(sandbox):
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n", "docs/guide.md": TEAM})
+    (billing / "CLAUDE.md").symlink_to("docs/guide.md")
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (billing / "docs" / "guide.md").read_text(encoding="utf-8").startswith(TEAM)
+    assert block_of((billing / "docs" / "guide.md").read_text(encoding="utf-8"))
+    assert "바꿈  docs/guide.md" in result.stdout
+    assert not (billing / "AGENTS.md").exists()  # 링크가 CLAUDE.md의 자리에 있으므로 다른 파일을 새로 만들지 않는다
+
+
+def test_링크의_대상이_저장소_밖이거나_없거나_일반_파일이_아니면_따라가지_않고_건너뛴다(sandbox):
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n", "docs/guide.md": TEAM})
+    outside = sandbox.new_dir("elsewhere", "shared") / "CLAUDE.md"
+    outside.write_text("저장소 밖의 파일\n", encoding="utf-8")
+    guidance_link = billing / "CLAUDE.md"
+    reasons = {}
+    for label, target in (("밖", outside), ("없는 대상", "nothing.md"), ("디렉토리", "docs")):
+        guidance_link.unlink(missing_ok=True)
+        guidance_link.symlink_to(target)
+
+        result = sync(sandbox, root, "billing")
+
+        assert result.returncode == 1, label
+        found = re.search(r"건너뜀\s+CLAUDE\.md\s+—\s+(.*)", result.stdout)
+        assert found and "심볼릭 링크" in found.group(1), label
+        reasons[label] = found.group(1)
+    assert outside.read_text(encoding="utf-8") == "저장소 밖의 파일\n"
+    assert (billing / "docs" / "guide.md").read_text(encoding="utf-8") == TEAM
+    assert not (billing / "AGENTS.md").exists()
+    assert len(set(reasons.values())) == 3  # 이유가 대상의 종류마다 다르다
+
+
+def test_링크의_대상이_dot_onto_안의_루트_관리_파일이면_고치지_않고_건너뛴다(sandbox):
+    """링크로 루트가 관리하는 파일에 블록을 쓰게 하지 않는다."""
+    root = sandbox.root()
+    billing, _ = attach(sandbox, root, "billing", files={"README.md": "# billing\n"})
+    assert sync(sandbox, root, "billing").returncode == 0
+    managed = billing / ".onto" / "README.md"
+    before = managed.read_bytes()
+    (billing / "AGENTS.md").unlink()  # 최신화가 만든 AGENTS.md를 치우고
+    (billing / "CLAUDE.md").symlink_to(".onto/README.md")
+
+    result = sync(sandbox, root, "billing")
+
+    assert result.returncode == 1
+    assert managed.read_bytes() == before
+    assert re.search(r"건너뜀\s+CLAUDE\.md\s+—.*심볼릭 링크", result.stdout)
+
+
 # --- 블록이 이미 든 다른 후보 파일 ----------------------------------------------------------
 
 
