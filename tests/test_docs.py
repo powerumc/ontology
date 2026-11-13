@@ -2,7 +2,7 @@
 
 스킬 문서의 내용(LLM이 읽는 글)은 자동 테스트에서 뺀다. 문구는 고쳐 써도 뜻이 같으면 되므로 글의 표현은 보지 않고, 기계적으로 가릴 수 있는 것만 본다.
 
-- 문서에 적힌 `just` 명령이 실제로 있는 모듈과 레시피다. 루트 저장소(`just <모듈> <레시피>`)와 지식 저장소 안(`just -f .onto/Justfile <레시피>`) 모두다.
+- 문서(`README.md`, `CLAUDE.md`, 안내 문서 `docs/guide/*.md`, 규약 문서, 스킬)에 적힌 `just` 명령이 실제로 있는 모듈과 레시피다. 루트 저장소(`just <모듈> <레시피>`)와 지식 저장소 안(`just -f .onto/Justfile <레시피>`) 모두다.
 - 스킬이 `<onto> <명령>`으로 부르는 명령을 지식 저장소 안에서도 쓸 수 있다.
 - 루트의 모든 레시피가 `README.md`에 적혀 있다.
 - 스킬 세 개가 `name`, `description`을 가진 frontmatter로 시작하고 두 명령 접두어를 적는다.
@@ -26,6 +26,8 @@ README = SOURCE_REPO / "README.md"
 CLAUDE = SOURCE_REPO / "CLAUDE.md"
 CONVENTIONS = SOURCE_REPO / "onto" / "template" / "conventions.md"
 SKILL_FILES = {name: SOURCE_REPO / ".claude" / "skills" / name / "SKILL.md" for name in SKILLS}
+# 안내 문서는 glob으로 모아, 앞으로 늘어도 `just` 명령 검사를 자동으로 받는다.
+GUIDE_FILES = {f"guide/{path.stem}": path for path in sorted((SOURCE_REPO / "docs" / "guide").glob("*.md"))}
 
 # 지식 저장소 안에서 쓰는 레시피. `sync`는 루트 저장소에서만 쓸 수 있다.
 REPOSITORY_RECIPES = {"build", "validate", "query", "status", "rules"}
@@ -62,7 +64,7 @@ def documented_commands(path: Path) -> list[tuple[str, str | None, str | None]]:
     return found
 
 
-DOCUMENTS = {"README": README, "CLAUDE": CLAUDE, "conventions": CONVENTIONS, **SKILL_FILES}
+DOCUMENTS = {"README": README, "CLAUDE": CLAUDE, "conventions": CONVENTIONS, **SKILL_FILES, **GUIDE_FILES}
 
 
 @pytest.mark.parametrize("name", DOCUMENTS)

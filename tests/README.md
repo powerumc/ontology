@@ -157,7 +157,7 @@ def test_예(onto_cli):
 
 ### 사용법 문서(`test_docs.py`)
 
-`README.md`, `CLAUDE.md`, 스킬, 규약 문서가 실제 명령과 어긋나지 않는지 본다. 문서에 적힌 `just` 명령이 있는 모듈과 레시피인지(루트의 `just <모듈> <레시피>`와 지식 저장소 안의 `just -f .onto/Justfile <레시피>`), 스킬이 `<onto> <명령>`으로 부르는 명령을 지식 저장소 안에서도 쓸 수 있는지, 루트의 모든 레시피가 `README.md`에 적혀 있는지, 스킬 세 개가 frontmatter(`name`, `description`)와 명령 접두어 두 개를 갖췄는지, `README.md`에 커밋 메시지 규약(`onto(ingest):`, `onto(lint):`)이 있는지, 루트 `CLAUDE.md`가 짧고 기존 `## Agent skills` 블록을 지키는지다. 레시피 목록은 임시 루트 저장소의 `just --summary`에서 얻는다. 스킬 문서의 글(LLM의 동작)은 보지 않는다. 문구는 고쳐 써도 뜻이 같으면 되므로 표현을 고정하는 단언을 두지 않는다.
+`README.md`, `CLAUDE.md`, 안내 문서(`docs/guide/`), 스킬, 규약 문서가 실제 명령과 어긋나지 않는지 본다. 안내 문서는 `docs/guide/*.md`를 glob으로 모으므로 늘어나도 자동으로 검사 대상이 된다. 문서에 적힌 `just` 명령이 있는 모듈과 레시피인지(루트의 `just <모듈> <레시피>`와 지식 저장소 안의 `just -f .onto/Justfile <레시피>`), 스킬이 `<onto> <명령>`으로 부르는 명령을 지식 저장소 안에서도 쓸 수 있는지, 루트의 모든 레시피가 `README.md`에 적혀 있는지, 스킬 세 개가 frontmatter(`name`, `description`)와 명령 접두어 두 개를 갖췄는지, `README.md`에 커밋 메시지 규약(`onto(ingest):`, `onto(lint):`)이 있는지, 루트 `CLAUDE.md`가 짧고 기존 `## Agent skills` 블록을 지키는지다. 레시피 목록은 임시 루트 저장소의 `just --summary`에서 얻는다. 스킬 문서의 글(LLM의 동작)은 보지 않는다. 문구는 고쳐 써도 뜻이 같으면 되므로 표현을 고정하는 단언을 두지 않는다.
 
 ### 흐름(`test_flow.py`)
 
